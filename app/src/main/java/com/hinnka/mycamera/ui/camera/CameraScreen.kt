@@ -1446,8 +1446,8 @@ fun CameraScreen(
                     if (state.captureMode == CaptureMode.VIDEO && dualCaptureEnabled) {
                         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                             val insetPadding = 12.dp
-                            val insetWidth = maxWidth * 0.34f - insetPadding * 2
-                            val dualInsetAspectRatio = 9f / 16f
+                            val insetWidth = maxWidth * 0.33f
+                            val dualInsetAspectRatio = 3f / 4f
                             val insetHeight = insetWidth / dualInsetAspectRatio
                             val insetOuterWidth = insetWidth + insetPadding * 2
                             val insetOuterHeight = insetHeight + insetPadding * 2
@@ -1493,7 +1493,7 @@ fun CameraScreen(
                                     .fillMaxHeight()
                             }
                             val pipShape = RoundedCornerShape(
-                                if (dualCaptureLayout == DualCaptureLayout.PICTURE_IN_PICTURE) 12.dp else 0.dp
+                                if (dualCaptureLayout == DualCaptureLayout.PICTURE_IN_PICTURE) 16.dp else 0.dp
                             )
                             Box(
                                 modifier = frontPreviewModifier
