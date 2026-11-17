@@ -28,7 +28,7 @@ class VibrationHelper(private val context: Context) {
                 @Suppress("DEPRECATION")
                 context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.e(TAG, "Failed to get vibrator service", e)
             null
         }
@@ -62,7 +62,7 @@ class VibrationHelper(private val context: Context) {
             } ?: run {
                 PLog.w(TAG, "Vibrator not available")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.e(TAG, "Failed to vibrate", e)
         }
     }
@@ -73,7 +73,7 @@ class VibrationHelper(private val context: Context) {
     fun cancel() {
         try {
             vibrator?.cancel()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.e(TAG, "Failed to cancel vibration", e)
         }
     }

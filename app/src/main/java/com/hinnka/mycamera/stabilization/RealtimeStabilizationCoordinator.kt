@@ -217,10 +217,13 @@ class RealtimeStabilizationCoordinator(context: Context) {
             MAX_BUFFERED_STABILIZATION_IMAGES + 2
     }
 
-    private val sensorManager = context.applicationContext
-        .getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    private val sensorManager: SensorManager? = runCatching {
+        context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    }.getOrNull()
     // MGC's EIS path requests Android sensor type 4: the calibrated gyroscope.
-    private val gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+    private val gyroSensor = runCatching {
+        sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+    }.getOrNull()
     private val nativeEngine = MgcEisNativeEngine(context.applicationContext.cacheDir)
     private val lock = Any()
     private val pendingGyroSamples = ArrayDeque<GyroSample>()
@@ -762,14 +765,17 @@ class RealtimeStabilizationCoordinator(context: Context) {
         nativeStrength = strength
         nativeLookaheadFrames = normalizedLookahead
         if (sensorThread == null) {
+            val manager = sensorManager ?: return null
             val thread = HandlerThread("Photon-MGC-EIS-Gyro").apply { start() }
-            val registered = sensorManager.registerListener(
-                sensorListener,
-                sensor,
-                SensorManager.SENSOR_DELAY_FASTEST,
-                0,
-                Handler(thread.looper),
-            )
+            val registered = runCatching {
+                manager.registerListener(
+                    sensorListener,
+                    sensor,
+                    SensorManager.SENSOR_DELAY_FASTEST,
+                    0,
+                    Handler(thread.looper),
+                )
+            }.getOrDefault(false)
             if (!registered) {
                 thread.quitSafely()
                 nativeEngine.stop()
@@ -796,7 +802,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
             closeFullyConsumedImagesLocked()
             activeSessionCount = activeSessions.size
             if (activeSessionCount > 0) return
-            sensorManager.unregisterListener(sensorListener)
+            runCatching { sensorManager?.unregisterListener(sensorListener) }
             sensorThread?.quitSafely()
             sensorThread = null
             nativeEngine.stop()
@@ -954,7 +960,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 "opticalCorrectionActive=$opticalCorrectionSourceActive, " +
                 "dynamicIntrinsics=$dynamicLensIntrinsicsSourceActive)",
         )
-        sensorManager.unregisterListener(sensorListener)
+        runCatching { sensorManager?.unregisterListener(sensorListener) }
         sensorThread?.quitSafely()
         sensorThread = null
         nativeEngine.stop()

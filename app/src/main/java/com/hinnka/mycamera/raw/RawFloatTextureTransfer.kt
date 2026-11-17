@@ -189,9 +189,13 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
         } else {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
-            val uploaded = when (layout) {
-                Layout.FLOAT -> nativeUpload(buffer, texture, width, height)
-                Layout.HALF -> GlesPixelBufferTransfer.uploadRgba16fPboToTexture(buffer, texture, width, height)
+            val uploaded = if (com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) {
+                when (layout) {
+                    Layout.FLOAT -> nativeUpload(buffer, texture, width, height)
+                    Layout.HALF -> GlesPixelBufferTransfer.uploadRgba16fPboToTexture(buffer, texture, width, height)
+                }
+            } else {
+                false
             }
             check(uploaded) { "Float PBO upload failed" }
         }
@@ -285,7 +289,7 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
 
     companion object {
         private const val TAG = "RawFloatTextureTransfer"
-        init { System.loadLibrary("my-native-lib") }
+        init { com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded() }
         private fun elapsedMs(start: Long) = (System.nanoTime() - start) / 1_000_000.0
         private fun checkGl(label: String) {
             val error = GLES30.glGetError()

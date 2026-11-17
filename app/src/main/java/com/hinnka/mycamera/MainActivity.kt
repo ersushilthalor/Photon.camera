@@ -207,39 +207,49 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyPreferredWindowColorMode(useHdrScreenMode: Boolean, useP3ColorSpace: Boolean) {
-        val configuration = resources.configuration
-        when {
-            useHdrScreenMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS && configuration.isScreenHdr -> {
-                window.colorMode = ActivityInfo.COLOR_MODE_HDR
+        runCatching {
+            val configuration = resources.configuration
+            when {
+                useHdrScreenMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !DeviceUtil.isHarmonyOS && configuration.isScreenHdr -> {
+                    window.colorMode = ActivityInfo.COLOR_MODE_HDR
+                }
+                useP3ColorSpace && configuration.isScreenWideColorGamut -> {
+                    window.colorMode = ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
+                }
+                else -> {
+                    window.colorMode = ActivityInfo.COLOR_MODE_DEFAULT
+                }
             }
-            useP3ColorSpace && configuration.isScreenWideColorGamut -> {
-                window.colorMode = ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
-            }
-            else -> {
-                window.colorMode = ActivityInfo.COLOR_MODE_DEFAULT
-            }
+        }.onFailure { error ->
+            PLog.w("MainActivity", "Failed to apply preferred window color mode", error)
         }
     }
 
     private fun applyWindowScreenBrightness(brightness: Float?) {
-        val updatedAttributes = window.attributes.apply {
-            screenBrightness = brightness?.coerceIn(0f, 1f)
-                ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        runCatching {
+            val updatedAttributes = window.attributes.apply {
+                screenBrightness = brightness?.coerceIn(0f, 1f)
+                    ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
+            window.attributes = updatedAttributes
+        }.onFailure { error ->
+            PLog.w("MainActivity", "Failed to apply window brightness", error)
         }
-        window.attributes = updatedAttributes
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
+        runCatching { installSplashScreen() }
         super.onCreate(savedInstanceState)
         StartupTrace.mark("MainActivity.onCreate start")
 
         // 启用全屏模式
         StartupTrace.measure("MainActivity.enableEdgeToEdge") {
-            enableEdgeToEdge(
-                statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-                navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
-            )
+            runCatching {
+                enableEdgeToEdge(
+                    statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+                    navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                )
+            }
         }
         hideSystemUI()
         StartupTrace.mark("MainActivity.hideSystemUI applied")
@@ -269,7 +279,7 @@ class MainActivity : AppCompatActivity() {
         OrientationObserver.observe(this)
         StartupTrace.mark("MainActivity.OrientationObserver.observe applied")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            GalleryManager.hdrSdrRatio = display?.hdrSdrRatio ?: 0f
+            GalleryManager.hdrSdrRatio = runCatching { display?.hdrSdrRatio }.getOrNull() ?: 0f
         }
         PLog.d("MainActivity", "hdrSdrRatio=${GalleryManager.hdrSdrRatio}")
 
@@ -279,7 +289,11 @@ class MainActivity : AppCompatActivity() {
         }
         StartupTrace.mark("MainActivity.permissions checked", "hasPermissions=$hasPermissions")
 
-        handleIntent(intent)
+        runCatching {
+            handleIntent(intent)
+        }.onFailure { error ->
+            PLog.e("MainActivity", "Failed to handle launch intent", error)
+        }
         StartupTrace.mark("MainActivity.intent handled", "pendingRoute=$pendingRoute")
 
         lifecycleScope.launch {
@@ -364,7 +378,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleIntent(intent)
+        runCatching {
+            handleIntent(intent)
+        }.onFailure { error ->
+            PLog.e("MainActivity", "Failed to handle new intent", error)
+        }
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -514,11 +532,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hideSystemUI() {
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowInsetsControllerCompat(window, window.decorView).let { controller ->
-            controller.hide(WindowInsetsCompat.Type.statusBars())
-            controller.systemBarsBehavior =
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        runCatching {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            WindowInsetsControllerCompat(window, window.decorView).let { controller ->
+                controller.hide(WindowInsetsCompat.Type.statusBars())
+                controller.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
         }
     }
 }
@@ -637,12 +657,20 @@ fun NavigationHost(
     ) {
         onExternalGalleryReviewBack()
     }
-    navController.addOnDestinationChangedListener { _, destination, _ ->
-        BuglyHelper.setUserScene(context, destination.route.hashCode())
+    androidx.compose.runtime.DisposableEffect(navController, context) {
+        val listener = androidx.navigation.NavController.OnDestinationChangedListener { _, destination, _ ->
+            BuglyHelper.setUserScene(context, destination.route.hashCode())
+        }
+        navController.addOnDestinationChangedListener(listener)
+        onDispose {
+            navController.removeOnDestinationChangedListener(listener)
+        }
     }
     val containerSize = LocalWindowInfo.current.containerSize
-    cameraViewModel.isExpanded =
-        (containerSize.width * 1f / containerSize.height) > AspectRatio.RATIO_4_3.getValue(false)
+    if (containerSize.height > 0) {
+        cameraViewModel.isExpanded =
+            (containerSize.width * 1f / containerSize.height) > AspectRatio.RATIO_4_3.getValue(false)
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavHost(

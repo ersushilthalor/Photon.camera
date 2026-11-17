@@ -122,6 +122,10 @@ object DcpProfileParser {
             return cached.profile
         }
 
+        if (!com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) {
+            PLog.w(TAG, "Skipping DCP parse; native library unavailable: $filePath")
+            return null
+        }
         return runCatching {
             val json = DcpNativeBridge.parseDcpToJson(filePath)
             parseJson(json)

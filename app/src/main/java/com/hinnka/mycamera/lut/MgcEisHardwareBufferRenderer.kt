@@ -57,6 +57,7 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
      * until this function returns because the EGLImage is created from its HardwareBuffer.
      */
     fun render(frame: StabilizationFrame): Frame? {
+        if (!com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) return null
         val width = frame.image.width
         val height = frame.image.height
         if (width <= 0 || height <= 0) return null
@@ -112,7 +113,7 @@ internal class MgcEisHardwareBufferRenderer(private val tag: String) {
                 PLog.i(tag, "MGC HardwareBuffer EGLImage renderer active")
             }
             Frame(frame.timestampNs, outputTextureId, width, height)
-        } catch (error: RuntimeException) {
+        } catch (error: Throwable) {
             PLog.w(tag, "MGC EGLImage draw failed ts=${frame.timestampNs}: ${error.message}")
             null
         } finally {

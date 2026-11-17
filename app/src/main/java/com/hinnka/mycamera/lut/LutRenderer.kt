@@ -772,61 +772,94 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         stackFboWidth = 0
         stackFboHeight = 0
 
-        val ids = IntArray(1)
-        GLES30.glGenFramebuffers(1, ids, 0)
-        fboId = ids[0]
-
-        GLES30.glGenTextures(1, ids, 0)
-        fboTextureId = ids[0]
-
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTextureId)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height,
-            0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
-        )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboId)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D, fboTextureId, 0
-        )
-
-        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            PLog.e(TAG, "FBO init failed: $status")
+        val mainTarget = createColorRenderableFbo(width, height, "main")
+        fboId = mainTarget.first
+        fboTextureId = mainTarget.second
+        if (fboId != 0 && fboTextureId != 0) {
+            fboWidth = width
+            fboHeight = height
         }
 
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        fboWidth = width
-        fboHeight = height
+        val stackTarget = createColorRenderableFbo(width, height, "stack")
+        stackFboId = stackTarget.first
+        stackTextureId = stackTarget.second
+        if (stackFboId != 0 && stackTextureId != 0) {
+            stackFboWidth = width
+            stackFboHeight = height
+        }
+    }
 
-        GLES30.glGenFramebuffers(1, ids, 0)
-        stackFboId = ids[0]
-        GLES30.glGenTextures(1, ids, 0)
-        stackTextureId = ids[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stackTextureId)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height,
-            0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
+    private fun createColorRenderableFbo(
+        width: Int,
+        height: Int,
+        label: String,
+    ): Pair<Int, Int> {
+        val safeW = width.coerceAtLeast(1)
+        val safeH = height.coerceAtLeast(1)
+        val configs = arrayOf(
+            intArrayOf(GLES30.GL_RGBA16F, GLES30.GL_HALF_FLOAT),
+            intArrayOf(GLES30.GL_RGBA8, GLES30.GL_UNSIGNED_BYTE),
         )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, stackFboId)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D, stackTextureId, 0
-        )
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        stackFboWidth = width
-        stackFboHeight = height
+        for ((index, cfg) in configs.withIndex()) {
+            val fboIds = IntArray(1)
+            val texIds = IntArray(1)
+            GLES30.glGenFramebuffers(1, fboIds, 0)
+            GLES30.glGenTextures(1, texIds, 0)
+            val fbo = fboIds[0]
+            val tex = texIds[0]
+            if (fbo == 0 || tex == 0) {
+                if (fbo != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
+                if (tex != 0) GLES30.glDeleteTextures(1, intArrayOf(tex), 0)
+                continue
+            }
+            while (GLES30.glGetError() != GLES30.GL_NO_ERROR) {
+                // Drain prior GL error state before probing texture format
+            }
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                cfg[0],
+                safeW,
+                safeH,
+                0,
+                GLES30.GL_RGBA,
+                cfg[1],
+                null,
+            )
+            val texErr = GLES30.glGetError()
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo)
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER,
+                GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D,
+                tex,
+                0,
+            )
+            val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+
+            if (texErr == GLES30.GL_NO_ERROR && status == GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                if (index > 0) {
+                    PLog.w(TAG, "FBO[$label] using RGBA8 fallback (${safeW}x$safeH)")
+                }
+                return fbo to tex
+            }
+            PLog.w(
+                TAG,
+                "FBO[$label] config[$index] incomplete: texErr=$texErr status=0x${status.toString(16)} (${safeW}x$safeH)"
+            )
+            GLES30.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
+            GLES30.glDeleteTextures(1, intArrayOf(tex), 0)
+        }
+        PLog.e(TAG, "FBO[$label] initialization failed for all formats (${safeW}x$safeH)")
+        return 0 to 0
     }
 
     private fun isMainFboReady(width: Int, height: Int): Boolean {
@@ -1070,6 +1103,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     override fun onDrawFrame(gl: GL10?) {
         if (renderingPaused) return
         if (viewportWidth <= 0 || viewportHeight <= 0) return
+        try {
+            onDrawFrameInternal()
+        } catch (error: Throwable) {
+            PLog.e(TAG, "onDrawFrame failed unexpectedly", error)
+        }
+    }
+
+    private fun onDrawFrameInternal() {
 
         val delayedStabilizationRequested = previewStabilizationUseCase != null
         val delayedStabilizationEnabled = delayedStabilizationRequested &&
@@ -1574,33 +1615,22 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         ) {
             return true
         }
-        if (overlapBlendFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(overlapBlendFboId), 0)
-        if (overlapBlendTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(overlapBlendTextureId), 0)
-        val ids = IntArray(1)
-        GLES30.glGenFramebuffers(1, ids, 0)
-        overlapBlendFboId = ids[0]
-        GLES30.glGenTextures(1, ids, 0)
-        overlapBlendTextureId = ids[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, overlapBlendTextureId)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height,
-            0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
-        )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, overlapBlendFboId)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D, overlapBlendTextureId, 0
-        )
-        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+        if (overlapBlendFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(overlapBlendFboId), 0)
+            overlapBlendFboId = 0
+        }
+        if (overlapBlendTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(overlapBlendTextureId), 0)
+            overlapBlendTextureId = 0
+        }
+        val target = createColorRenderableFbo(width, height, "overlapBlend")
+        if (target.first == 0 || target.second == 0) {
+            overlapBlendWidth = 0
+            overlapBlendHeight = 0
             return false
         }
+        overlapBlendFboId = target.first
+        overlapBlendTextureId = target.second
         overlapBlendWidth = width
         overlapBlendHeight = height
         return true
@@ -1870,97 +1900,41 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun setupHdfFbos(width: Int, height: Int) {
-        val dsW = width / 4
-        val dsH = height / 4
-        if (hdfWidth == dsW && hdfHeight == dsH && hdfTexId[0] != 0) return
+        val dsW = maxOf(1, width / 4)
+        val dsH = maxOf(1, height / 4)
+        if (hdfWidth == dsW && hdfHeight == dsH && hdfTexId[0] != 0 && hdfFboId[0] != 0) return
         hdfWidth = dsW
         hdfHeight = dsH
         for (i in 0..1) {
             if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
             if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
-            val t = IntArray(1);
-            val f = IntArray(1)
-            GLES30.glGenTextures(1, t, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D,
-                0,
-                GLES30.GL_RGBA16F,
-                dsW,
-                dsH,
-                0,
-                GLES30.GL_RGBA,
-                GLES30.GL_HALF_FLOAT,
-                null
-            )
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glGenFramebuffers(1, f, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER,
-                GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D,
-                t[0],
-                0
-            )
-            hdfTexId[i] = t[0]; hdfFboId[i] = f[0]
+            val target = createColorRenderableFbo(dsW, dsH, "hdf[$i]")
+            hdfFboId[i] = target.first
+            hdfTexId[i] = target.second
         }
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
     private fun setupSoftLightFbos(width: Int, height: Int) {
         val dsW = maxOf(1, width / 4)
         val dsH = maxOf(1, height / 4)
-        if (softLightWidth == dsW && softLightHeight == dsH && softLightTexId[0] != 0) return
+        if (softLightWidth == dsW && softLightHeight == dsH && softLightTexId[0] != 0 && softLightFboId[0] != 0) return
         softLightWidth = dsW
         softLightHeight = dsH
         for (i in 0..1) {
             if (softLightTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(softLightTexId[i]), 0)
             if (softLightFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(softLightFboId[i]), 0)
-            val t = IntArray(1)
-            val f = IntArray(1)
-            GLES30.glGenTextures(1, t, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D,
-                0,
-                GLES30.GL_RGBA16F,
-                dsW,
-                dsH,
-                0,
-                GLES30.GL_RGBA,
-                GLES30.GL_HALF_FLOAT,
-                null
-            )
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glGenFramebuffers(1, f, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER,
-                GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D,
-                t[0],
-                0
-            )
-            softLightTexId[i] = t[0]
-            softLightFboId[i] = f[0]
+            val target = createColorRenderableFbo(dsW, dsH, "softLight[$i]")
+            softLightFboId[i] = target.first
+            softLightTexId[i] = target.second
         }
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
     private fun renderHdfPreviewBlur(sourceTexId: Int, width: Int, height: Int) {
         if (!ensureHdfBlurPrograms()) return
         setupHdfFbos(width, height)
-        if (hdfExtractBlurHProgram == 0 || hdfBlurVProgram == 0) return
-        val dsW = width / 4;
-        val dsH = height / 4
+        if (hdfExtractBlurHProgram == 0 || hdfBlurVProgram == 0 || hdfFboId[0] == 0 || hdfFboId[1] == 0) return
+        val dsW = maxOf(1, width / 4)
+        val dsH = maxOf(1, height / 4)
         val spatialScale = getPreviewSpatialEffectScale(width, height)
         val texelW = spatialScale / dsW;
         val texelH = spatialScale / dsH
@@ -1991,7 +1965,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private fun renderSoftLightPreviewBlur(sourceTexId: Int, width: Int, height: Int) {
         if (!ensureSoftLightPrograms()) return
         setupSoftLightFbos(width, height)
-        if (softLightBlurHProgram == 0 || hdfBlurVProgram == 0) return
+        if (softLightBlurHProgram == 0 || hdfBlurVProgram == 0 || softLightFboId[0] == 0 || softLightFboId[1] == 0) return
         val dsW = softLightWidth.coerceAtLeast(1)
         val dsH = softLightHeight.coerceAtLeast(1)
         val spatialScale = getPreviewSpatialEffectScale(width, height)
@@ -2111,6 +2085,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 height = levelHeight,
                 internalFormat = GLES30.GL_RGBA16F,
                 label = "pyramid[$level]",
+            ) ?: createClarityPreviewFramebuffer(
+                width = levelWidth,
+                height = levelHeight,
+                internalFormat = GLES30.GL_RGBA8,
+                label = "pyramid[$level]-rgba8",
             ) ?: run {
                 releaseClarityPreviewFramebuffers()
                 return false

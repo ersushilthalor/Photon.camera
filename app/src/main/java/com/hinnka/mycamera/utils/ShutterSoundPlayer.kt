@@ -13,26 +13,33 @@ class ShutterSoundPlayer(private val context: Context) {
     companion object {
         private const val TAG = "ShutterSoundPlayer"
 
-        private fun createPool() = SoundPool.Builder()
-            .setMaxStreams(1)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            )
-            .build()
+        private fun createPool(): SoundPool? = runCatching {
+            SoundPool.Builder()
+                .setMaxStreams(1)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                .build()
+        }.onFailure { error ->
+            PLog.w(TAG, "SoundPool unavailable", error)
+        }.getOrNull()
 
         /** Verify that the device can actually decode the imported file before saving it. */
         suspend fun validate(file: File): Boolean {
-            val pool = createPool()
+            val pool = createPool() ?: return false
             try {
                 val loaded = CompletableDeferred<Boolean>()
                 pool.setOnLoadCompleteListener { _, _, status -> loaded.complete(status == 0) }
                 if (pool.load(file.absolutePath, 1) == 0) return false
                 return withTimeoutOrNull(10_000) { loaded.await() } == true
+            } catch (e: Throwable) {
+                PLog.w(TAG, "Sound validation failed", e)
+                return false
             } finally {
-                pool.release()
+                runCatching { pool.release() }
             }
         }
     }
@@ -45,14 +52,16 @@ class ShutterSoundPlayer(private val context: Context) {
     private var single: Sample? = null
     private var burst: Sample? = null
     private var streamId = 0
-    private var pool: SoundPool? = createPool().apply {
-        setOnLoadCompleteListener { _, sampleId, status ->
-            synchronized(this@ShutterSoundPlayer) {
-                val sample = listOfNotNull(single, burst).firstOrNull { it.id == sampleId }
-                    ?: return@setOnLoadCompleteListener
-                sample.ready = status == 0
-                sample.loaded.complete(sample.ready)
-                if (!sample.ready) PLog.e(TAG, "Sound load failed: id=$sampleId, status=$status")
+    private var pool: SoundPool? = createPool()?.apply {
+        runCatching {
+            setOnLoadCompleteListener { _, sampleId, status ->
+                synchronized(this@ShutterSoundPlayer) {
+                    val sample = listOfNotNull(single, burst).firstOrNull { it.id == sampleId }
+                        ?: return@setOnLoadCompleteListener
+                    sample.ready = status == 0
+                    sample.loaded.complete(sample.ready)
+                    if (!sample.ready) PLog.e(TAG, "Sound load failed: id=$sampleId, status=$status")
+                }
             }
         }
     }
@@ -72,7 +81,7 @@ class ShutterSoundPlayer(private val context: Context) {
     private fun replace(activePool: SoundPool, previous: Sample?, fileName: String?, asset: String): Sample {
         previous?.let {
             it.loaded.complete(false)
-            activePool.unload(it.id)
+            runCatching { activePool.unload(it.id) }
         }
         val id = try {
             val file = CaptureSoundRepository.resolve(context, fileName)
@@ -81,7 +90,7 @@ class ShutterSoundPlayer(private val context: Context) {
             } else {
                 activePool.load(file.absolutePath, 1)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.e(TAG, "Cannot load sound: ${fileName ?: asset}", e)
             0
         }
@@ -102,8 +111,12 @@ class ShutterSoundPlayer(private val context: Context) {
     private fun playSample(sample: Sample?, loop: Boolean): Boolean {
         val activePool = pool ?: return false
         if (sample?.ready != true) return false
-        streamId = activePool.play(sample.id, 1f, 1f, 1, if (loop) -1 else 0, 1f)
-        return streamId != 0
+        return runCatching {
+            streamId = activePool.play(sample.id, 1f, 1f, 1, if (loop) -1 else 0, 1f)
+            streamId != 0
+        }.onFailure { error ->
+            PLog.w(TAG, "Failed to play shutter sound", error)
+        }.getOrDefault(false)
     }
 
     /** A preview plays exactly once, even for the burst sound. */
@@ -118,7 +131,7 @@ class ShutterSoundPlayer(private val context: Context) {
 
     @Synchronized
     fun stopBurst() {
-        if (streamId != 0) pool?.stop(streamId)
+        if (streamId != 0) runCatching { pool?.stop(streamId) }
         streamId = 0
     }
 
@@ -126,7 +139,7 @@ class ShutterSoundPlayer(private val context: Context) {
     fun release() {
         single?.loaded?.complete(false)
         burst?.loaded?.complete(false)
-        pool?.release()
+        runCatching { pool?.release() }
         pool = null
         single = null
         burst = null

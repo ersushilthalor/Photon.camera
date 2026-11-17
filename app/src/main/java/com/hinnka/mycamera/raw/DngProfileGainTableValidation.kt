@@ -2,9 +2,8 @@ package com.hinnka.mycamera.raw
 
 /** Validates large PGTM gain arrays outside Kotlin's per-element hot loop. */
 internal object DngProfileGainTableValidation {
-    private val nativeAvailable = runCatching {
-        System.loadLibrary("my-native-lib")
-    }.isSuccess
+    private val nativeAvailable: Boolean
+        get() = com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()
 
     fun validate(gains: FloatArray, minimum: Float, maximum: Float): Boolean {
         if (gains.isEmpty() || !minimum.isFinite() || !maximum.isFinite() || maximum < minimum) {

@@ -91,7 +91,9 @@ class VideoRecorder(
     )
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private val audioManager = context.getSystemService(AudioManager::class.java)
+    private val audioManager: AudioManager? = runCatching {
+        context.getSystemService(AudioManager::class.java)
+    }.getOrNull()
     private val renderDispatcher: ExecutorCoroutineDispatcher =
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val muxerLock = Any()
@@ -844,8 +846,10 @@ class VideoRecorder(
             PLog.d(TAG, "Use system default audio input routing")
             return
         }
-        val preferredDevice = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
-            .firstOrNull { it.isSource && it.toVideoAudioInputId() == preferredAudioInputId }
+        val preferredDevice = runCatching {
+            audioManager?.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        }.getOrNull()
+            ?.firstOrNull { it.isSource && it.toVideoAudioInputId() == preferredAudioInputId }
         if (preferredDevice == null) {
             PLog.w(TAG, "Preferred audio input not found, fallback to system routing: $preferredAudioInputId")
             return

@@ -26,10 +26,11 @@ object CameraUtils {
         aspectRatio: AspectRatio
     ): Size {
         return try {
-            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+                ?: return Size(1440, 1080)
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             getFixedPreviewSize(characteristics, aspectRatio)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.d("CameraUtils", "getFixedPreviewSize: ${e.message}")
             Size(1440, 1080)
         }
@@ -46,7 +47,9 @@ object CameraUtils {
             // 首先获取最大的拍照尺寸，以此作为传感器的原生比例
             val sensorRatio = aspectRatio.getValue(true)
 
-            val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList() ?: emptyList()
+            val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)
+                ?.filter { it.width > 0 && it.height > 0 }
+                ?: emptyList()
 
             // 寻找比例最匹配传感器原生比例且高度不超过 1080 的预览尺寸
             val matchingSizes = previewSizes.filter {
@@ -68,7 +71,9 @@ object CameraUtils {
             // 两者裁切到 65:24 时，4:3 的水平 FOV 更大，导致拍到的画面比预览多。
             //
             // 策略：找到 getBestCaptureSize 会选择的比例，然后选择该比例的预览尺寸
-            val captureSizes = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)?.toList() ?: emptyList()
+            val captureSizes = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
+                ?.filter { it.width > 0 && it.height > 0 }
+                ?: emptyList()
             val bestCaptureSize = captureSizes.maxByOrNull { it.width * it.height }
             
             if (bestCaptureSize != null) {
@@ -86,8 +91,10 @@ object CameraUtils {
             }
 
             // 最终回退：选择高度 >= 1080 中最小的一个
-            return previewSizes.filter { it.height >= 1080 }.minByOrNull { it.width } ?: Size(1440, 1080)
-        } catch (e: Exception) {
+            return previewSizes.filter { it.height >= 1080 }.minByOrNull { it.width }
+                ?: previewSizes.maxByOrNull { it.width * it.height }
+                ?: Size(1440, 1080)
+        } catch (e: Throwable) {
             PLog.d("CameraUtils", "getFixedPreviewSize: ${e.message}")
             return Size(1440, 1080)
         }
@@ -103,11 +110,11 @@ object CameraUtils {
         format: Int = ImageFormat.YUV_420_888
     ): Size {
         return try {
-            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+                ?: return Size(1920, 1080)
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             getBestCaptureSize(characteristics, aspectRatio, format)
-        } catch (e: Exception) {
-//            PLog.e(TAG, "Failed to get capture size", e)
+        } catch (e: Throwable) {
             Size(1920, 1080)
         }
     }
@@ -119,9 +126,11 @@ object CameraUtils {
     ): Size {
         return try {
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val sizes = map?.getOutputSizes(format)
-                ?: map?.getOutputSizes(ImageFormat.YUV_420_888)
-                ?: arrayOf(Size(1920, 1080))
+            val sizes = (map?.getOutputSizes(format)
+                ?: map?.getOutputSizes(ImageFormat.YUV_420_888))
+                ?.filter { it.width > 0 && it.height > 0 }
+                ?.takeIf { it.isNotEmpty() }
+                ?: listOf(Size(1920, 1080))
             val sensorRatio = aspectRatio.getValue(true)
 
             // 寻找比例最匹配传感器原生比例
@@ -136,8 +145,7 @@ object CameraUtils {
 
             // 选择最大的尺寸
             sizes.maxByOrNull { it.width * it.height } ?: Size(1920, 1080)
-        } catch (e: Exception) {
-//            PLog.e(TAG, "Failed to get capture size", e)
+        } catch (e: Throwable) {
             Size(1920, 1080)
         }
     }
@@ -149,10 +157,11 @@ object CameraUtils {
      */
     fun getRawCaptureSize(context: Context, cameraId: String): Size? {
         return try {
-            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+                ?: return null
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             getRawCaptureSize(characteristics)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.e("CameraUtils", "Failed to get RAW capture size: ${e.message}")
             null
         }

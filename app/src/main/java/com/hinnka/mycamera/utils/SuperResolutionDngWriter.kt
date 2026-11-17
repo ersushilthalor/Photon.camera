@@ -260,7 +260,7 @@ object SuperResolutionDngWriter {
     private const val TAG_PROFILE_GAIN_TABLE_MAP_2 = DngProfileGainTableMap.TAG_PROFILE_GAIN_TABLE_MAP2
     private const val PREVIEW_MAX_EDGE = 512
     init {
-        runCatching { System.loadLibrary("my-native-lib") }
+        NativeLibraryLoader.ensureLoaded()
     }
 
     private external fun encodeLosslessJpegNative(
@@ -370,15 +370,22 @@ object SuperResolutionDngWriter {
                 }
             }
             val imageBytes = if (compression == Compression.JPEG_LOSSLESS) {
-                encodeLosslessJpegNative(
-                    input,
-                    width,
-                    height,
-                    samplesPerPixel,
-                    16,
-                    rowStepSamples,
-                    colStepSamples,
-                ) ?: throw IllegalStateException("DNG SDK lossless JPEG encoder failed")
+                if (!NativeLibraryLoader.ensureLoaded()) {
+                    throw IllegalStateException("Native lossless JPEG encoder unavailable")
+                }
+                try {
+                    encodeLosslessJpegNative(
+                        input,
+                        width,
+                        height,
+                        samplesPerPixel,
+                        16,
+                        rowStepSamples,
+                        colStepSamples,
+                    )
+                } catch (e: UnsatisfiedLinkError) {
+                    throw IllegalStateException("Native lossless JPEG encoder unavailable", e)
+                } ?: throw IllegalStateException("DNG SDK lossless JPEG encoder failed")
             } else {
                 null
             }

@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.stabilization
 
 import android.graphics.Rect
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 import com.hinnka.mycamera.utils.PLog
 import java.io.File
 
@@ -70,6 +71,10 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
             return frameWidth == width && frameHeight == height
         }
         if (width <= 0 || height <= 0) return false
+        if (!NativeLibraryLoader.ensureLoaded()) {
+            PLog.w(TAG, "MGC EIS unavailable: my-native-lib not loaded")
+            return false
+        }
         val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
         return try {
             val created = MgcEisNativeBridge.create(

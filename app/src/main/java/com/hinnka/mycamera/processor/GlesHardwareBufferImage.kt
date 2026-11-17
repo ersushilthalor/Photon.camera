@@ -1,11 +1,12 @@
 package com.hinnka.mycamera.processor
 
 import android.hardware.HardwareBuffer
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 
 /** Shared EGLImage import used by capture and EIS, on the current EGL display/GL thread. */
 internal object GlesHardwareBufferImage {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     /** Owns a native buffer reference; the source Image must stay acquired until sampling ends. */

@@ -47,7 +47,7 @@ private fun hex(value: ByteArray): String = value.joinToString("") { "%02x".form
 
 /** The only JNI entry point. Calls are serialized by SpektrafilmRuntime. */
 internal object SpektrafilmNativeBridge {
-    init { System.loadLibrary("my-native-lib") }
+    init { com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded() }
 
     external fun generate(
         sharedKey: String,
@@ -112,6 +112,9 @@ internal object SpektrafilmRuntime {
                 loadModel(context, request.film)
             } else null
             val paperBytes = if (buildPrint) loadModel(context, requireNotNull(request.paper)) else null
+            check(com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) {
+                "Native Spektrafilm runtime unavailable"
+            }
             val result = SpektrafilmNativeBridge.generate(
                 request.sharedKey, request.modelFilmKey, sharedBytes, filmBytes,
                 request.paperName, paperBytes, request.positive, buildFilm, buildPrint,

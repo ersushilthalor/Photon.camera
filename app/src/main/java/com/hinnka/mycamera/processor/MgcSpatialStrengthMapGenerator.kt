@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.processor
 
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 
@@ -20,7 +21,7 @@ internal object MgcSpatialStrengthMapGenerator {
     private const val REJECTED_DENOISE_MULTIPLIER = 1f
 
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     /**
@@ -61,6 +62,7 @@ internal object MgcSpatialStrengthMapGenerator {
         frameWeights: FloatArray,
         kernelSigmas: FloatArray,
     ): Result? {
+        if (!NativeLibraryLoader.ensureLoaded()) return null
         val geometry = runCatching {
             mgcSpatialDiagnosticGeometry(outputMode, width, height)
         }.getOrNull() ?: return null

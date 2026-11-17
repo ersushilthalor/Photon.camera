@@ -336,6 +336,7 @@ internal object RawLegacyAutoExposureMatcher {
                 evaluation.sampleWidth.toLong() * evaluation.sampleHeight * 3 ||
             !postExposureEv.isFinite()
         ) return null
+        if (!com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) return null
         val pixels = RawLegacyAutoExposureNativeBridge.legacyHdrNetReferencePixels(
             evaluation.displayLinearRgb,
             postExposureEv,

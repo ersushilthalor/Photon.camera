@@ -10,7 +10,7 @@ import java.nio.ByteBuffer
  */
 object DirectBufferPixelPacker {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     external fun unpackRgba16TileToRgb16(

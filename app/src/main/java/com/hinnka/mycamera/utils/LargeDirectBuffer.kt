@@ -12,11 +12,17 @@ object LargeDirectBuffer {
             return null
         }
         return try {
-            DirectBufferAllocator.allocateNative(byteCount)?.order(ByteOrder.nativeOrder()).also {
-                if (it == null) {
-                    PLog.e(TAG, "Failed to allocate $label buffer: $byteCount bytes")
-                } else {
-                    PLog.d(TAG, "Allocated $label buffer with native allocator: $byteCount bytes")
+            if (NativeLibraryLoader.ensureLoaded()) {
+                DirectBufferAllocator.allocateNative(byteCount)?.order(ByteOrder.nativeOrder()).also {
+                    if (it == null) {
+                        PLog.e(TAG, "Failed to allocate $label buffer: $byteCount bytes")
+                    } else {
+                        PLog.d(TAG, "Allocated $label buffer with native allocator: $byteCount bytes")
+                    }
+                }
+            } else {
+                ByteBuffer.allocateDirect(byteCount.toInt()).order(ByteOrder.nativeOrder()).also {
+                    PLog.w(TAG, "Native allocator unavailable; allocated JVM direct buffer for $label ($byteCount bytes)")
                 }
             }
         } catch (e: OutOfMemoryError) {
@@ -29,7 +35,7 @@ object LargeDirectBuffer {
     }
 
     fun free(buffer: ByteBuffer?) {
-        if (buffer == null) return
+        if (buffer == null || !NativeLibraryLoader.isAvailable) return
         try {
             DirectBufferAllocator.freeNative(buffer)
         } catch (e: Throwable) {

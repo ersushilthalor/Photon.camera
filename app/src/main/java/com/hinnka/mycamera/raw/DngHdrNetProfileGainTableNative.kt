@@ -1,11 +1,12 @@
 package com.hinnka.mycamera.raw
 
 import com.hinnka.mycamera.processor.PhotonDehazeTuning
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 
 /** Native hot path for converting HDRNet's bilateral grid into a dense PGTM gain table. */
 internal object DngHdrNetProfileGainTableNative {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     fun generateGains(
@@ -23,6 +24,7 @@ internal object DngHdrNetProfileGainTableNative {
         dehazeCurve: PhotonDehazeCurveParameters,
         postExposureGain: Float,
     ): FloatArray? {
+        if (!NativeLibraryLoader.ensureLoaded()) return null
         if (!postExposureGain.isFinite() || postExposureGain <= 0f) return null
         val outputCount = plan.cellCount.toLong() * plan.pointCount
         if (outputCount !in 1..Int.MAX_VALUE.toLong()) return null
@@ -84,6 +86,7 @@ internal object DngHdrNetProfileGainTableNative {
         outputGridWidth: Int,
         outputGridHeight: Int,
     ): Evaluation? {
+        if (!NativeLibraryLoader.ensureLoaded()) return null
         val swapsAxes = when (outputRotation) {
             0, 180 -> false
             90, 270 -> true

@@ -300,7 +300,7 @@ class RawDemosaicProcessor {
 
         init {
             // 加载 JNI 库
-            System.loadLibrary("my-native-lib")
+            com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()
         }
 
         @Volatile
@@ -783,16 +783,17 @@ class RawDemosaicProcessor {
 
                     val packStartNs = System.nanoTime()
                     check(
-                        DirectBufferPixelPacker.unpackRgba16TileToRgb16(
-                            source = scratch,
-                            sourceWidth = tileWidth,
-                            sourceHeight = tileHeight,
-                            destination = output,
-                            destinationWidth = source.width,
-                            destinationHeight = source.height,
-                            destinationLeft = left,
-                            destinationTop = top,
-                        )
+                        com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded() &&
+                            DirectBufferPixelPacker.unpackRgba16TileToRgb16(
+                                source = scratch,
+                                sourceWidth = tileWidth,
+                                sourceHeight = tileHeight,
+                                destination = output,
+                                destinationWidth = source.width,
+                                destinationHeight = source.height,
+                                destinationLeft = left,
+                                destinationTop = top,
+                            )
                     ) { "Unable to pack stacked LinearRaw tile ($left,$top)" }
                     cpuPackMs += (System.nanoTime() - packStartNs) / 1_000_000L
                     GlesGpuScheduler.yieldToUiRenderer()
@@ -2397,14 +2398,18 @@ class RawDemosaicProcessor {
                 embeddedDngProfiles,
                 rawEmbeddedDngProfileId,
             )
-            val dngRawData = processDngNative(
-                dngFile.absolutePath,
-                profileWorkingColorSpace.xr, profileWorkingColorSpace.yr,
-                profileWorkingColorSpace.xg, profileWorkingColorSpace.yg,
-                profileWorkingColorSpace.xb, profileWorkingColorSpace.yb,
-                profileWorkingColorSpace.xw, profileWorkingColorSpace.yw,
-                embeddedCalibrationOnly = requestedColorEngine.usesCameraInputDomain,
-            )
+            val dngRawData = if (com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) {
+                processDngNative(
+                    dngFile.absolutePath,
+                    profileWorkingColorSpace.xr, profileWorkingColorSpace.yr,
+                    profileWorkingColorSpace.xg, profileWorkingColorSpace.yg,
+                    profileWorkingColorSpace.xb, profileWorkingColorSpace.yb,
+                    profileWorkingColorSpace.xw, profileWorkingColorSpace.yw,
+                    embeddedCalibrationOnly = requestedColorEngine.usesCameraInputDomain,
+                )
+            } else {
+                null
+            }
             if (dngRawData == null) {
                 if (requestedColorEngine.usesCameraInputDomain) {
                     PLog.e(TAG, "Camera RGB engine RAW decode failed; color-converted fallback is disabled")

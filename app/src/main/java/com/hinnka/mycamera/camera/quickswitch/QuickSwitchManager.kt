@@ -37,7 +37,7 @@ import kotlin.math.min
  * - 16ms zoom preview coalescing & synchronized standby 3A + FOV-matched crop updates
  */
 class QuickSwitchManager(
-    private val cameraManager: CameraManager,
+    private val cameraManager: CameraManager?,
     private val getCameraHandler: () -> Handler?,
     private val getCharacteristics: (String) -> CameraCharacteristics?,
     private val bridge: ControllerBridge,
@@ -227,7 +227,7 @@ class QuickSwitchManager(
         } else {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
-                    val concurrentSets = cameraManager.concurrentCameraIds
+                    val concurrentSets = cameraManager?.concurrentCameraIds.orEmpty()
                     if (concurrentSets.isNotEmpty()) {
                         val matches = concurrentSets.any { combo ->
                             combo.contains(mainLens.cameraId) && combo.contains(ultraWideLens.cameraId)
@@ -348,8 +348,13 @@ class QuickSwitchManager(
             }
             bridge.getOrCreateSurfaceForSource(standbySource, standbySize)
 
+            val manager = cameraManager ?: run {
+                isPreparingStandby.set(false)
+                bridge.onBackgroundStatusChanged(BackgroundCameraStatus.OFF)
+                return
+            }
             val openToken = standbyCameraDeviceGeneration.incrementAndGet()
-            cameraManager.openCamera(
+            manager.openCamera(
                 standbyLens.cameraId,
                 object : CameraDevice.StateCallback() {
                     override fun onOpened(camera: CameraDevice) {
@@ -1374,7 +1379,11 @@ class QuickSwitchManager(
             return
         }
         try {
-            cameraManager.openCamera(
+            val manager = cameraManager ?: run {
+                fallbackToSequentialSwitch(targetLens, targetZoom, switchGen, isContinuousTransition)
+                return
+            }
+            manager.openCamera(
                 targetLens.cameraId,
                 object : CameraDevice.StateCallback() {
                     override fun onOpened(newCamera: CameraDevice) {

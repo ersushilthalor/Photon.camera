@@ -1,12 +1,10 @@
 package com.hinnka.mycamera.lut
 
+import com.hinnka.mycamera.utils.NativeLibraryLoader
+
 object LutProcessor {
     init {
-        try {
-            System.loadLibrary("my-native-lib")
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        NativeLibraryLoader.ensureLoaded()
     }
 
     external fun resampleLutNative(srcData: ShortArray, size: Int, curveType: Int): ShortArray?

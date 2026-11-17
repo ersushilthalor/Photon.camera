@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.processor
 
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 import java.nio.ByteBuffer
 
 /**
@@ -10,7 +11,7 @@ import java.nio.ByteBuffer
  */
 internal object MgcSpatialRgbMerger {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     fun merge(
@@ -40,6 +41,7 @@ internal object MgcSpatialRgbMerger {
         cfaPattern: Int,
         outputPlanarF16: ByteBuffer,
     ) {
+        check(NativeLibraryLoader.ensureLoaded()) { "MGC MergeRgbRaw16F16 native library unavailable" }
         val result = nativeMerge(
             rawBuffers,
             rawOffsets,
@@ -74,6 +76,7 @@ internal object MgcSpatialRgbMerger {
 
     /** Reuses the uploaded planar F16 allocation as the Spatial-noise AOT's planar Q14 input. */
     fun convertPlanarF16ToFixed16(buffer: ByteBuffer, sampleCount: Int) {
+        check(NativeLibraryLoader.ensureLoaded()) { "MGC planar conversion native library unavailable" }
         val result = nativeConvertPlanarF16ToFixed16(buffer, sampleCount)
         check(result == 0) { "MGC planar F16-to-Q14 conversion failed with status=$result" }
         buffer.position(0)

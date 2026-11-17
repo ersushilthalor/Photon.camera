@@ -179,7 +179,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         get() = registry
 
     private val overlayContext: Context by lazy { createOverlayContext() }
-    private lateinit var windowManager: WindowManager
+    private var windowManager: WindowManager? = null
     private var composeView: ComposeView? = null
     private lateinit var windowParams: WindowManager.LayoutParams
     private var isWindowShown = false
@@ -475,7 +475,13 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
 
-        windowManager = overlayContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        windowManager = runCatching {
+            overlayContext.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        }.getOrNull()
+        if (windowManager == null) {
+            PLog.w(TAG, "WindowManager unavailable; PhantomService overlay disabled")
+            return
+        }
         initWindowParams()
         initComposeView()
         ProcessLifecycleOwner.get().lifecycle.addObserver(appLifecycleObserver)
@@ -512,7 +518,9 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 .collect { hidden ->
                     if (isWindowShown) {
                         updateWindowParams(hidden)
-                        composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                        composeView?.let { view ->
+                            runCatching { windowManager?.updateViewLayout(view, windowParams) }
+                        }
                     } else if (shouldTreatAppAsStopped()) {
                         showFloatingWindow()
                     }
@@ -933,7 +941,13 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
     private fun getOverlayDisplayBounds(): Rect {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            windowManager.maximumWindowMetrics.bounds
+            runCatching { windowManager?.maximumWindowMetrics?.bounds }.getOrNull()
+                ?: Rect(
+                    0,
+                    0,
+                    overlayContext.resources.displayMetrics.widthPixels,
+                    overlayContext.resources.displayMetrics.heightPixels
+                )
         } else {
             Rect(
                 0,
@@ -989,7 +1003,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 composeView?.let { view ->
                                     if (view.isAttachedToWindow) {
                                         updateWindowParams(false)
-                                        windowManager.updateViewLayout(view, windowParams)
+                                        runCatching { windowManager?.updateViewLayout(view, windowParams) }
                                     }
                                 }
                             }
@@ -1000,7 +1014,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                     onDrag = { change, dragAmount ->
                                         change.consume()
                                         windowParams.y += dragAmount.y.toInt()
-                                        windowManager.updateViewLayout(this@apply, windowParams)
+                                        runCatching { windowManager?.updateViewLayout(this@apply, windowParams) }
                                     }
                                 )
                             }
@@ -1083,7 +1097,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 fun closeFilterPicker() {
                                     showFilterPicker = false
                                     updateWindowParams(false)
-                                    composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                                    composeView?.let { runCatching { windowManager?.updateViewLayout(it, windowParams) } }
                                 }
 
                                 Column(
@@ -1141,7 +1155,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                             showFilterPicker = true
                                             updateWindowParams(false)
                                             composeView?.let {
-                                                windowManager.updateViewLayout(it, windowParams)
+                                                runCatching { windowManager?.updateViewLayout(it, windowParams) }
                                             }
                                         },
                                         modifier = Modifier.size(48.dp)
@@ -1164,7 +1178,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                                 showRecipeEditor = true
                                                 updateWindowParams(false)
                                                 composeView?.let {
-                                                    windowManager.updateViewLayout(it, windowParams)
+                                                    runCatching { windowManager?.updateViewLayout(it, windowParams) }
                                                 }
                                             }
                                         },
@@ -1245,7 +1259,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 creativeRecipeParamsOverride = finalPreviewParams
                             )
                             updateWindowParams(false)
-                            composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                            composeView?.let { runCatching { windowManager?.updateViewLayout(it, windowParams) } }
                         }
                     }
 
@@ -1353,6 +1367,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
     private fun showFloatingWindow() {
         if (!Settings.canDrawOverlays(context)) return
         if (isWindowShown) return
+        val wm = windowManager ?: return
 
         lifecycleScope.launch {
             val hidden = userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }
@@ -1364,9 +1379,9 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                 try {
                     if (!view.isAttachedToWindow) {
                         isWindowShown = true // 确定要添加后再设为 true
-                        windowManager.addView(view, windowParams)
+                        wm.addView(view, windowParams)
                     }
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     isWindowShown = false
                     PLog.e(TAG, "Error adding floating window", e)
                 }
@@ -1379,8 +1394,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             composeView?.let {
                 if (it.isAttachedToWindow) {
                     try {
-                        windowManager.removeViewImmediate(it) // 使用同步移除
-                    } catch (e: Exception) {
+                        windowManager?.removeViewImmediate(it) // 使用同步移除
+                    } catch (e: Throwable) {
                         PLog.e(TAG, "Error removing window", e)
                     }
                 }
@@ -1422,13 +1437,18 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
     private fun createOverlayContext(): Context {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val displayManager = context.getSystemService(DisplayManager::class.java)
-            val defaultDisplay = displayManager?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
-            val displayContext = defaultDisplay?.let { context.createDisplayContext(it) } ?: context
-            displayContext.createWindowContext(
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                null
-            )
+            runCatching {
+                val displayManager = context.getSystemService(DisplayManager::class.java)
+                val defaultDisplay = displayManager?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+                val displayContext = defaultDisplay?.let { context.createDisplayContext(it) } ?: context
+                displayContext.createWindowContext(
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    null
+                )
+            }.getOrElse { error ->
+                PLog.w(TAG, "createWindowContext failed; falling back to app context", error)
+                context
+            }
         } else {
             context
         }

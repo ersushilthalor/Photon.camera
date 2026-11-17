@@ -1,9 +1,11 @@
 package com.hinnka.mycamera.processor
 
+import com.hinnka.mycamera.utils.NativeLibraryLoader
+
 /** GLES pixel-buffer operations missing from Android's Java GLES bindings. */
 internal object GlesPixelBufferTransfer {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     /** Queues an RGBA16F upload from PBO offset zero into an existing 2D texture. */

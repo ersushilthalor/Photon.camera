@@ -1,9 +1,11 @@
 package com.hinnka.mycamera.raw
 
+import com.hinnka.mycamera.utils.NativeLibraryLoader
+
 /** Lifecycle wrapper for the robust native solver derived from PhotonCamera 1.27.1. */
 internal object RawLegacyAutoExposureNativeBridge {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     data class SingleExposureResult(
@@ -109,6 +111,7 @@ internal object RawLegacyAutoExposureNativeBridge {
 
         companion object {
             fun create(reference: RawLegacyExposurePreviewFrame): Solver? {
+                if (!NativeLibraryLoader.ensureLoaded()) return null
                 val handle = nativeCreate(
                     referencePixels = reference.argbPixels,
                     portraitPriorityWeights = reference.portraitPriorityWeights,

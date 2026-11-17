@@ -255,8 +255,8 @@ class Camera2Controller(private val context: Context) {
         UNAVAILABLE
     }
 
-    private val cameraManager: CameraManager by lazy {
-        context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+    private val cameraManager: CameraManager? by lazy {
+        context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
     }
 
     private val cameraDiscovery = CameraDiscovery(context)
@@ -2189,7 +2189,7 @@ class Camera2Controller(private val context: Context) {
             } else {
                 true
             }
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
             handleCameraOpenFailure(
                 cameraId = "",
                 errorCode = ERROR_CAMERA_CHARACTERISTICS_UNAVAILABLE,
@@ -2236,7 +2236,7 @@ class Camera2Controller(private val context: Context) {
                 _state.update { it.copy(currentPreviewSize = previewSize) }
                 true
             }
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
             handleCameraOpenFailure(
                 cameraId = _state.value.currentCameraId,
                 errorCode = ERROR_CAMERA_CHARACTERISTICS_UNAVAILABLE,
@@ -2267,7 +2267,12 @@ class Camera2Controller(private val context: Context) {
      * 发现所有可用摄像头（包括隐藏摄像头）
      */
     private fun discoverCameras(preferredCameraId: String? = null) {
-        val cameras = cameraDiscovery.discoverAllCameras()
+        val cameras = try {
+            cameraDiscovery.discoverAllCameras()
+        } catch (error: Throwable) {
+            PLog.e(TAG, "Camera discovery failed unexpectedly", error)
+            emptyList()
+        }
 
         PLog.d(TAG, "Discovered ${cameras.size} cameras:")
         PLog.d(TAG, "发现 ${cameras.size} 个摄像头")
@@ -2323,7 +2328,8 @@ class Camera2Controller(private val context: Context) {
             }
         }
         cameraCharacteristicsCache[cameraId]?.let { return it }
-        return cameraManager.getCameraCharacteristics(cameraId).also {
+        val manager = cameraManager ?: throw IllegalStateException("CameraManager unavailable")
+        return manager.getCameraCharacteristics(cameraId).also {
             it.associateMetadataCameraId(cameraId)
             cameraCharacteristicsCache[cameraId] = it
         }
@@ -2333,7 +2339,7 @@ class Camera2Controller(private val context: Context) {
         if (cameraId.isEmpty()) return null
         return try {
             getCameraCharacteristicsCached(cameraId)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.v(TAG, "Failed to load characteristics for camera $cameraId during $reason: ${e.message}")
             null
         }
@@ -2566,7 +2572,7 @@ class Camera2Controller(private val context: Context) {
         cameraId: String,
         errorCode: Int,
         message: String,
-        error: Exception
+        error: Throwable
     ) {
         cameraOpenGeneration++
         PLog.e(TAG, "Camera open failed for $cameraId: $message", error)
@@ -2586,7 +2592,7 @@ class Camera2Controller(private val context: Context) {
     private fun handlePreviewSessionFailure(
         reason: String,
         openGeneration: Long,
-        error: Exception? = null
+        error: Throwable? = null
     ) {
         if (openGeneration != cameraOpenGeneration) {
             PLog.w(TAG, "Ignoring stale preview session failure: $reason")
@@ -3426,9 +3432,11 @@ class Camera2Controller(private val context: Context) {
                         }
                     }, stream=$outputCameraIdForStreams, isP3Supported: $isP3Supported, imageReaderMaxImages: $readerMaxImages"
                 )
+                val safeCaptureWidth = captureSize.width.coerceAtLeast(1)
+                val safeCaptureHeight = captureSize.height.coerceAtLeast(1)
                 imageReader = ImageReader.newInstance(
-                    captureSize.width,
-                    captureSize.height,
+                    safeCaptureWidth,
+                    safeCaptureHeight,
                     captureFormat,
                     readerMaxImages
                 ).apply {
@@ -3438,7 +3446,7 @@ class Camera2Controller(private val context: Context) {
                                 val image = trackImage(reader.acquireNextImage()) ?: break
                                 processOrBufferImageForCaptureResult(image)
                             }
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             PLog.e(TAG, "Error in onImageAvailable", e)
                             photoCaptures.values.filter { it.reader === reader }.toList()
                                 .forEach { failPhotoCapture(it, "image acquisition failed") }
@@ -3458,10 +3466,11 @@ class Camera2Controller(private val context: Context) {
                 PLog.i(TAG, "Reusing CameraDevice ${reuseCameraDevice.id} for capture-mode session rebuild")
                 cameraStateCallback.onOpened(reuseCameraDevice)
             } else {
-                cameraManager.openCamera(openCameraId, cameraStateCallback, cameraHandler)
+                val manager = cameraManager ?: throw IllegalStateException("CameraManager unavailable")
+                manager.openCamera(openCameraId, cameraStateCallback, cameraHandler)
             }
 
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             handleCameraOpenFailure(
                 cameraId = openCameraId,
                 errorCode = ERROR_CAMERA_OPEN_FAILED,
@@ -3955,25 +3964,25 @@ class Camera2Controller(private val context: Context) {
                 return
             }
             handlePreviewSessionFailure("create session illegal state", openGeneration, e)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.w(TAG, "Failed to create preview session", e)
             if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
             if (vendorSessionParametersApplied &&
                 retryPreviewSessionWithoutVendorSessionParameters(
-                    reason = "create session exception: ${e.message}",
+                    reason = "create session error: ${e.message}",
                     openGeneration = openGeneration
                 )
             ) {
                 return
             }
             if (retryPreviewSessionWithoutPhysicalOutput(
-                    "create session exception: ${e.message}",
+                    "create session error: ${e.message}",
                     openGeneration
                 )
             ) {
                 return
             }
-            handlePreviewSessionFailure("create session exception", openGeneration, e)
+            handlePreviewSessionFailure("create session error", openGeneration, e)
         }
     }
 
@@ -8797,7 +8806,7 @@ class Camera2Controller(private val context: Context) {
             ?: runCatching { current.getOpenCameraId() }.getOrNull()
             ?: current.cameraId
         return runCatching {
-            cameraManager.concurrentCameraIds.any { ids ->
+            cameraManager?.concurrentCameraIds.orEmpty().any { ids ->
                 ids.contains(primaryId) && ids.contains(front.cameraId)
             }
         }.getOrDefault(false)
@@ -8875,7 +8884,8 @@ class Camera2Controller(private val context: Context) {
 
     private fun resolveDualCaptureInputSize(cameraId: String): Size? {
         return try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val manager = cameraManager ?: return null
+            val characteristics = manager.getCameraCharacteristics(cameraId)
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?: return null
             val sizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
@@ -8890,7 +8900,7 @@ class Camera2Controller(private val context: Context) {
                     )
                 )
                 ?: sizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
             PLog.e(TAG, "Cannot resolve front-camera Dual Capture stream size", error)
             null
         }
@@ -8940,7 +8950,8 @@ class Camera2Controller(private val context: Context) {
                 "Opening concurrent front camera for Dual Capture: id=$targetCameraId, " +
                     "stream=${targetSize.width}x${targetSize.height}, primary=$activeOpenCameraId",
             )
-            cameraManager.openCamera(
+            val manager = cameraManager ?: throw IllegalStateException("CameraManager unavailable")
+            manager.openCamera(
                 targetCameraId,
                 object : CameraDevice.StateCallback() {
                     override fun onOpened(camera: CameraDevice) {
@@ -9012,7 +9023,8 @@ class Camera2Controller(private val context: Context) {
         try {
             dualCaptureSession?.let { safeCloseCaptureSession(it, "dual capture session replaced") }
             dualCaptureSession = null
-            val characteristics = cameraManager.getCameraCharacteristics(device.id)
+            val manager = cameraManager ?: throw IllegalStateException("CameraManager unavailable")
+            val characteristics = manager.getCameraCharacteristics(device.id)
             val availableAfModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
                 ?: intArrayOf()
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {

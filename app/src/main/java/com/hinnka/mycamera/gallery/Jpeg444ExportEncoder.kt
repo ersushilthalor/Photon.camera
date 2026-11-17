@@ -292,15 +292,8 @@ object Jpeg444ExportEncoder {
         }
     }
 
-    private val nativeLibraryLoaded: Boolean by lazy {
-        runCatching {
-            System.loadLibrary("my-native-lib")
-            true
-        }.getOrElse { error ->
-            PLog.w(TAG, "JPEG 4:4:4 native encoder unavailable: ${error.message}")
-            false
-        }
-    }
+    private val nativeLibraryLoaded: Boolean
+        get() = com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()
 
     private fun temporarySibling(outputFile: File, label: String): File {
         return File(

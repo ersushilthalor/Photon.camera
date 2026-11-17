@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 
 object DirectBufferAllocator {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     /**

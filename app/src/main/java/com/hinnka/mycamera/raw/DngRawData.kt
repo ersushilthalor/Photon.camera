@@ -83,7 +83,9 @@ data class DngRawData @Keep constructor(
         if (!isClosed) {
             synchronized(this) {
                 if (!isClosed) {
-                    freeNativeBuffer(rawData)
+                    if (com.hinnka.mycamera.utils.NativeLibraryLoader.isAvailable) {
+                        runCatching { freeNativeBuffer(rawData) }
+                    }
                     isClosed = true
                 }
             }

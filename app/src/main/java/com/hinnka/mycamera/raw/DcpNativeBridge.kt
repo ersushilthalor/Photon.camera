@@ -1,8 +1,10 @@
 package com.hinnka.mycamera.raw
 
+import com.hinnka.mycamera.utils.NativeLibraryLoader
+
 object DcpNativeBridge {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     external fun parseDcpToJson(filePath: String): String

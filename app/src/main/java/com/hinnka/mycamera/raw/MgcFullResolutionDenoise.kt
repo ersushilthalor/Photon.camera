@@ -6,6 +6,7 @@ import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.PhotonSabreLumaTuningNodes
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackRuntimeDebug
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 
@@ -159,7 +160,7 @@ internal object MgcFullResolutionDenoise {
         val finiteChromaScale = DenoiseStrength.clamp(chromaStrengthScale)
         val lumaEnabled = finiteLumaScale > 0f
         val chromaEnabled = finiteChromaScale > 0f
-        if (!initialized || !rgba16f.isDirect || width <= 0 || height <= 0 ||
+        if (!initialized || !NativeLibraryLoader.ensureLoaded() || !rgba16f.isDirect || width <= 0 || height <= 0 ||
             !outputScale.isFinite() || outputScale <= 0f ||
             (!lumaEnabled && !chromaEnabled)
         ) {

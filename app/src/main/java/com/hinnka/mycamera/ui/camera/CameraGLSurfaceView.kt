@@ -87,12 +87,17 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         // 设置 SurfaceTexture 可用回调
         renderer.onSurfaceTextureAvailable = { surfaceTexture ->
             // 在 GL 线程中创建 Surface
-            currentSurface = Surface(surfaceTexture)
+            val surface = runCatching { Surface(surfaceTexture) }.onFailure {
+                PLog.e(TAG, "Failed to create Surface from SurfaceTexture", it)
+            }.getOrNull()
+            currentSurface = surface
 
             // 通知 SurfaceProvider 已准备好
-            post {
-                val surface = currentSurface ?: return@post
-                onSurfaceReady?.invoke(surface)
+            if (surface != null) {
+                post {
+                    val activeSurface = currentSurface ?: return@post
+                    onSurfaceReady?.invoke(activeSurface)
+                }
             }
         }
 

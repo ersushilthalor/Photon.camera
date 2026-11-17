@@ -59,8 +59,12 @@ fun LevelIndicatorOverlay(
     )
 
     DisposableEffect(context) {
-        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        val sensorManager = runCatching {
+            context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        }.getOrNull()
+        val gravitySensor = runCatching {
+            sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        }.getOrNull()
         var invalidSensorReadingLogged = false
         var previousMode = LevelIndicatorMode.HORIZON
 
@@ -91,10 +95,16 @@ fun LevelIndicatorOverlay(
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
 
-        gravitySensor?.let {
-            sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI)
-        } ?: PLog.w(TAG, "Gravity sensor unavailable; level indicator is disabled")
-        onDispose { sensorManager.unregisterListener(listener) }
+        if (sensorManager != null && gravitySensor != null) {
+            runCatching {
+                sensorManager.registerListener(listener, gravitySensor, SensorManager.SENSOR_DELAY_UI)
+            }.onFailure { PLog.w(TAG, "Failed to register gravity sensor listener", it) }
+        } else {
+            PLog.w(TAG, "Gravity sensor unavailable; level indicator is disabled")
+        }
+        onDispose {
+            runCatching { sensorManager?.unregisterListener(listener) }
+        }
     }
 
     Canvas(modifier = modifier.fillMaxSize()) {

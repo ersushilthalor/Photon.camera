@@ -1,9 +1,11 @@
 package com.hinnka.mycamera.processor
 
+import com.hinnka.mycamera.utils.NativeLibraryLoader
+
 /** Thin optional bridge for GL_EXT_disjoint_timer_query on the current EGL context. */
 internal object GlesGpuTimerQuery {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     /** Returns the timer counter width, or 0 when the extension is unavailable. */

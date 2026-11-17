@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.processor
 
 import android.opengl.GLES30
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.SystemPropertiesUtil
 import java.util.Locale
@@ -45,7 +46,11 @@ internal class GlesYuvTiming {
     fun onContextReady() {
         if (!enabled) return
         contextReady = true
-        val bits = GlesGpuTimerQuery.counterBits()
+        val bits = if (NativeLibraryLoader.ensureLoaded()) {
+            runCatching { GlesGpuTimerQuery.counterBits() }.getOrDefault(0)
+        } else {
+            0
+        }
         // Counter width is implementation-defined; e.g. Adreno's 53 bits cover 104 days.
         // A zero-width counter is unsupported. Check narrower counters against the actual
         // submission-to-result interval instead of requiring a 64-bit hardware counter.

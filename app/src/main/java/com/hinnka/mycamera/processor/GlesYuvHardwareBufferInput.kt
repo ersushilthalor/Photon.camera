@@ -4,6 +4,7 @@ import android.hardware.HardwareBuffer
 import android.opengl.GLES11Ext
 import android.opengl.GLES30
 import com.hinnka.mycamera.model.SafeImage
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.SystemPropertiesUtil
 import java.util.concurrent.ConcurrentHashMap
@@ -17,6 +18,7 @@ internal class GlesYuvHardwareBufferInput {
     val hasImports: Boolean get() = imports.isNotEmpty()
 
     fun isSupported(): Boolean {
+        if (!NativeLibraryLoader.ensureLoaded()) return false
         if (SystemPropertiesUtil.get("debug.photon.yuv.input") == "planes") return false
         val count = IntArray(1)
         GLES30.glGetIntegerv(GLES30.GL_NUM_EXTENSIONS, count, 0)
@@ -27,7 +29,7 @@ internal class GlesYuvHardwareBufferInput {
 
     /** Returns a new external texture per source; rebinding one texture can stall pending reads. */
     fun import(image: SafeImage): Int {
-        if (disabled) return 0
+        if (disabled || !NativeLibraryLoader.ensureLoaded()) return 0
         var buffer: HardwareBuffer? = null
         var handle = 0L
         val texture = IntArray(1)
@@ -53,7 +55,7 @@ internal class GlesYuvHardwareBufferInput {
             check(GlesHardwareBufferImage.bind(handle, texture[0])) { "External texture binding failed" }
             imports += Imported(texture[0], handle, buffer)
             return texture[0]
-        } catch (error: RuntimeException) {
+        } catch (error: Throwable) {
             if (texture[0] != 0) GLES30.glDeleteTextures(1, texture, 0)
             if (handle != 0L) GlesHardwareBufferImage.destroy(handle)
             buffer?.close()

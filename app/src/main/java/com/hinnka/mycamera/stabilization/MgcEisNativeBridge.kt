@@ -1,9 +1,11 @@
 package com.hinnka.mycamera.stabilization
 
+import com.hinnka.mycamera.utils.NativeLibraryLoader
+
 /** JNI boundary for Photon’s source-reconstructed MGC EIS engine. */
 internal object MgcEisNativeBridge {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     external fun create(

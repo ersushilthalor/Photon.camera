@@ -3,13 +3,14 @@ package com.hinnka.mycamera.raw
 import android.hardware.HardwareBuffer
 import android.media.Image
 import com.hinnka.mycamera.utils.LargeDirectBuffer
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 
 /** Converts Android RAW10 packing to native-order uint16 Bayer samples without rescaling values. */
 internal object Raw10Unpacker {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     private external fun validateHardwareBufferNative(
@@ -20,6 +21,7 @@ internal object Raw10Unpacker {
 
     /** Must run before getPlanes(): malformed RAW10 strides abort inside the framework. */
     fun validateImageLayout(image: Image) {
+        if (!NativeLibraryLoader.ensureLoaded()) return
         val hardwareBuffer = checkNotNull(image.hardwareBuffer) { "RAW10 image has no hardware buffer" }
         hardwareBuffer.use {
             check(validateHardwareBufferNative(it, image.width, image.height)) {
@@ -38,6 +40,7 @@ internal object Raw10Unpacker {
     ): Boolean
 
     fun unpack(source: ByteBuffer, width: Int, height: Int, rowStride: Int): ByteBuffer {
+        check(NativeLibraryLoader.ensureLoaded()) { "RAW10 native unpacker unavailable" }
         require(source.isDirect) { "RAW10 input must be a direct buffer" }
         require(width > 0 && width % 4 == 0 && height > 0 && height % 2 == 0) {
             "Invalid RAW10 dimensions: ${width}x$height"

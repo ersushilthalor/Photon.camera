@@ -199,11 +199,16 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
                 converted
             }
             mpImage = BitmapImageBuilder(preparedBitmap).build()
-        } catch (error: RuntimeException) {
+        } catch (error: Throwable) {
             mpImage?.close()
             preparedBitmap?.takeUnless { it.isRecycled }?.recycle()
             if (!bitmap.isRecycled) bitmap.recycle()
-            onError?.invoke(error)
+            if (error is UnsatisfiedLinkError || error is NoClassDefFoundError || error is ExceptionInInitializerError) {
+                detectorInitializationFailed = true
+                onInitializationError?.invoke(error)
+            } else {
+                onError?.invoke(error)
+            }
             finishFrame()
             return
         }
@@ -229,7 +234,7 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
 
         try {
             detector.detectAsync(submittedImage, timestampMs)
-        } catch (error: RuntimeException) {
+        } catch (error: Throwable) {
             cleanupPendingInput()
             onError?.invoke(error)
             finishFrame()
@@ -256,7 +261,7 @@ class PreviewEyeFocusProcessor(context: Context) : Closeable {
                 faceDetector = it
                 PLog.d(TAG, "MediaPipe face detector initialized")
             }
-        } catch (error: RuntimeException) {
+        } catch (error: Throwable) {
             detectorInitializationFailed = true
             PLog.e(TAG, "Failed to initialize MediaPipe face detector", error)
             onInitializationError?.invoke(error)

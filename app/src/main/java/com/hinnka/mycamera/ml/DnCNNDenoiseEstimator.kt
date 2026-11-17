@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.SystemClock
 import com.hinnka.mycamera.utils.LargeDirectBuffer
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.Dispatchers
@@ -243,8 +244,8 @@ class DnCNNDenoiseEstimator(
      * [strength] (0.0 to 1.0) controls the blending with the original image.
      */
     suspend fun denoise(inputBitmap: Bitmap, strength: Float = 1.0f): Bitmap? {
-        if (!isInitialized || interpreter == null) {
-            PLog.e(TAG, "DnCNNDenoiseEstimator is not initialized")
+        if (!isInitialized || interpreter == null || !NativeLibraryLoader.ensureLoaded()) {
+            PLog.e(TAG, "DnCNNDenoiseEstimator is not initialized or native helper unavailable")
             return null
         }
 
@@ -503,7 +504,7 @@ class DnCNNDenoiseEstimator(
         const val MODEL_DNCNN = "dncnn.tflite"
 
         init {
-            System.loadLibrary("my-native-lib")
+            NativeLibraryLoader.ensureLoaded()
         }
     }
 

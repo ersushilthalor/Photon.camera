@@ -44,7 +44,9 @@ class VideoAudioInputManager(context: Context) {
         private const val TAG = "VideoAudioInputManager"
     }
 
-    private val audioManager = context.getSystemService(AudioManager::class.java)
+    private val audioManager: AudioManager? = runCatching {
+        context.getSystemService(AudioManager::class.java)
+    }.getOrNull()
     private val _availableInputs = MutableStateFlow(emptyList<VideoAudioInputOption>())
     val availableInputs: StateFlow<List<VideoAudioInputOption>> = _availableInputs.asStateFlow()
 
@@ -60,15 +62,24 @@ class VideoAudioInputManager(context: Context) {
 
     init {
         refreshAvailableInputs()
-        audioManager.registerAudioDeviceCallback(audioDeviceCallback, null)
+        runCatching {
+            audioManager?.registerAudioDeviceCallback(audioDeviceCallback, null)
+        }.onFailure { PLog.w(TAG, "Failed to register audio device callback", it) }
     }
 
     fun release() {
-        audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+        runCatching {
+            audioManager?.unregisterAudioDeviceCallback(audioDeviceCallback)
+        }.onFailure { PLog.w(TAG, "Failed to unregister audio device callback", it) }
     }
 
     private fun refreshAvailableInputs() {
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        val manager = audioManager ?: return
+        val devices = runCatching {
+            manager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        }.onFailure {
+            PLog.w(TAG, "Failed to query audio input devices", it)
+        }.getOrNull().orEmpty()
             .asSequence()
             .filter { it.isSource && it.isSelectableVideoInput() }
             .map { it.toVideoAudioInputOption() }

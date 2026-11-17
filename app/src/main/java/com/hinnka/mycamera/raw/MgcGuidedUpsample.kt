@@ -22,6 +22,9 @@ internal class MgcGuidedUpsample(private val transfer: RawFloatTextureTransfer) 
 
     fun prepare(texture: Int, width: Int, height: Int, gains: FloatArray,
                 resolution: MgcFinishResolution) {
+        check(com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) {
+            "MGC GuidedUpsample native library unavailable"
+        }
         require(resolution.needsGuidedUpsample)
         releaseInputs()
         scale = resolution.downsampleFactor
@@ -120,7 +123,7 @@ internal class MgcGuidedUpsample(private val transfer: RawFloatTextureTransfer) 
     private external fun nativeRelease(handle: Long)
 
     companion object {
-        init { System.loadLibrary("my-native-lib") }
+        init { com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded() }
         private val BOX_COLOR = """
             #version 300 es
             precision highp float;

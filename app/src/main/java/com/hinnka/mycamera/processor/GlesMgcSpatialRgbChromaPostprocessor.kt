@@ -646,16 +646,17 @@ internal class GlesMgcSpatialRgbChromaPostprocessor(
                 backend.checkGlError("Full-size MGC Spatial RGB read tile ${tile.index}")
                 val copyStart = System.currentTimeMillis()
                 check(
-                    DirectBufferPixelPacker.unpackRgba16TileToRgb16(
-                        source = scratch,
-                        sourceWidth = tile.outputCore.width,
-                        sourceHeight = tile.outputCore.height,
-                        destination = outputBuffer,
-                        destinationWidth = imageWidth,
-                        destinationHeight = imageHeight,
-                        destinationLeft = tile.outputCore.left,
-                        destinationTop = tile.outputCore.top,
-                    ),
+                    com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded() &&
+                        DirectBufferPixelPacker.unpackRgba16TileToRgb16(
+                            source = scratch,
+                            sourceWidth = tile.outputCore.width,
+                            sourceHeight = tile.outputCore.height,
+                            destination = outputBuffer,
+                            destinationWidth = imageWidth,
+                            destinationHeight = imageHeight,
+                            destinationLeft = tile.outputCore.left,
+                            destinationTop = tile.outputCore.top,
+                        ),
                 ) { "Unable to pack full-size MGC Spatial RGB tile ${tile.index}" }
                 copyMs += System.currentTimeMillis() - copyStart
                 backend.yieldToUiRenderer()

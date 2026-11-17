@@ -95,37 +95,41 @@ object OrientationObserver {
             return
         }
 
-        sensorManager = context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        runCatching {
+            val appContext = context.applicationContext ?: context
+            sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
 
-        gravityListener = object : SensorEventListener {
-            override fun onSensorChanged(event: SensorEvent?) {
-                val values = event?.values ?: return
-                val nearFlat = abs(values[2]) > FLAT_AXIS_THRESHOLD
-                if (nearFlat != isNearFlat) {
-                    isNearFlat = nearFlat
-//                    PLog.d(
-//                        TAG,
-//                        "Flat state changed: isNearFlat=$isNearFlat, x=${values[0]}, y=${values[1]}, z=${values[2]}"
-//                    )
+            gravityListener = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent?) {
+                    val values = event?.values ?: return
+                    val nearFlat = abs(values[2]) > FLAT_AXIS_THRESHOLD
+                    if (nearFlat != isNearFlat) {
+                        isNearFlat = nearFlat
+                    }
+                }
+
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+            }
+
+            sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY)?.let { gravitySensor ->
+                sensorManager?.registerListener(
+                    gravityListener,
+                    gravitySensor,
+                    SensorManager.SENSOR_DELAY_UI
+                )
+            }
+
+            orientationListener = object : OrientationEventListener(appContext) {
+                override fun onOrientationChanged(orientation: Int) {
+                    updateOrientation(orientation)
+                }
+            }.also { listener ->
+                if (listener.canDetectOrientation()) {
+                    listener.enable()
                 }
             }
-
-            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }.onFailure { error ->
+            PLog.w(TAG, "Failed to initialize orientation observer", error)
         }
-
-        sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY)?.let { gravitySensor ->
-            sensorManager?.registerListener(
-                gravityListener,
-                gravitySensor,
-                SensorManager.SENSOR_DELAY_UI
-            )
-        }
-
-        orientationListener = object : OrientationEventListener(context.applicationContext) {
-            override fun onOrientationChanged(orientation: Int) {
-                updateOrientation(orientation)
-            }
-        }
-        orientationListener?.enable()
     }
 }

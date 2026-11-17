@@ -37,6 +37,7 @@ internal class MgcRaisrUpscale {
      * that conversion too. `source` stays untouched.
      */
     fun upscale(source: Bitmap, resampleRate: Float): Bitmap? {
+        if (!com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) return null
         val width = source.width
         val height = source.height
         if (width <= 0 || height <= 0) {
@@ -75,6 +76,7 @@ internal class MgcRaisrUpscale {
         coreHeight: Int,
         resampleRate: Float,
     ): Bitmap? {
+        if (!com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) return null
         if (tileWidth <= 0 || tileHeight <= 0 || coreWidth <= 0 || coreHeight <= 0) {
             return null
         }
@@ -170,7 +172,7 @@ internal class MgcRaisrUpscale {
         private const val TAG = "MgcRaisrUpscale"
 
         init {
-            System.loadLibrary("my-native-lib")
+            com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()
         }
     }
 }

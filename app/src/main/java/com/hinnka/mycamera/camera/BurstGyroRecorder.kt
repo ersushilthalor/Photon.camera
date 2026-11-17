@@ -10,9 +10,13 @@ import com.hinnka.mycamera.utils.PLog
 import java.util.ArrayDeque
 
 class BurstGyroRecorder(context: Context) {
-    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    private val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE_UNCALIBRATED)
-        ?: sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+    private val sensorManager: SensorManager? = runCatching {
+        context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    }.getOrNull()
+    private val sensor = runCatching {
+        sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE_UNCALIBRATED)
+            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+    }.getOrNull()
     private val samples = ArrayDeque<GyroSample>(MAX_SAMPLES)
     private val lock = Any()
 
@@ -40,17 +44,21 @@ class BurstGyroRecorder(context: Context) {
 
     fun start(handler: Handler?): Boolean {
         if (recording) return true
-        val gyro = sensor ?: run {
+        val manager = sensorManager
+        val gyro = sensor
+        if (manager == null || gyro == null) {
             PLog.w(TAG, "Burst Gyro unavailable")
             return false
         }
         synchronized(lock) { samples.clear() }
-        recording = sensorManager.registerListener(
-            listener,
-            gyro,
-            SensorManager.SENSOR_DELAY_FASTEST,
-            handler,
-        )
+        recording = runCatching {
+            manager.registerListener(
+                listener,
+                gyro,
+                SensorManager.SENSOR_DELAY_FASTEST,
+                handler,
+            )
+        }.getOrDefault(false)
         if (!recording) PLog.w(TAG, "Failed to register burst Gyro listener")
         return recording
     }
@@ -58,7 +66,7 @@ class BurstGyroRecorder(context: Context) {
     fun stop() {
         if (!recording) return
         recording = false
-        sensorManager.unregisterListener(listener)
+        runCatching { sensorManager?.unregisterListener(listener) }
     }
 
     fun exposureWindow(startTimestampNs: Long, exposureTimeNs: Long): GyroExposureWindow {

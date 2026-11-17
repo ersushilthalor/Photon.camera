@@ -1,11 +1,12 @@
 package com.hinnka.mycamera.processor
 
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 
 /** Host-side resampling around the untouched MGC Spatial strength AOT output. */
 internal object MgcSpatialStrengthMapScaler {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     fun scaleBilinear(
@@ -15,6 +16,7 @@ internal object MgcSpatialStrengthMapScaler {
     ): MgcSpatialStrengthMap {
         require(targetWidth > 0 && targetHeight > 0)
         if (source.width == targetWidth && source.height == targetHeight) return source
+        check(NativeLibraryLoader.ensureLoaded()) { "MGC Spatial scaler native library unavailable" }
         val targetCount = targetWidth.toLong() * targetHeight
         require(targetCount <= Int.MAX_VALUE)
         val output = ShortArray(targetCount.toInt())

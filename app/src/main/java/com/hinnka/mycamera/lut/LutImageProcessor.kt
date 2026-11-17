@@ -79,6 +79,7 @@ class LutImageProcessor(context: Context? = null) {
     private var pboId = 0
     private var readbackBuffer: ByteBuffer? = null
     private var readbackBufferSize = 0
+    private var readbackBufferNative = false
 
     private var vertexBuffer: FloatBuffer? = null
     private var texCoordBuffer: FloatBuffer? = null
@@ -1138,18 +1139,28 @@ class LutImageProcessor(context: Context? = null) {
             return current
         }
         releaseReadbackBuffer()
-        return (com.hinnka.mycamera.utils.DirectBufferAllocator.allocateNative(pixelSize.toLong())
-            ?.order(ByteOrder.nativeOrder())
-            ?: throw OutOfMemoryError("Failed to allocate native direct buffer")).also {
+        val nativeAllocated = if (com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) {
+            com.hinnka.mycamera.utils.DirectBufferAllocator.allocateNative(pixelSize.toLong())
+        } else {
+            null
+        }
+        val allocated = (nativeAllocated ?: ByteBuffer.allocateDirect(pixelSize))
+            .order(ByteOrder.nativeOrder())
+        return allocated.also {
             readbackBuffer = it
             readbackBufferSize = pixelSize
+            readbackBufferNative = nativeAllocated != null
         }
     }
 
     private fun releaseReadbackBuffer() {
-        readbackBuffer?.let { com.hinnka.mycamera.utils.DirectBufferAllocator.freeNative(it) }
+        val current = readbackBuffer
+        if (current != null && readbackBufferNative && com.hinnka.mycamera.utils.NativeLibraryLoader.isAvailable) {
+            runCatching { com.hinnka.mycamera.utils.DirectBufferAllocator.freeNative(current) }
+        }
         readbackBuffer = null
         readbackBufferSize = 0
+        readbackBufferNative = false
     }
 
     private fun uploadImageTexture(bitmap: Bitmap) {

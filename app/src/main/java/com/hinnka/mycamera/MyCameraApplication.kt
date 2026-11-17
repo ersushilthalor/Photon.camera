@@ -30,10 +30,18 @@ class MyCameraApplication : Application() {
         StartupTrace.mark("Application.onCreate start")
         instance = this
         applicationScope.launch(Dispatchers.IO) {
-            removeLegacyDetectorFiles()
+            runCatching {
+                removeLegacyDetectorFiles()
+            }.onFailure { error ->
+                PLog.w(TAG, "Removing legacy detector files failed", error)
+            }
         }
         applicationScope.launch(Dispatchers.Default) {
-            RawSceneExposureEstimator.warmUp(this@MyCameraApplication)
+            runCatching {
+                RawSceneExposureEstimator.warmUp(this@MyCameraApplication)
+            }.onFailure { error ->
+                PLog.w(TAG, "RawSceneExposureEstimator warmUp failed", error)
+            }
         }
         applicationScope.launch(Dispatchers.IO) {
             runCatching {
@@ -105,30 +113,35 @@ class MyCameraApplication : Application() {
                         "restored=${result.restoredCount}, existing=${result.skippedExistingCount}, " +
                         "unsupported=${result.skippedUnsupportedCount}, failed=${result.failedCount}"
                 )
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 PLog.e(TAG, "Private gallery recovery failed", e)
             }
         }
     }
 
     private fun updateShortcuts(isActive: Boolean) {
-        val shortcutManager = getSystemService(android.content.pm.ShortcutManager::class.java)
-        val phantomShortcut = android.content.pm.ShortcutInfo.Builder(this, "phantom_toggle")
-            .setShortLabel(getString(if (isActive) R.string.close_ghost_mode else R.string.ghost_mode))
-            .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_camera))
-            .setIntent(Intent(this, PhantomShortcutActivity::class.java).apply {
-                action = Intent.ACTION_VIEW
-            })
-            .build()
-        val lutShortcut = android.content.pm.ShortcutInfo.Builder(this, "lut_manage")
-            .setShortLabel(getString(R.string.filter_management_title))
-            .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.auto_awesome_color))
-            .setIntent(Intent(this, MainActivity::class.java).apply {
-                action = Intent.ACTION_VIEW
-                putExtra("route", Routes.filterManagement())
-            })
-            .build()
-        shortcutManager.dynamicShortcuts = listOf(phantomShortcut, lutShortcut)
+        runCatching {
+            val shortcutManager = getSystemService(android.content.pm.ShortcutManager::class.java)
+                ?: return@runCatching
+            val phantomShortcut = android.content.pm.ShortcutInfo.Builder(this, "phantom_toggle")
+                .setShortLabel(getString(if (isActive) R.string.close_ghost_mode else R.string.ghost_mode))
+                .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_camera))
+                .setIntent(Intent(this, PhantomShortcutActivity::class.java).apply {
+                    action = Intent.ACTION_VIEW
+                })
+                .build()
+            val lutShortcut = android.content.pm.ShortcutInfo.Builder(this, "lut_manage")
+                .setShortLabel(getString(R.string.filter_management_title))
+                .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.auto_awesome_color))
+                .setIntent(Intent(this, MainActivity::class.java).apply {
+                    action = Intent.ACTION_VIEW
+                    putExtra("route", Routes.filterManagement())
+                })
+                .build()
+            shortcutManager.dynamicShortcuts = listOf(phantomShortcut, lutShortcut)
+        }.onFailure { error ->
+            PLog.w(TAG, "Failed to update dynamic shortcuts", error)
+        }
     }
 
     companion object {
@@ -140,16 +153,21 @@ class MyCameraApplication : Application() {
         lateinit var phantomService: PhantomService
 
         fun updateWidgets(context: Context) {
-            val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(context)
-            val componentName =
-                android.content.ComponentName(context, com.hinnka.mycamera.phantom.PhantomWidgetProvider::class.java)
-            val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
-            if (appWidgetIds.isNotEmpty()) {
-                val intent = Intent(context, com.hinnka.mycamera.phantom.PhantomWidgetProvider::class.java).apply {
-                    action = android.appwidget.AppWidgetManager.ACTION_APPWIDGET_UPDATE
-                    putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_IDS, appWidgetIds)
+            runCatching {
+                val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(context)
+                    ?: return@runCatching
+                val componentName =
+                    android.content.ComponentName(context, com.hinnka.mycamera.phantom.PhantomWidgetProvider::class.java)
+                val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
+                if (appWidgetIds.isNotEmpty()) {
+                    val intent = Intent(context, com.hinnka.mycamera.phantom.PhantomWidgetProvider::class.java).apply {
+                        action = android.appwidget.AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                        putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_IDS, appWidgetIds)
+                    }
+                    context.sendBroadcast(intent)
                 }
-                context.sendBroadcast(intent)
+            }.onFailure { error ->
+                PLog.w(TAG, "Failed to update widgets", error)
             }
         }
     }

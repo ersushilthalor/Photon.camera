@@ -6,7 +6,11 @@ import android.location.Location
 import android.location.LocationManager
 
 class LocationManager(private val context: Context) {
-    private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    private val locationManager: LocationManager? by lazy {
+        runCatching {
+            context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        }.getOrNull()
+    }
 
     private var currentLocation: Location? = null
 
@@ -15,15 +19,16 @@ class LocationManager(private val context: Context) {
         if (!hasLocationPermission()) {
             return
         }
+        val manager = locationManager ?: return
 
         try {
-            val providers = locationManager.getProviders(true)
+            val providers = manager.getProviders(true)
             for (provider in providers) {
-                locationManager.getCurrentLocation(provider, null, context.mainExecutor) { location ->
+                manager.getCurrentLocation(provider, null, context.mainExecutor) { location ->
                     location?.let { updateCurrentLocation(it) }
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.e(TAG, "Failed to request current location", e)
         }
     }
@@ -33,14 +38,15 @@ class LocationManager(private val context: Context) {
         if (!hasLocationPermission()) {
             return
         }
+        val manager = locationManager ?: return
 
         try {
-            val providers = locationManager.getProviders(true)
+            val providers = manager.getProviders(true)
             for (provider in providers) {
-                val location = locationManager.getLastKnownLocation(provider) ?: continue
+                val location = manager.getLastKnownLocation(provider) ?: continue
                 updateCurrentLocation(location)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.e(TAG, "Failed to get last known location", e)
         }
     }

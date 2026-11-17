@@ -14,6 +14,9 @@ internal class MgcSharpen {
     fun render(sourceTexture: Int, targetTexture: Int, width: Int, height: Int,
                snr: Float, attenuation: Float,
                tuning: PhotonSharpenTuning = PhotonCoreImagingTuning.sharpen) {
+        check(com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded()) {
+            "MGC sharpen native library unavailable"
+        }
         require(width > 0 && height > 0 && snr.isFinite() && snr >= 0f)
         require(attenuation.isFinite() && attenuation >= 0f)
         val curves = MgcSharpenCurveBuilder.build(snr, tuning)
@@ -53,5 +56,5 @@ internal class MgcSharpen {
     private external fun nativeSharpenRgbaFloat(rgba: ByteBuffer, scratch: ByteBuffer,
         width: Int, height: Int, snr: Float, attenuation: Float, curves: FloatArray): Int
 
-    companion object { init { System.loadLibrary("my-native-lib") } }
+    companion object { init { com.hinnka.mycamera.utils.NativeLibraryLoader.ensureLoaded() } }
 }

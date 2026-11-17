@@ -39,8 +39,8 @@ class CameraDiscovery(private val context: Context) {
         private val VIVO_SKIP_MODELS = setOf("V1914A", "V2023EA")
     }
 
-    private val cameraManager: CameraManager by lazy {
-        context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+    private val cameraManager: CameraManager? by lazy {
+        context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
     }
 
     private val userPreferencesRepository = UserPreferencesRepository(context)
@@ -245,7 +245,7 @@ class CameraDiscovery(private val context: Context) {
 
                 PLog.d(TAG, "Camera2: $cameraId: facing=$lensFacing, intrinsicZoom=$intrinsicZoomRatio")
 
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 PLog.w(TAG, "Failed to get camera $cameraId info", e)
             }
         }
@@ -303,14 +303,16 @@ class CameraDiscovery(private val context: Context) {
 
     private fun getRawCameraIdList(): List<String> {
         cachedRawCameraIdList?.let { return it }
-        return cameraManager.cameraIdList.toList().also {
+        val manager = cameraManager ?: return emptyList()
+        return manager.cameraIdList.toList().also {
             cachedRawCameraIdList = it
         }
     }
 
     private fun getCameraCharacteristics(cameraId: String): CameraCharacteristics {
         cameraCharacteristicsCache[cameraId]?.let { return it }
-        return cameraManager.getCameraCharacteristics(cameraId).also {
+        val manager = cameraManager ?: throw IllegalStateException("CameraManager unavailable")
+        return manager.getCameraCharacteristics(cameraId).also {
             it.associateMetadataCameraId(cameraId)
             cameraCharacteristicsCache[cameraId] = it
         }
@@ -322,7 +324,7 @@ class CameraDiscovery(private val context: Context) {
         } catch (e: CameraAccessException) {
             PLog.e(TAG, "Failed to get camera ID list (CameraAccessException)", e)
             return emptyList()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.e(TAG, "Failed to get camera ID list (${e.javaClass.simpleName}): ${e.message}", e)
             return emptyList()
         }
@@ -482,7 +484,7 @@ class CameraDiscovery(private val context: Context) {
                     )
                     putBetterLogicalBinding(bindings, physicalCamera.cameraId, binding)
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 PLog.w(TAG, "Failed to inspect logical camera $logicalCameraId", e)
             }
         }
@@ -1011,7 +1013,7 @@ class CameraDiscovery(private val context: Context) {
                     foundIds.add(cameraId)
                     foundMap[cameraId] = intrinsicZoomRatio
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 // 该 ID 不存在或无法访问，忽略
                 PLog.v(TAG, "Probe camera $cameraId failed: ${e.message}")
             }

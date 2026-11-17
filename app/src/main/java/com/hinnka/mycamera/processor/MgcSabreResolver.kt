@@ -1,11 +1,12 @@
 package com.hinnka.mycamera.processor
 
+import com.hinnka.mycamera.utils.NativeLibraryLoader
 import java.nio.ByteBuffer
 
 /** JNI boundary for MGC 9.6.080 V24's statically lifted ResolveSabreHalide AOT kernel. */
 internal object MgcSabreResolver {
     init {
-        System.loadLibrary("my-native-lib")
+        NativeLibraryLoader.ensureLoaded()
     }
 
     fun resolve(
@@ -22,6 +23,7 @@ internal object MgcSabreResolver {
         demosaicBlendBias: Float,
         demosaicSharpnessScale: Float,
     ) {
+        check(NativeLibraryLoader.ensureLoaded()) { "MGC ResolveSabreHalide native library unavailable" }
         val result = nativeResolve(
             accumulatedColorRgba16f,
             outputRgb16Planar,
