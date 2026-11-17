@@ -925,16 +925,7 @@ fun CameraScreen(
             density,
         ) {
             val glView = cameraGLSurfaceView ?: return@LaunchedEffect
-            val overlayBounds = if (
-                activePanel == ActivePanel.SETTINGS && liquidGlassSettings.enabled
-            ) {
-                createLiquidGlassOverlayBounds(
-                    panelBounds = topSheetGlassBounds,
-                    previewBounds = previewGlBounds,
-                )
-            } else {
-                null
-            }
+            val overlayBounds: FloatArray? = null
             glView.setLiquidGlassOverlays(
                 bounds = overlayBounds,
                 cornerRadiusPx = with(density) {
@@ -3006,7 +2997,8 @@ private fun CaptureModeSwitcher(
                     backdrop = modeSwitcherBackdrop,
                     modifier = Modifier.fillMaxSize(),
                     cornerRadius = 19.5.dp,
-                    style = outerGlassStyle
+                    style = outerGlassStyle,
+                    enabled = true
                 ) {}
             }
             Box(
@@ -3022,7 +3014,8 @@ private fun CaptureModeSwitcher(
                     backdrop = selectedGlassBackdrop,
                     modifier = Modifier.fillMaxSize(),
                     cornerRadius = 19.5.dp,
-                    style = liquidGlassStyle
+                    style = liquidGlassStyle,
+                    enabled = true
                 ) {}
             }
         }
