@@ -678,8 +678,6 @@ fun CameraTopSheet(
                     onRawToneMappingParametersChange = onRawToneMappingParametersChange,
                     onSpectralFilmSelectionChange = onRawSpectralFilmSelectionChange,
                     onSpectralFilmPrintChange = onRawSpectralFilmPrintChange,
-                    fotufilmDocument = rawFotufilmDocument,
-                    onFotufilmDocumentChange = onRawFotufilmDocumentChange,
                     inlineEngineOptions = true,
                     showToneMappingControls = true
                 )
