@@ -988,7 +988,6 @@ fun SettingsScreen(
     }
     val settingsScrollState = if (selectedPage == null) overviewScrollState else detailScrollState
 
-    val settingsGlassBackdrop = rememberPrismalGlassLayer()
     val settingsBackgroundPainter = rememberBackgroundPainter(viewModel)
     Box(
         modifier = modifier
@@ -1001,7 +1000,6 @@ fun SettingsScreen(
             contentScale = ContentScale.Crop,
             modifier = Modifier
                 .fillMaxSize()
-                .prismalGlassLayer(settingsGlassBackdrop)
         )
         CompositionLocalProvider(LocalSettingsPrismalBackdrop provides settingsGlassBackdrop) {
             CompositionLocalProvider(LocalRippleConfiguration provides settingsRippleConfiguration) {
@@ -3044,7 +3042,6 @@ fun SwitchSettingItem(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
-    val backdrop = LocalSettingsPrismalBackdrop.current
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -3076,25 +3073,17 @@ fun SwitchSettingItem(
 
         Spacer(modifier = Modifier.width(16.dp))
 
-        if (backdrop != null && enabled) {
-            PrismalGlassToggle(
-                selected = { checked },
-                onSelect = onCheckedChange,
-                backdrop = backdrop
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = OnAccentColor,
+                checkedTrackColor = AccentColor,
+                uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
             )
-        } else {
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-                enabled = enabled,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = OnAccentColor,
-                    checkedTrackColor = AccentColor,
-                    uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
-                    uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
-                )
-            )
-        }
+        )
     }
 }
 
@@ -3111,7 +3100,6 @@ fun TextInputSettingItem(
     isSecret: Boolean = false,
 ) {
     var showDialog by remember { mutableStateOf(false) }
-    val backdrop = LocalSettingsPrismalBackdrop.current
     val rowContent: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -3148,28 +3136,15 @@ fun TextInputSettingItem(
         )
     }
 
-    if (backdrop != null) {
-        PrismalGlassButton(
-            onClick = { showDialog = true },
-            backdrop = backdrop,
-            modifier = modifier.fillMaxWidth(),
-            height = null,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            nestedGlassSource = LocalPrismalParentGlassLayer.current,
-            content = rowContent
-        )
-    } else {
-        Row(
-            modifier = modifier
-                .fillMaxWidth()
-                .clickable { showDialog = true }
-                .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-            content = rowContent
-        )
-    }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+        content = rowContent
+    )
 
     if (showDialog) {
         var tempValue by remember { mutableStateOf(value) }
@@ -5833,33 +5808,20 @@ private fun CaptureButtonAppearanceItem(
         }
     }
 
-    if (backdrop != null) {
-        PrismalGlassButton(
-            onClick = onClick,
-            backdrop = backdrop,
-            modifier = modifier,
-            height = null,
-            shape = { PrismalRoundedRectangle(14.dp) },
-            contentPadding = PaddingValues(vertical = 10.dp, horizontal = 6.dp),
-            horizontalArrangement = Arrangement.Center,
-            nestedGlassSource = LocalPrismalParentGlassLayer.current,
-            content = tileContent
-        )
-    } else {
-        Column(
-            modifier = modifier
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color.White.copy(alpha = 0.06f))
-                .border(
-                    width = 2.dp,
-                    color = if (selected) AccentColor else Color.White.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(12.dp)
-                )
-                .clickable(onClick = onClick)
-                .padding(vertical = 10.dp, horizontal = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.06f))
+            .border(
+                width = 2.dp,
+                color = if (selected) AccentColor else Color.White.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
             Box(
                 modifier = Modifier.height(48.dp),
                 contentAlignment = Alignment.Center
