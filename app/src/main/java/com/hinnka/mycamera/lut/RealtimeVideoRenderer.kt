@@ -57,6 +57,7 @@ class RealtimeVideoRenderer(
     dualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE,
     dualCapturePositionX: Float = 0.66f,
     dualCapturePositionY: Float = 0.05f,
+    private val enableSecondaryQuickSwitchInput: Boolean = false,
 ) {
     companion object {
         private const val TAG = "RealtimeVideoRenderer"
@@ -153,6 +154,18 @@ class RealtimeVideoRenderer(
     private var indexBuffer: ShortBuffer? = null
     private var initialized = false
     private val cameraFramePending = AtomicBoolean(false)
+    private var secondaryTextureId = 0
+    private var secondarySurfaceTexture: SurfaceTexture? = null
+    @Volatile private var secondaryCameraInputSize: Size = cameraInputSize
+    private var secondarySurface: Surface? = null
+    private val secondaryFramePending = AtomicBoolean(false)
+    @Volatile private var useSecondaryInputActive = false
+    @Volatile private var secondaryCameraSensorOrientationDegrees = sensorOrientationDegrees
+    @Volatile private var secondaryTransformAxesSwapped: Boolean? = null
+    @Volatile private var secondarySensorOrientationFallbackApplied = false
+    private var secondaryCropRect = fullCropRect
+    private val secondaryStMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+    private val secondaryPresentationMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     @Volatile
     private var stabilizationSession: RealtimeStabilizationCoordinator.Session? = null
     @Volatile
@@ -160,6 +173,9 @@ class RealtimeVideoRenderer(
 
     val inputSurface: Surface?
         get() = cameraSurface
+
+    val secondaryInputSurface: Surface?
+        get() = secondarySurface
 
     val dualCaptureInputSurface: Surface?
         get() = dualCaptureSurface
@@ -240,6 +256,42 @@ class RealtimeVideoRenderer(
         )
     }
 
+    fun updateSecondaryInputGeometry(
+        size: Size,
+        sensorOrientationDegrees: Int = secondaryCameraSensorOrientationDegrees,
+    ) {
+        if (size.width <= 0 || size.height <= 0) return
+        secondaryCameraInputSize = size
+        secondaryCameraSensorOrientationDegrees = sensorOrientationDegrees
+        secondarySensorOrientationFallbackApplied = false
+        secondarySurfaceTexture?.setDefaultBufferSize(size.width, size.height)
+        secondaryTransformAxesSwapped = null
+        PLog.i(
+            TAG,
+            "Secondary QuickSwitch input geometry refreshed: input=${size.width}x${size.height}, " +
+                "sensorOrientation=$sensorOrientationDegrees",
+        )
+    }
+
+    fun switchActiveCameraInput(
+        useSecondary: Boolean,
+        size: Size,
+        sensorOrientationDegrees: Int,
+    ) {
+        val targetSecondary = useSecondary && secondarySurfaceTexture != null
+        useSecondaryInputActive = targetSecondary
+        if (targetSecondary) {
+            updateSecondaryInputGeometry(size, sensorOrientationDegrees)
+        } else {
+            updateCameraInputSize(size, sensorOrientationDegrees)
+        }
+        PLog.i(
+            TAG,
+            "Active recording input switched: useSecondary=$targetSecondary, " +
+                "size=${size.width}x${size.height}, sensorOrientation=$sensorOrientationDegrees",
+        )
+    }
+
     fun initialize(
         encoderSurface: Surface,
         onFrameAvailable: () -> Unit,
@@ -267,14 +319,30 @@ class RealtimeVideoRenderer(
             setDefaultBufferSize(currentCameraInputSize.width, currentCameraInputSize.height)
             setOnFrameAvailableListener {
                 cameraFramePending.set(true)
-                if (!enhancedStabilizationEnabled ||
-                    stabilizationCoordinator?.isCurrentCameraSupported != true
+                if (!useSecondaryInputActive &&
+                    (!enhancedStabilizationEnabled ||
+                        stabilizationCoordinator?.isCurrentCameraSupported != true)
                 ) {
                     onFrameAvailable()
                 }
             }
         }
         cameraSurface = Surface(cameraSurfaceTexture)
+        if (enableSecondaryQuickSwitchInput) {
+            secondaryTextureId = GlUtils.createOESTexture()
+            check(secondaryTextureId != 0) { "Cannot create secondary QuickSwitch video OES texture" }
+            secondarySurfaceTexture = SurfaceTexture(secondaryTextureId).apply {
+                setDefaultBufferSize(secondaryCameraInputSize.width, secondaryCameraInputSize.height)
+                setOnFrameAvailableListener {
+                    secondaryFramePending.set(true)
+                    if (useSecondaryInputActive && !enhancedStabilizationEnabled) {
+                        onFrameAvailable()
+                    }
+                }
+            }
+            secondarySurface = Surface(secondarySurfaceTexture)
+            PLog.i(TAG, "Secondary QuickSwitch encoder input ready: ${secondaryCameraInputSize.width}x${secondaryCameraInputSize.height}")
+        }
         currentDualCaptureInputSize?.let(::initializeDualCaptureInput)
         if (enhancedStabilizationEnabled) {
             check(
@@ -321,27 +389,39 @@ class RealtimeVideoRenderer(
     ): Long? {
         if (!initialized || !makeCurrent()) return null
         val surfaceTexture = cameraSurfaceTexture ?: return null
+        val secondarySt = secondarySurfaceTexture
         if (dualCaptureSurfaceTexture != null) {
             acquireLatestDualCaptureFrame()
             if (!dualCaptureHasFrame) return null
         }
-        val cameraFrameUpdated = cameraFramePending.getAndSet(false) &&
+        val primaryUpdated = cameraFramePending.getAndSet(false) &&
             acquireLatestCameraFrame(surfaceTexture)
-        val cameraTimestampNs = surfaceTexture.timestamp
+        val secondaryUpdated = secondarySt != null &&
+            secondaryFramePending.getAndSet(false) &&
+            acquireLatestSecondaryFrame(secondarySt)
+
+        val useSecondaryNow = useSecondaryInputActive && secondarySt != null && secondaryTextureId != 0
+        val cameraFrameUpdated = if (useSecondaryNow) secondaryUpdated else primaryUpdated
+        val cameraTimestampNs = if (useSecondaryNow) secondarySt!!.timestamp else surfaceTexture.timestamp
 
         var sourceTextureSource = PreviewColorTextureSource.EXTERNAL_OES
         var sourceTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
-        var sourceTextureId = cameraTextureId
-        var sourceStMatrix = if (enhancedStabilizationEnabled) stMatrix else cameraPresentationMatrix
+        var sourceTextureId = if (useSecondaryNow) secondaryTextureId else cameraTextureId
+        var sourceStMatrix = when {
+            useSecondaryNow -> secondaryPresentationMatrix
+            enhancedStabilizationEnabled -> stMatrix
+            else -> cameraPresentationMatrix
+        }
         // Resolve the crop only after acquiring the frame: that operation updates the
         // SurfaceTexture matrix and may recompute cameraCropRect for a newly switched lens.
         var sourceCropRect = fullCropRect
         var timestampNs = cameraTimestampNs
 
         val session = stabilizationSession
-        val stabilizationOperational = enhancedStabilizationEnabled &&
+        val stabilizationOperational = !useSecondaryNow &&
+            enhancedStabilizationEnabled &&
             stabilizationSessionStarted && session?.isOperational == true
-        if (stabilizationSessionStarted && !stabilizationOperational) {
+        if (stabilizationSessionStarted && !stabilizationOperational && !useSecondaryNow) {
             session?.stop()
             stabilizationSessionStarted = false
             mgcEisPresentationTransform.reset()
@@ -361,7 +441,7 @@ class RealtimeVideoRenderer(
             timestampNs = rendered.timestampNs
         } else {
             if (!cameraFrameUpdated || cameraTimestampNs <= 0L) return null
-            sourceCropRect = cameraCropRect
+            sourceCropRect = if (useSecondaryNow) secondaryCropRect else cameraCropRect
         }
         if (timestampNs <= 0L) return null
         val presentationTimeNs = mapPresentationTimeNs(timestampNs)
@@ -671,6 +751,57 @@ class RealtimeVideoRenderer(
                 "crop=${cameraCropRect.joinToString(prefix = "[", postfix = "]")}, " +
                 "sensorOrientationFallback=$cameraSensorOrientationFallbackApplied, " +
                 "matrix=${presentationMatrix.joinToString(prefix = "[", postfix = "]")}"
+        )
+    }
+
+    private fun acquireLatestSecondaryFrame(surfaceTexture: SurfaceTexture): Boolean {
+        return try {
+            surfaceTexture.updateTexImage()
+            surfaceTexture.getTransformMatrix(secondaryStMatrix)
+            updateSecondaryTransformGeometry(resolveSecondaryPresentationMatrix(secondaryStMatrix))
+            true
+        } catch (error: RuntimeException) {
+            PLog.e(TAG, "Failed to acquire secondary QuickSwitch video frame", error)
+            false
+        }
+    }
+
+    private fun resolveSecondaryPresentationMatrix(sourceMatrix: FloatArray): FloatArray {
+        System.arraycopy(sourceMatrix, 0, secondaryPresentationMatrix, 0, secondaryPresentationMatrix.size)
+        val shouldApplySensorRotation = shouldApplySensorOrientationFallback(
+            inputWidth = secondaryCameraInputSize.width,
+            inputHeight = secondaryCameraInputSize.height,
+            targetWidth = encoderOutputSize.width,
+            targetHeight = encoderOutputSize.height,
+            sensorOrientationDegrees = secondaryCameraSensorOrientationDegrees,
+            textureTransformMatrix = sourceMatrix,
+        )
+        if (!shouldApplySensorRotation) {
+            secondarySensorOrientationFallbackApplied = false
+            return secondaryPresentationMatrix
+        }
+        val sensorRotation = resolveMgcEisPresentationMatrix(secondaryCameraSensorOrientationDegrees)
+        if (sensorRotation == null) {
+            secondarySensorOrientationFallbackApplied = false
+            return secondaryPresentationMatrix
+        }
+        Matrix.multiplyMM(
+            secondaryPresentationMatrix, 0,
+            sourceMatrix, 0,
+            sensorRotation, 0,
+        )
+        secondarySensorOrientationFallbackApplied = true
+        return secondaryPresentationMatrix
+    }
+
+    private fun updateSecondaryTransformGeometry(presentationMatrix: FloatArray) {
+        val axesSwapped = isTextureTransformAxesSwapped(presentationMatrix)
+        if (secondaryTransformAxesSwapped == axesSwapped) return
+        secondaryTransformAxesSwapped = axesSwapped
+        secondaryCropRect = resolveCameraCropRect(
+            presentationMatrix = presentationMatrix,
+            inputWidth = secondaryCameraInputSize.width,
+            inputHeight = secondaryCameraInputSize.height,
         )
     }
 
@@ -1224,6 +1355,11 @@ class RealtimeVideoRenderer(
         cameraSurface = null
         cameraSurfaceTexture?.release()
         cameraSurfaceTexture = null
+        secondarySurfaceTexture?.setOnFrameAvailableListener(null)
+        secondarySurface?.release()
+        secondarySurface = null
+        secondarySurfaceTexture?.release()
+        secondarySurfaceTexture = null
         dualCaptureSurfaceTexture?.setOnFrameAvailableListener(null)
         dualCaptureSurface?.release()
         dualCaptureSurface = null
@@ -1251,6 +1387,10 @@ class RealtimeVideoRenderer(
         if (cameraTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(cameraTextureId), 0)
             cameraTextureId = 0
+        }
+        if (secondaryTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(secondaryTextureId), 0)
+            secondaryTextureId = 0
         }
         if (intermediateTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(intermediateTextureId), 0)

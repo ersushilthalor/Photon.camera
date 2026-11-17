@@ -87,6 +87,56 @@ object Shaders {
         }
     """.trimIndent()
 
+    /** Dual-OES vertex shader for Quick Lens Switch frame-based crossfade composition. */
+    val VERTEX_SHADER_DUAL_OES = """
+        #version 300 es
+
+        in vec4 aPosition;
+        in vec2 aTexCoord;
+
+        out vec2 vMainTexCoord;
+        out vec2 vUltraWideTexCoord;
+
+        uniform mat4 uMainSTMatrix;
+        uniform mat4 uUltraWideSTMatrix;
+
+        void main() {
+            gl_Position = aPosition;
+            vMainTexCoord = (uMainSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
+            vUltraWideTexCoord = (uUltraWideSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
+        }
+    """.trimIndent()
+
+    /** Dual-OES fragment shader blending Main and Ultra-Wide streams smoothly during handoff. */
+    val FRAGMENT_SHADER_DUAL_OES_BLEND = """
+        #version 300 es
+        #extension GL_OES_EGL_image_external_essl3 : require
+
+        precision highp float;
+
+        in vec2 vMainTexCoord;
+        in vec2 vUltraWideTexCoord;
+        out vec4 fragColor;
+
+        uniform samplerExternalOES uMainTexture;
+        uniform samplerExternalOES uUltraWideTexture;
+        uniform float uMainAlpha;
+        uniform float uUltraWideAlpha;
+        uniform int uTopSource;
+
+        void main() {
+            vec4 mainColor = texture(uMainTexture, vMainTexCoord);
+            vec4 uwColor = texture(uUltraWideTexture, vUltraWideTexCoord);
+            vec3 blended;
+            if (uTopSource == 1) {
+                blended = mix(mainColor.rgb, uwColor.rgb, clamp(uUltraWideAlpha, 0.0, 1.0));
+            } else {
+                blended = mix(uwColor.rgb, mainColor.rgb, clamp(uMainAlpha, 0.0, 1.0));
+            }
+            fragColor = vec4(blended, 1.0);
+        }
+    """.trimIndent()
+
     /** 简单顶点着色器（HDF 后处理 Pass 专用，无 MVP/ST 矩阵） */
     val SIMPLE_VERTEX_SHADER = """
         #version 300 es

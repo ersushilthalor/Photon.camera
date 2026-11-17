@@ -13,6 +13,8 @@ import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.quickswitch.PreviewOverlapState
+import com.hinnka.mycamera.camera.quickswitch.PreviewStreamSource
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
@@ -226,6 +228,40 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     // Primary Camera2 preview input.
     private var surfaceTexture: SurfaceTexture? = null
     private val frameAvailable = AtomicBoolean(false)
+    @Volatile
+    private var primaryHasFrame = false
+
+    // Secondary standby Camera2 preview input (Quick Lens Switch).
+    @Volatile
+    private var quickLensSwitchEnabled: Boolean = false
+    @Volatile
+    private var isUsingUltraWideSurface: Boolean = false
+    @Volatile
+    private var previewOverlapState: PreviewOverlapState = PreviewOverlapState()
+    private var standbyCameraTextureId: Int = 0
+    private var standbySurfaceTexture: SurfaceTexture? = null
+    private val standbyFrameAvailable = AtomicBoolean(false)
+    @Volatile
+    private var standbyHasFrame = false
+    private val standbyStMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
+    private var standbyPreviewWidth: Int = 1920
+    private var standbyPreviewHeight: Int = 1080
+    private val standbyMvpMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
+    private var overlapBlendProgramId: Int = 0
+    private var uOverlapMainTexLoc: Int = 0
+    private var uOverlapUwTexLoc: Int = 0
+    private var uOverlapMainStLoc: Int = 0
+    private var uOverlapUwStLoc: Int = 0
+    private var uOverlapMainAlphaLoc: Int = 0
+    private var uOverlapUwAlphaLoc: Int = 0
+    private var uOverlapTopSourceLoc: Int = 0
+    private var aOverlapPositionLoc: Int = 0
+    private var aOverlapTexCoordLoc: Int = 0
+    private var overlapBlendFboId: Int = 0
+    private var overlapBlendTextureId: Int = 0
+    private var overlapBlendWidth: Int = 0
+    private var overlapBlendHeight: Int = 0
+    private val quickSwitchIdentityMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
     private var stabilizationCoordinator: RealtimeStabilizationCoordinator? = null
     @Volatile
     private var stabilizationSession: RealtimeStabilizationCoordinator.Session? = null
@@ -494,6 +530,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     // 回调
     var onSurfaceTextureAvailable: ((SurfaceTexture) -> Unit)? = null
+    var onStandbySurfaceTextureAvailable: ((SurfaceTexture) -> Unit)? = null
+    var onPreviewFrameSourceAvailable: ((PreviewStreamSource) -> Unit)? = null
     var onRequestRender: (() -> Unit)? = null
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
@@ -588,6 +626,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         // 通知调用者 SurfaceTexture 已准备好
         surfaceTexture?.let { onSurfaceTextureAvailable?.invoke(it) }
 
+        if (quickLensSwitchEnabled) {
+            ensureStandbySurfaceTextureOnGlThread()
+        }
+
         GlUtils.checkGlError("initShaderProgram")
     }
 
@@ -602,6 +644,16 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         mgcEisHardwareBufferRenderer.resetAfterContextLoss()
         mgcEisYuvRenderer.resetAfterContextLoss()
         cameraTextureId = 0
+        primaryHasFrame = false
+        standbyCameraTextureId = 0
+        standbySurfaceTexture = null
+        standbyFrameAvailable.set(false)
+        standbyHasFrame = false
+        overlapBlendProgramId = 0
+        overlapBlendFboId = 0
+        overlapBlendTextureId = 0
+        overlapBlendWidth = 0
+        overlapBlendHeight = 0
         currentCameraTextureId = 0
         currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
         currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
@@ -1031,7 +1083,21 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             stabilizationSessionStarted = stabilizationSession?.start() == true
         }
         val oesFrameUpdated = frameAvailable.getAndSet(false) && acquireLatestCameraFrame()
-        var cameraFrameUpdated = oesFrameUpdated
+        if (oesFrameUpdated) {
+            primaryHasFrame = true
+            onPreviewFrameSourceAvailable?.invoke(PreviewStreamSource.MAIN)
+        }
+        val standbyFrameUpdated = if (quickLensSwitchEnabled && standbySurfaceTexture != null) {
+            standbyFrameAvailable.getAndSet(false) && acquireLatestStandbyCameraFrame()
+        } else {
+            standbyFrameAvailable.set(false)
+            false
+        }
+        if (standbyFrameUpdated) {
+            standbyHasFrame = true
+            onPreviewFrameSourceAvailable?.invoke(PreviewStreamSource.ULTRAWIDE)
+        }
+        var cameraFrameUpdated = oesFrameUpdated || (standbyFrameUpdated && (isUsingUltraWideSurface || previewOverlapState.isOverlapping))
 
         if (delayedStabilizationEnabled) {
             val session = stabilizationSession
@@ -1332,13 +1398,20 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         targetWidth: Int = viewportWidth,
         targetHeight: Int = viewportHeight,
     ): FloatArray {
-        val stabilized = currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D
+        val stabilized = currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D &&
+            currentCameraTextureId != overlapBlendTextureId
+        val useUwMatrix = !stabilized &&
+            quickLensSwitchEnabled &&
+            isUsingUltraWideSurface &&
+            currentCameraTextureId == standbyCameraTextureId &&
+            standbyCameraTextureId != 0
         val needsEisSafetyCrop = !stabilized &&
             previewStabilizationUseCase != null &&
             stabilizationCoordinator?.isCurrentCameraSupported == true
         val baseMatrix = if (targetWidth == viewportWidth && targetHeight == viewportHeight) {
             when {
                 stabilized -> stabilizationMvpMatrix
+                useUwMatrix -> standbyMvpMatrix
                 !needsEisSafetyCrop -> mvpMatrix
                 else -> {
                     System.arraycopy(mvpMatrix, 0, eisFallbackMvpMatrix, 0, eisFallbackMvpMatrix.size)
@@ -1353,11 +1426,21 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 }
             }
         } else {
+            val activeSourceWidth = when {
+                stabilized -> stabilizationInputWidth
+                useUwMatrix -> standbyPreviewWidth
+                else -> previewWidth
+            }
+            val activeSourceHeight = when {
+                stabilized -> stabilizationInputHeight
+                useUwMatrix -> standbyPreviewHeight
+                else -> previewHeight
+            }
             buildMvpMatrix(
                 targetWidth = targetWidth,
                 targetHeight = targetHeight,
-                sourceWidth = if (stabilized) stabilizationInputWidth else previewWidth,
-                sourceHeight = if (stabilized) stabilizationInputHeight else previewHeight,
+                sourceWidth = activeSourceWidth,
+                sourceHeight = activeSourceHeight,
             ).also { matrix ->
                 if (needsEisSafetyCrop) {
                     Matrix.scaleM(matrix, 0, EIS_OUTPUT_CROP_ZOOM, EIS_OUTPUT_CROP_ZOOM, 1f)
@@ -1369,11 +1452,204 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun useCurrentOesFrame() {
-        currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
-        currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
-        currentCameraTextureId = cameraTextureId
-        currentCameraTextureMatrix = stMatrix
-        currentFrameTimestampNs = surfaceTexture?.timestamp ?: 0L
+        val overlap = previewOverlapState
+        val canBlend = quickLensSwitchEnabled &&
+            overlap.isOverlapping &&
+            cameraTextureId != 0 &&
+            standbyCameraTextureId != 0 &&
+            primaryHasFrame &&
+            standbyHasFrame
+        if (canBlend && renderOverlapBlendFbo(overlap)) {
+            currentCameraTextureSource = PreviewColorTextureSource.TEXTURE_2D
+            currentCameraTextureTarget = GLES30.GL_TEXTURE_2D
+            currentCameraTextureId = overlapBlendTextureId
+            currentCameraTextureMatrix = quickSwitchIdentityMatrix
+            val mainTs = surfaceTexture?.timestamp ?: 0L
+            val uwTs = standbySurfaceTexture?.timestamp ?: 0L
+            currentFrameTimestampNs = maxOf(mainTs, uwTs)
+            return
+        }
+
+        val preferUw = quickLensSwitchEnabled &&
+            isUsingUltraWideSurface &&
+            standbyCameraTextureId != 0 &&
+            (standbyHasFrame || !primaryHasFrame)
+        if (preferUw) {
+            currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
+            currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
+            currentCameraTextureId = standbyCameraTextureId
+            currentCameraTextureMatrix = standbyStMatrix
+            currentFrameTimestampNs = standbySurfaceTexture?.timestamp ?: 0L
+        } else {
+            currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
+            currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
+            currentCameraTextureId = cameraTextureId
+            currentCameraTextureMatrix = stMatrix
+            currentFrameTimestampNs = surfaceTexture?.timestamp ?: 0L
+        }
+    }
+
+    private fun acquireLatestStandbyCameraFrame(): Boolean {
+        return try {
+            standbySurfaceTexture?.updateTexImage()
+            standbySurfaceTexture?.getTransformMatrix(standbyStMatrix)
+            standbySurfaceTexture != null
+        } catch (error: RuntimeException) {
+            PLog.w(TAG, "standby updateTexImage failed: ${error.message}")
+            false
+        }
+    }
+
+    private fun ensureStandbySurfaceTextureOnGlThread() {
+        if (!quickLensSwitchEnabled || !surfaceReady) return
+        if (standbyCameraTextureId == 0) {
+            standbyCameraTextureId = GlUtils.createOESTexture()
+        }
+        if (standbyCameraTextureId != 0 && standbySurfaceTexture == null) {
+            standbyFrameAvailable.set(false)
+            standbyHasFrame = false
+            standbySurfaceTexture = SurfaceTexture(standbyCameraTextureId).apply {
+                setDefaultBufferSize(standbyPreviewWidth, standbyPreviewHeight)
+                setOnFrameAvailableListener {
+                    standbyFrameAvailable.set(true)
+                    if (quickLensSwitchEnabled && (isUsingUltraWideSurface || previewOverlapState.isOverlapping)) {
+                        onRequestRender?.invoke()
+                    }
+                }
+            }
+            standbySurfaceTexture?.let { onStandbySurfaceTextureAvailable?.invoke(it) }
+        }
+    }
+
+    private fun releaseStandbyGlResources() {
+        standbySurfaceTexture?.setOnFrameAvailableListener(null)
+        standbySurfaceTexture?.release()
+        standbySurfaceTexture = null
+        standbyFrameAvailable.set(false)
+        standbyHasFrame = false
+        if (standbyCameraTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(standbyCameraTextureId), 0)
+            standbyCameraTextureId = 0
+        }
+        if (overlapBlendFboId != 0) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(overlapBlendFboId), 0)
+            overlapBlendFboId = 0
+        }
+        if (overlapBlendTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(overlapBlendTextureId), 0)
+            overlapBlendTextureId = 0
+        }
+        overlapBlendWidth = 0
+        overlapBlendHeight = 0
+        GlUtils.deleteProgram(overlapBlendProgramId)
+        overlapBlendProgramId = 0
+    }
+
+    private fun ensureOverlapBlendResources(width: Int, height: Int): Boolean {
+        if (width <= 0 || height <= 0) return false
+        if (overlapBlendProgramId == 0) {
+            val vs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.VERTEX_SHADER_DUAL_OES)
+            val fs = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_DUAL_OES_BLEND)
+            if (vs == 0 || fs == 0) {
+                if (vs != 0) GLES30.glDeleteShader(vs)
+                if (fs != 0) GLES30.glDeleteShader(fs)
+                return false
+            }
+            overlapBlendProgramId = GlUtils.linkProgram(vs, fs)
+            GLES30.glDeleteShader(vs)
+            GLES30.glDeleteShader(fs)
+            if (overlapBlendProgramId == 0) return false
+            uOverlapMainTexLoc = GLES30.glGetUniformLocation(overlapBlendProgramId, "uMainTexture")
+            uOverlapUwTexLoc = GLES30.glGetUniformLocation(overlapBlendProgramId, "uUltraWideTexture")
+            uOverlapMainStLoc = GLES30.glGetUniformLocation(overlapBlendProgramId, "uMainSTMatrix")
+            uOverlapUwStLoc = GLES30.glGetUniformLocation(overlapBlendProgramId, "uUltraWideSTMatrix")
+            uOverlapMainAlphaLoc = GLES30.glGetUniformLocation(overlapBlendProgramId, "uMainAlpha")
+            uOverlapUwAlphaLoc = GLES30.glGetUniformLocation(overlapBlendProgramId, "uUltraWideAlpha")
+            uOverlapTopSourceLoc = GLES30.glGetUniformLocation(overlapBlendProgramId, "uTopSource")
+            aOverlapPositionLoc = GLES30.glGetAttribLocation(overlapBlendProgramId, "aPosition")
+            aOverlapTexCoordLoc = GLES30.glGetAttribLocation(overlapBlendProgramId, "aTexCoord")
+        }
+        if (overlapBlendFboId != 0 && overlapBlendTextureId != 0 &&
+            overlapBlendWidth == width && overlapBlendHeight == height
+        ) {
+            return true
+        }
+        if (overlapBlendFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(overlapBlendFboId), 0)
+        if (overlapBlendTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(overlapBlendTextureId), 0)
+        val ids = IntArray(1)
+        GLES30.glGenFramebuffers(1, ids, 0)
+        overlapBlendFboId = ids[0]
+        GLES30.glGenTextures(1, ids, 0)
+        overlapBlendTextureId = ids[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, overlapBlendTextureId)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, width, height,
+            0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, overlapBlendFboId)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D, overlapBlendTextureId, 0
+        )
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            return false
+        }
+        overlapBlendWidth = width
+        overlapBlendHeight = height
+        return true
+    }
+
+    private fun renderOverlapBlendFbo(overlap: PreviewOverlapState): Boolean {
+        val targetW = previewWidth.coerceAtLeast(1)
+        val targetH = previewHeight.coerceAtLeast(1)
+        if (!ensureOverlapBlendResources(targetW, targetH)) return false
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, overlapBlendFboId)
+        GLES30.glViewport(0, 0, targetW, targetH)
+        GLES30.glUseProgram(overlapBlendProgramId)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTextureId)
+        GLES30.glUniform1i(uOverlapMainTexLoc, 0)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, standbyCameraTextureId)
+        GLES30.glUniform1i(uOverlapUwTexLoc, 1)
+
+        GLES30.glUniformMatrix4fv(uOverlapMainStLoc, 1, false, stMatrix, 0)
+        GLES30.glUniformMatrix4fv(uOverlapUwStLoc, 1, false, standbyStMatrix, 0)
+        GLES30.glUniform1f(uOverlapMainAlphaLoc, overlap.mainAlpha)
+        GLES30.glUniform1f(uOverlapUwAlphaLoc, overlap.ultraWideAlpha)
+        GLES30.glUniform1i(uOverlapTopSourceLoc, if (overlap.topSource == PreviewStreamSource.ULTRAWIDE) 1 else 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)
+        GLES30.glEnableVertexAttribArray(aOverlapPositionLoc)
+        GLES30.glVertexAttribPointer(aOverlapPositionLoc, POSITION_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, texCoordBufferId)
+        GLES30.glEnableVertexAttribArray(aOverlapTexCoordLoc)
+        GLES30.glVertexAttribPointer(aOverlapTexCoordLoc, TEXTURE_COORD_COMPONENT_COUNT, GLES30.GL_FLOAT, false, 0, 0)
+
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, Shaders.DRAW_ORDER.size, GLES30.GL_UNSIGNED_SHORT, 0)
+
+        GLES30.glDisableVertexAttribArray(aOverlapPositionLoc)
+        GLES30.glDisableVertexAttribArray(aOverlapTexCoordLoc)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        return true
     }
 
     private fun acquireLatestCameraFrame(): Boolean {
@@ -2647,11 +2923,49 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         )
         System.arraycopy(stabilizedMatrix, 0, stabilizationMvpMatrix, 0, stabilizationMvpMatrix.size)
 
-//        PLog.d(
-//            TAG,
-//            "MVP matrix updated: viewport=${viewportWidth}x${viewportHeight}, preview=${previewWidth}x${previewHeight}"
-//        )
+        val standbyMatrix = buildMvpMatrix(
+            viewportWidth,
+            viewportHeight,
+            standbyPreviewWidth,
+            standbyPreviewHeight,
+        )
+        System.arraycopy(standbyMatrix, 0, standbyMvpMatrix, 0, standbyMvpMatrix.size)
     }
+
+    fun setQuickLensSwitchEnabled(enabled: Boolean) {
+        if (quickLensSwitchEnabled == enabled) return
+        quickLensSwitchEnabled = enabled
+        if (enabled) {
+            ensureStandbySurfaceTextureOnGlThread()
+        } else {
+            isUsingUltraWideSurface = false
+            previewOverlapState = PreviewOverlapState()
+            releaseStandbyGlResources()
+            useCurrentOesFrame()
+        }
+    }
+
+    fun setStandbyPreviewSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        if (standbyPreviewWidth != width || standbyPreviewHeight != height) {
+            standbyPreviewWidth = width
+            standbyPreviewHeight = height
+            standbySurfaceTexture?.setDefaultBufferSize(width, height)
+            updateMVPMatrix()
+        }
+    }
+
+    fun setUsingUltraWideSurface(useUw: Boolean) {
+        isUsingUltraWideSurface = useUw
+        useCurrentOesFrame()
+    }
+
+    fun setPreviewOverlapState(state: PreviewOverlapState) {
+        previewOverlapState = state
+        useCurrentOesFrame()
+    }
+
+    fun getStandbySurfaceTexture(): SurfaceTexture? = standbySurfaceTexture
 
     private fun buildMvpMatrix(
         targetWidth: Int,
@@ -3373,10 +3687,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         passthroughProgramId = 0
         GlUtils.deleteProgram(copyProgramId)
         copyProgramId = 0
-        // Release the Camera2 preview SurfaceTexture.
+        // Release the Camera2 preview SurfaceTextures.
+        releaseStandbyGlResources()
         surfaceTexture?.release()
         surfaceTexture = null
         frameAvailable.set(false)
+        primaryHasFrame = false
 
         // 重置状态
         surfaceReady = false

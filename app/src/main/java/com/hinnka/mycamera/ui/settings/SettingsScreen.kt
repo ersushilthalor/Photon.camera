@@ -340,6 +340,7 @@ fun SettingsScreen(
     val preferredMainCameraId by viewModel.preferredMainCameraId.collectAsState(initial = null)
     val preferredMacroCameraId by viewModel.preferredMacroCameraId.collectAsState(initial = null)
     val enableLogicalMultiCameraDiscovery by viewModel.enableLogicalMultiCameraDiscovery.collectAsState(initial = false)
+    val quickLensSwitchEnabled by viewModel.quickLensSwitchEnabled.collectAsState()
     val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
     val jpgMultiFrameDenoiseFrameCount by viewModel.jpgMultiFrameDenoiseFrameCount.collectAsState()
     val jpgMultiFrameDenoiseOutputScale by viewModel.jpgMultiFrameDenoiseOutputScale.collectAsState()
@@ -1232,6 +1233,19 @@ fun SettingsScreen(
                                 }
                             )
                         }
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_quick_lens_switch),
+                            description = stringResource(R.string.settings_quick_lens_switch_description),
+                            checked = quickLensSwitchEnabled,
+                            onCheckedChange = { viewModel.setQuickLensSwitchEnabled(it) },
+                            modifier = Modifier.testTag("quick_lens_switch_toggle")
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))

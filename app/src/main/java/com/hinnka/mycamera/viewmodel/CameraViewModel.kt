@@ -1590,6 +1590,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val useRaw: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRaw }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val quickLensSwitchEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.quickLensSwitchEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val edgeLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.edgeLevel }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
@@ -2256,6 +2259,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             burstImageCount = 0
         }
 
+
+        cameraController.onQuickSwitchUiZoomChanged = { uiZoom ->
+            zoomRatioByMain = uiZoom
+        }
+        viewModelScope.launch {
+            userPreferencesRepository.userPreferences.collect { prefs ->
+                cameraController.setQuickLensSwitchEnabled(prefs.quickLensSwitchEnabled)
+            }
+        }
 
         // 监听快门声音、震动和软件处理设置
         viewModelScope.launch {
@@ -3998,6 +4010,42 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (ratio <= 2f) cameraController.resetZoomPan()
         val cameraInfo = state.value.getCurrentCameraInfo()
         setCameraControllerZoomRatio(ratio, cameraInfo)
+    }
+
+    fun setQuickLensSwitchEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveQuickLensSwitchEnabled(enabled)
+        }
+        cameraController.setQuickLensSwitchEnabled(enabled)
+    }
+
+    fun bindQuickSwitchStandbySurface(surfaceTexture: SurfaceTexture?) {
+        cameraController.bindQuickSwitchStandbySurface(surfaceTexture)
+    }
+
+    fun onPreviewFrameSourceAvailable(source: PreviewStreamSource) {
+        cameraController.onGlPreviewFrameAvailable(source)
+    }
+
+    fun setQuickZoomRatio(ratio: Float, isPresetTap: Boolean = false) {
+        zoomRatioByMain = ratio
+        if (ratio <= 2f) cameraController.resetZoomPan()
+        cameraController.setZoomQuickSwitch(ratio, isPresetTap)
+    }
+
+    fun startQuickZoomTransition(targetZoom: Float, requestedCameraId: String? = null) {
+        cameraController.startQuickZoomTransition(
+            targetZoom = targetZoom,
+            requestedCameraId = requestedCameraId,
+            scope = viewModelScope,
+            onZoomUiUpdate = { uiZoom ->
+                zoomRatioByMain = uiZoom
+            }
+        )
+    }
+
+    fun cancelQuickZoomTransition() {
+        cameraController.cancelQuickZoomTransition()
     }
 
     /** Apply a normalized delta from the on-screen joystick to the camera crop. */

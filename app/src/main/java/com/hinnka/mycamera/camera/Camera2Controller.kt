@@ -32,11 +32,27 @@ import com.hinnka.mycamera.raw.RawEnginePreviewSource
 import com.hinnka.mycamera.raw.RawCameraCalibration
 import com.hinnka.mycamera.raw.RawColorCalibrationPolicy
 import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import com.hinnka.mycamera.camera.quickswitch.BackgroundCameraStatus
+import com.hinnka.mycamera.camera.quickswitch.CameraOpticalCalibration
+import com.hinnka.mycamera.camera.quickswitch.DualStreamingMode
+import com.hinnka.mycamera.camera.quickswitch.PreviewOverlapState
+import com.hinnka.mycamera.camera.quickswitch.PreviewStreamSource
+import com.hinnka.mycamera.camera.quickswitch.QuickLensDescriptor
+import com.hinnka.mycamera.camera.quickswitch.QuickLensResolver
+import com.hinnka.mycamera.camera.quickswitch.QuickLensRole
+import com.hinnka.mycamera.camera.quickswitch.QuickSwitchManager
+import com.hinnka.mycamera.camera.quickswitch.ZoomTransitionController
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.VideoColorEffectLayer
@@ -397,15 +413,205 @@ class Camera2Controller(private val context: Context) {
     val videoRecorder = VideoRecorder(context, realtimeStabilizationCoordinator)
     var onEnhancedStabilizationUnavailable: ((EnhancedStabilizationFallback) -> Unit)? = null
     var onVideoSaved: ((Uri?) -> Unit)? = null
+    var onQuickSwitchUiZoomChanged: ((Float) -> Unit)? = null
     private var previousVideoStabilizationMode = VideoStabilizationMode.OIS
     private val enhancedStabilizationUnavailableCameraIds =
         ConcurrentHashMap.newKeySet<String>()
+
+    private val quickSwitchScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    @Volatile
+    private var standbyPreviewSurfaceTexture: SurfaceTexture? = null
+    @Volatile
+    private var standbyPreviewSurface: Surface? = null
+    @Volatile
+    private var currentQuickUiZoom: Float = 1.0f
+    @Volatile
+    private var activeSessionHasPhotoReader: Boolean = true
+    @Volatile
+    private var pendingCaptureAfterPhotoReaderReady: (() -> Unit)? = null
+    @Volatile
+    private var recordingPrimaryDescriptorKey: String? = null
+    @Volatile
+    private var recordingSecondaryDescriptorKey: String? = null
+
+    private val quickSwitchBridge = object : QuickSwitchManager.ControllerBridge {
+        override fun isQuickLensSwitchAllowedNow(): Boolean = this@Camera2Controller.isQuickLensSwitchAllowedNow()
+        override fun isCameraClosingOrUninitialized(): Boolean =
+            cameraDevice == null ||
+                cameraDeviceLifecycle == CameraDeviceLifecycle.CLOSED ||
+                cameraDeviceLifecycle == CameraDeviceLifecycle.CLOSING
+        override fun isVideoMode(): Boolean = _state.value.captureMode == CaptureMode.VIDEO
+        override fun isRecordingVideo(): Boolean = _state.value.videoRecordingState.isRecording
+        override fun getActiveCameraDevice(): CameraDevice? = cameraDevice
+        override fun setActiveCameraDevice(device: CameraDevice?) {
+            cameraDevice = device
+            if (device != null) {
+                cameraDeviceLifecycle = CameraDeviceLifecycle.OPEN
+            }
+        }
+        override fun getActiveCaptureSession(): CameraCaptureSession? = captureSession
+        override fun setActiveCaptureSession(session: CameraCaptureSession?) {
+            if (session != null && session !== captureSession) {
+                activeSessionHasPhotoReader = false
+            }
+            captureSession = session
+        }
+        override fun getActivePreviewRequestBuilder(): CaptureRequest.Builder? = previewRequestBuilder
+        override fun setActivePreviewRequestBuilder(builder: CaptureRequest.Builder?) {
+            previewRequestBuilder = builder
+        }
+        override fun getActiveImageReader(): ImageReader? = imageReader
+        override fun setActiveImageReader(reader: ImageReader?) {
+            imageReader = reader
+        }
+        override fun getActiveOpenCameraId(): String = activeOpenCameraId
+        override fun setActiveOpenCameraId(cameraId: String) {
+            activeOpenCameraId = cameraId
+        }
+        override fun getActiveOutputPhysicalCameraId(): String? = activeOutputPhysicalCameraId
+        override fun setActiveOutputPhysicalCameraId(physicalId: String?) {
+            activeOutputPhysicalCameraId = physicalId
+        }
+        override fun getAvailableDescriptors(): List<QuickLensDescriptor> =
+            this@Camera2Controller.getQuickSwitchDescriptors()
+        override fun getCurrentDescriptor(): QuickLensDescriptor? =
+            this@Camera2Controller.getCurrentQuickLensDescriptor()
+        override fun getCurrentUiZoom(): Float = currentQuickUiZoom
+        override fun updateCurrentUiZoom(uiZoom: Float) {
+            currentQuickUiZoom = uiZoom
+            val currentCam = _state.value.getCurrentCameraInfo()
+            val intrinsic = currentCam?.displayIntrinsicZoomRatio?.takeIf { it > 0f } ?: 1f
+            val relativeZoom = (uiZoom / intrinsic).coerceAtLeast(0.01f)
+            _state.update { it.copy(zoomRatio = relativeZoom) }
+            onQuickSwitchUiZoomChanged?.invoke(uiZoom)
+        }
+        override fun updateSelectedLensDescriptor(descriptor: QuickLensDescriptor) {
+            _state.update { state ->
+                state.copy(
+                    currentCameraId = descriptor.cameraId,
+                    currentLensType = descriptor.lensType,
+                )
+            }
+        }
+        override fun onActiveStreamSwapped(
+            descriptor: QuickLensDescriptor,
+            useUltraWideSurface: Boolean,
+            source: PreviewStreamSource
+        ) {
+            _state.update { state ->
+                state.copy(isUsingUltraWideSurface = useUltraWideSurface)
+            }
+        }
+        override fun onBackgroundStatusChanged(status: BackgroundCameraStatus) {
+            _state.update { state ->
+                state.copy(quickSwitchBackgroundStatus = status)
+            }
+        }
+        override fun getOrCreateSurfaceForSource(source: PreviewStreamSource, size: Size): Surface? =
+            this@Camera2Controller.getOrCreateQuickSwitchSurface(source, size)
+        override fun getSurfaceTextureForSource(source: PreviewStreamSource): SurfaceTexture? =
+            when (source) {
+                PreviewStreamSource.MAIN -> previewSurfaceTexture
+                PreviewStreamSource.ULTRAWIDE -> standbyPreviewSurfaceTexture
+            }
+        override fun getOptimalPreviewSizeForDescriptor(descriptor: QuickLensDescriptor): Size =
+            this@Camera2Controller.getQuickSwitchOptimalPreviewSize(descriptor)
+        override fun applyBaseSettingsToBuilder(
+            builder: CaptureRequest.Builder,
+            descriptor: QuickLensDescriptor
+        ) {
+            this@Camera2Controller.applyQuickSwitchBaseSettings(builder, descriptor)
+        }
+        override fun getTargetFpsRangeForDescriptor(
+            descriptor: QuickLensDescriptor,
+            isVideo: Boolean
+        ): Range<Int>? = this@Camera2Controller.getQuickSwitchFpsRange(descriptor, isVideo)
+        override fun getActiveCaptureCallback(): CameraCaptureSession.CaptureCallback? = previewCallback
+        override fun setupPhotoImageReaderForActiveLens(
+            descriptor: QuickLensDescriptor,
+            onReady: () -> Unit
+        ) {
+            this@Camera2Controller.refreshQuickSwitchLensCapabilities(descriptor, currentQuickUiZoom)
+            onReady()
+        }
+        override fun getSecondaryRecorderSurface(
+            descriptor: QuickLensDescriptor,
+            previewSize: Size
+        ): Surface? {
+            if (!videoRecorder.isRecording()) return null
+            val key = descriptorKey(descriptor)
+            return if (key == recordingPrimaryDescriptorKey) {
+                videoRecorder.updateCameraInputSize(
+                    size = previewSize,
+                    currentCameraUsesEnhancedStabilization = false,
+                    sensorOrientationDegrees = descriptor.sensorOrientation
+                )
+                videoRecorder.cameraInputSurface
+            } else {
+                recordingSecondaryDescriptorKey = key
+                videoRecorder.prepareSecondaryCameraSurface(previewSize, descriptor.sensorOrientation)
+            }
+        }
+        override fun notifyRecorderActiveSource(
+            source: PreviewStreamSource,
+            descriptor: QuickLensDescriptor,
+            inputSize: Size
+        ) {
+            if (!videoRecorder.isRecording()) return
+            val key = descriptorKey(descriptor)
+            val logicalMultiUw = quickSwitchManager.activeLogicalMultiCamUltraWideConfigured &&
+                activeOpenCameraId == descriptor.cameraId
+            val useSecondary = !logicalMultiUw && key == recordingSecondaryDescriptorKey
+            videoRecorder.onQuickSwitchCameraInput(
+                useSecondary = useSecondary,
+                size = inputSize,
+                sensorOrientationDegrees = descriptor.sensorOrientation,
+                frontFacing = descriptor.facing == CameraCharacteristics.LENS_FACING_FRONT
+            )
+        }
+        override fun isDualRecorderSurfaceSupported(): Boolean =
+            videoRecorder.secondaryCameraInputSurface != null &&
+                !shouldUseVideoEnhancedStabilization() &&
+                _state.value.videoConfig.fps != VideoFpsPreset.FPS_120 &&
+                !dualCaptureEnabled
+        override fun recreateActiveSessionOnSameDevice() {
+            val handler = cameraHandler ?: return
+            handler.post {
+                if (cameraDevice != null && previewSurface != null) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
+        }
+        override fun fallbackToPhotonCameraOpen(descriptor: QuickLensDescriptor, targetZoom: Float) {
+            this@Camera2Controller.fallbackToPhotonCameraOpenFromQuickSwitch(descriptor, targetZoom)
+        }
+        override fun onActiveLensCapabilitiesChanged(
+            descriptor: QuickLensDescriptor,
+            targetZoom: Float
+        ) {
+            this@Camera2Controller.refreshQuickSwitchLensCapabilities(descriptor, targetZoom)
+        }
+    }
+
+    val zoomTransitionController = ZoomTransitionController()
+    val quickSwitchManager = QuickSwitchManager(
+        cameraManager = cameraManager,
+        getCameraHandler = { cameraHandler },
+        getCharacteristics = { cameraId -> getCameraCharacteristicsOrNull(cameraId, "quick switch") },
+        bridge = quickSwitchBridge,
+        zoomTransitionController = zoomTransitionController,
+    )
 
     init {
         realtimeStabilizationCoordinator.onEnhancedStabilizationUnavailable = {
             handleEnhancedStabilizationUnavailable(
                 reason = "Camera HAL stabilization conflicts with algorithmic stabilization"
             )
+        }
+        quickSwitchScope.launch {
+            zoomTransitionController.previewOverlapState.collectLatest { overlap ->
+                _state.update { it.copy(previewOverlapState = overlap) }
+            }
         }
     }
 
@@ -2785,6 +2991,11 @@ class Camera2Controller(private val context: Context) {
             }
 
             override fun onDisconnected(camera: CameraDevice) {
+                if (camera !== cameraDevice && quickSwitchManager.ownsCameraDevice(camera)) {
+                    PLog.w(TAG, "Standby QuickSwitch camera disconnected: ${camera.id}")
+                    quickSwitchManager.releaseStandby()
+                    return
+                }
                 if (openGeneration != cameraOpenGeneration) {
                     closeCameraDeviceAndAwait(camera, "stale camera disconnect", blocksLifecycle = false)
                     return
@@ -2804,6 +3015,11 @@ class Camera2Controller(private val context: Context) {
             }
 
             override fun onError(camera: CameraDevice, error: Int) {
+                if (camera !== cameraDevice && quickSwitchManager.ownsCameraDevice(camera)) {
+                    PLog.w(TAG, "Standby QuickSwitch camera error ($error): ${camera.id}")
+                    quickSwitchManager.releaseStandby()
+                    return
+                }
                 if (openGeneration != cameraOpenGeneration) {
                     closeCameraDeviceAndAwait(camera, "stale camera error", blocksLifecycle = false)
                     return
@@ -3368,11 +3584,18 @@ class Camera2Controller(private val context: Context) {
 
     private fun createPreviewSession(
         forceWithoutVendorSessionParameters: Boolean = false,
+        forceWithoutLogicalUwStream: Boolean = false,
         openGeneration: Long = cameraOpenGeneration
     ) {
         val handler = cameraHandler ?: return
         if (Looper.myLooper() != handler.looper) {
-            handler.post { createPreviewSession(forceWithoutVendorSessionParameters, openGeneration) }
+            handler.post {
+                createPreviewSession(
+                    forceWithoutVendorSessionParameters = forceWithoutVendorSessionParameters,
+                    forceWithoutLogicalUwStream = forceWithoutLogicalUwStream,
+                    openGeneration = openGeneration
+                )
+            }
             return
         }
         if (openGeneration != cameraOpenGeneration) {
@@ -3400,6 +3623,41 @@ class Camera2Controller(private val context: Context) {
         } else {
             null
         }
+        if (videoSurface != null) {
+            recordingPrimaryDescriptorKey = getCurrentQuickLensDescriptor()?.let(::descriptorKey)
+                ?: "$activeOpenCameraId:${activeOutputPhysicalCameraId ?: ""}"
+        }
+        val logicalUwDescriptor = if (
+            !forceWithoutLogicalUwStream &&
+            !highSpeedVideo &&
+            !dualCaptureEnabled &&
+            quickSwitchManager.isEnabled &&
+            isQuickLensSwitchAllowedNow() &&
+            activeOutputPhysicalCameraId == null &&
+            standbyPreviewSurfaceTexture != null
+        ) {
+            val (mainDesc, uwDesc) = quickSwitchManager.getPrimaryAndUltraWideDescriptors()
+            if (mainDesc != null &&
+                uwDesc != null &&
+                device.id == mainDesc.cameraId &&
+                mainDesc.cameraId == uwDesc.cameraId &&
+                quickSwitchManager.detectSimultaneousStreamingMode(mainDesc, uwDesc) ==
+                    DualStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+            ) {
+                uwDesc
+            } else {
+                null
+            }
+        } else {
+            null
+        }
+        val logicalUwSurface = logicalUwDescriptor?.let { uwDesc ->
+            getOrCreateQuickSwitchSurface(
+                PreviewStreamSource.ULTRAWIDE,
+                getQuickSwitchOptimalPreviewSize(uwDesc)
+            )
+        }
+        quickSwitchManager.activeLogicalMultiCamUltraWideConfigured = false
         val sessionGeneration = ++previewSessionGeneration
         pendingVendorSessionParameterRestart = false
         val templateType = if (
@@ -3427,6 +3685,7 @@ class Camera2Controller(private val context: Context) {
             }
             previewRequestBuilder = device.createCaptureRequest(templateType).apply {
                 addTarget(surface)
+                logicalUwSurface?.let(::addTarget)
                 stabilizationReader?.surface?.let(::addTarget)
                 videoSurface?.let(::addTarget)
 
@@ -3440,6 +3699,7 @@ class Camera2Controller(private val context: Context) {
             }
 
             val surfaces = mutableListOf(surface)
+            logicalUwSurface?.let(surfaces::add)
             stabilizationReader?.surface?.let(surfaces::add)
             videoSurface?.let(surfaces::add)
             if (captureMode == CaptureMode.PHOTO) {
@@ -3493,6 +3753,15 @@ class Camera2Controller(private val context: Context) {
                     sessionOperatingMode,
                     buildList {
                         add(createOutputConfiguration(surface))
+                        logicalUwSurface?.let { uwSurf ->
+                            add(
+                                OutputConfiguration(uwSurf).apply {
+                                    logicalUwDescriptor.physicalCameraId?.let { physId ->
+                                        setPhysicalCameraId(physId)
+                                    }
+                                }
+                            )
+                        }
                         stabilizationReader?.surface?.let { eisSurface ->
                             add(createOutputConfiguration(eisSurface))
                         }
@@ -3516,6 +3785,9 @@ class Camera2Controller(private val context: Context) {
                                 return
                             }
                             closeUnusedStabilizationImageReader(stabilizationReader)
+                            activeSessionHasPhotoReader = false
+                            quickSwitchManager.activeLogicalMultiCamUltraWideConfigured =
+                                (logicalUwSurface != null)
                             onSessionConfigured(session, openGeneration, sessionGeneration)
                         }
 
@@ -3526,6 +3798,15 @@ class Camera2Controller(private val context: Context) {
                             }
                             PLog.e(TAG, "Video session configuration failed")
                             safeCloseCaptureSession(session, "video configure failure")
+                            if (logicalUwSurface != null && !forceWithoutLogicalUwStream) {
+                                quickSwitchManager.activeLogicalMultiCamUltraWideConfigured = false
+                                createPreviewSession(
+                                    forceWithoutVendorSessionParameters = forceWithoutVendorSessionParameters,
+                                    forceWithoutLogicalUwStream = true,
+                                    openGeneration = openGeneration
+                                )
+                                return
+                            }
                             if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
                             if (vendorSessionParametersApplied &&
                                 retryPreviewSessionWithoutVendorSessionParameters(
@@ -3561,6 +3842,15 @@ class Camera2Controller(private val context: Context) {
             )
             val outputConfigs = buildList {
                 add(createOutputConfiguration(surface))
+                logicalUwSurface?.let { uwSurf ->
+                    add(
+                        OutputConfiguration(uwSurf).apply {
+                            logicalUwDescriptor.physicalCameraId?.let { physId ->
+                                setPhysicalCameraId(physId)
+                            }
+                        }
+                    )
+                }
                 stabilizationReader?.surface?.let { eisSurface ->
                     add(createOutputConfiguration(eisSurface))
                 }
@@ -3584,6 +3874,9 @@ class Camera2Controller(private val context: Context) {
                             return
                         }
                         closeUnusedStabilizationImageReader(stabilizationReader)
+                        activeSessionHasPhotoReader = reader != null
+                        quickSwitchManager.activeLogicalMultiCamUltraWideConfigured =
+                            (logicalUwSurface != null)
                         onSessionConfigured(session, openGeneration, sessionGeneration)
                     }
 
@@ -3598,6 +3891,15 @@ class Camera2Controller(private val context: Context) {
                                     "sessionColorSpace=${if (shouldUseP3ColorSpace()) "DISPLAY_P3" else "DEFAULT"}"
                         )
                         safeCloseCaptureSession(session, "photo configure failure")
+                        if (logicalUwSurface != null && !forceWithoutLogicalUwStream) {
+                            quickSwitchManager.activeLogicalMultiCamUltraWideConfigured = false
+                            createPreviewSession(
+                                forceWithoutVendorSessionParameters = forceWithoutVendorSessionParameters,
+                                forceWithoutLogicalUwStream = true,
+                                openGeneration = openGeneration
+                            )
+                            return
+                        }
                         if (vendorSessionParametersApplied &&
                             retryPreviewSessionWithoutVendorSessionParameters(
                                 reason = "photo configure failed",
@@ -4256,6 +4558,20 @@ class Camera2Controller(private val context: Context) {
 
             _state.value = _state.value.copy(isPreviewActive = true)
             PLog.d(TAG, "Preview started")
+
+            quickSwitchManager.activeSessionDescriptor = getCurrentQuickLensDescriptor()
+            if (quickSwitchManager.isEnabled) {
+                quickSwitchManager.ensureStandbyReady()
+            } else {
+                quickSwitchManager.releaseStandby()
+            }
+
+            if (_state.value.captureMode == CaptureMode.PHOTO && activeSessionHasPhotoReader) {
+                pendingCaptureAfterPhotoReaderReady?.let { pending ->
+                    pendingCaptureAfterPhotoReaderReady = null
+                    handler.post { pending() }
+                }
+            }
 
 
         } catch (e: CameraAccessException) {
@@ -6178,6 +6494,365 @@ class Camera2Controller(private val context: Context) {
                 zoomRatio = 1f
             )
         } ?: PLog.w(TAG, "Camera with ID $cameraId not found")
+    }
+
+// ==================== Quick Lens Switch (VCamera) ====================
+
+    fun setQuickLensSwitchEnabled(enabled: Boolean) {
+        val prev = _state.value.quickLensSwitchEnabled
+        _state.update { it.copy(quickLensSwitchEnabled = enabled) }
+        quickSwitchManager.setEnabled(enabled)
+        if (!enabled) {
+            releaseQuickSwitchStandbySurface()
+        } else if (prev != enabled && cameraDevice != null && captureSession != null) {
+            cameraHandler?.post {
+                if (isQuickLensSwitchAllowedNow()) {
+                    quickSwitchManager.ensureStandbyReady()
+                }
+            }
+        }
+    }
+
+    fun bindQuickSwitchStandbySurface(surfaceTexture: SurfaceTexture?) {
+        standbyPreviewSurfaceTexture = surfaceTexture
+        if (surfaceTexture == null) {
+            releaseQuickSwitchStandbySurface()
+            return
+        }
+        if (quickSwitchManager.isEnabled && isQuickLensSwitchAllowedNow()) {
+            cameraHandler?.post {
+                quickSwitchManager.ensureStandbyReady()
+            }
+        }
+    }
+
+    fun onGlPreviewFrameAvailable(source: PreviewStreamSource) {
+        zoomTransitionController.onPreviewFrameAvailable(source)
+    }
+
+    fun setZoomQuickSwitch(zoom: Float, isPresetTap: Boolean = false) {
+        currentQuickUiZoom = zoom
+        zoomTransitionController.setSteadyStatePreview(zoom)
+        quickSwitchManager.setZoom(zoom, isPresetTap = isPresetTap)
+    }
+
+    fun startQuickZoomTransition(
+        targetZoom: Float,
+        requestedCameraId: String? = null,
+        scope: CoroutineScope,
+        onZoomUiUpdate: (Float) -> Unit
+    ) {
+        val currentDesc = getCurrentQuickLensDescriptor()
+        val startZoom = currentQuickUiZoom.takeIf { it.isFinite() && it > 0f }
+            ?: run {
+                val intrinsic = _state.value.getCurrentCameraInfo()?.displayIntrinsicZoomRatio ?: 1f
+                _state.value.zoomRatio * intrinsic
+            }
+        val available = getQuickSwitchDescriptors()
+        val targetLens = requestedCameraId?.let { id ->
+            available.firstOrNull { it.cameraId == id }
+        }
+        val mainLens = available.firstOrNull { it.isPrimaryMain && it.facing == CameraCharacteristics.LENS_FACING_BACK }
+        val uwLens = available.firstOrNull { it.role == QuickLensRole.ULTRAWIDE && it.facing == CameraCharacteristics.LENS_FACING_BACK }
+        val mainEq = mainLens?.equivalent35mmFocalMm ?: CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+        val uwEq = uwLens?.equivalent35mmFocalMm ?: CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+
+        val hasMainUwPair = mainLens != null && uwLens != null
+        val isFront = currentDesc?.facing == CameraCharacteristics.LENS_FACING_FRONT
+        val canPrewarmHandoff = hasMainUwPair &&
+            !isFront &&
+            isQuickLensSwitchAllowedNow() &&
+            (quickSwitchManager.isStandbySessionReadyFor(uwLens!!.cameraId) ||
+                quickSwitchManager.isStandbySessionReadyFor(mainLens!!.cameraId) ||
+                quickSwitchManager.activeLogicalMultiCamUltraWideConfigured)
+
+        if (!isFront && currentDesc != null && (targetLens == null || targetLens.cameraId == mainLens?.cameraId || targetLens.cameraId == uwLens?.cameraId)) {
+            zoomTransitionController.startTransition(
+                fromZoom = startZoom,
+                toZoom = targetZoom,
+                scope = scope,
+                canFrameHandoff = canPrewarmHandoff,
+                uwEquivalentFocalMm = uwEq,
+                mainEquivalentFocalMm = mainEq,
+                onFrameHandoffTriggered = { switchToUw, midZoom ->
+                    val handoffTarget = if (switchToUw) uwLens else mainLens
+                    if (handoffTarget != null) {
+                        quickSwitchManager.selectLens(
+                            targetLens = handoffTarget,
+                            explicitZoom = midZoom,
+                            isContinuousTransition = true
+                        )
+                    }
+                },
+                onZoomUpdate = { interpolated ->
+                    currentQuickUiZoom = interpolated
+                    onZoomUiUpdate(interpolated)
+                    quickSwitchManager.setZoom(
+                        interpolated,
+                        isPresetTap = false,
+                        isContinuousTransition = true
+                    )
+                },
+                onComplete = { finalZoom ->
+                    currentQuickUiZoom = finalZoom
+                    onZoomUiUpdate(finalZoom)
+                    quickSwitchManager.setZoom(
+                        finalZoom,
+                        isPresetTap = true,
+                        isContinuousTransition = false
+                    )
+                }
+            )
+        } else {
+            val destLens = targetLens ?: available.firstOrNull { it.cameraId == requestedCameraId } ?: currentDesc
+            if (destLens != null) {
+                quickSwitchManager.selectLens(destLens, explicitZoom = targetZoom, isContinuousTransition = false)
+            } else {
+                quickSwitchManager.setZoom(targetZoom, isPresetTap = true)
+            }
+            onZoomUiUpdate(targetZoom)
+        }
+    }
+
+    fun cancelQuickZoomTransition() {
+        zoomTransitionController.cancelTransition()
+    }
+
+    fun getQuickSwitchDescriptors(): List<QuickLensDescriptor> {
+        return QuickLensResolver.buildDescriptors(_state.value.availableCameras) { cameraId ->
+            getCameraCharacteristicsOrNull(cameraId, "quick switch descriptors")
+        }
+    }
+
+    fun getCurrentQuickLensDescriptor(): QuickLensDescriptor? {
+        val currentId = _state.value.currentCameraId
+        val descriptors = getQuickSwitchDescriptors()
+        return descriptors.firstOrNull { it.cameraId == currentId }
+            ?: descriptors.firstOrNull()
+    }
+
+    private fun isQuickLensSwitchAllowedNow(): Boolean {
+        val s = _state.value
+        if (!s.quickLensSwitchEnabled) return false
+        if (dualCaptureEnabled) return false
+        if (s.useMultipleExposure) return false
+        if (s.captureMode == CaptureMode.VIDEO && s.videoConfig.fps == VideoFpsPreset.FPS_120) return false
+        if (shouldUseAlgorithmicStabilization()) return false
+        if (isCurrentCameraFrontFacing()) return false
+        if (s.videoConfig.shouldLockLens(s.captureMode, s.videoRecordingState.isRecording)) return false
+        return true
+    }
+
+    private fun descriptorKey(descriptor: QuickLensDescriptor): String =
+        "${descriptor.cameraId}:${descriptor.physicalCameraId ?: ""}"
+
+    private fun releaseQuickSwitchStandbySurface() {
+        val surface = standbyPreviewSurface
+        standbyPreviewSurface = null
+        try {
+            surface?.release()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun getOrCreateQuickSwitchSurface(source: PreviewStreamSource, size: Size): Surface? {
+        return when (source) {
+            PreviewStreamSource.MAIN -> {
+                val tex = previewSurfaceTexture ?: return null
+                tex.setDefaultBufferSize(size.width, size.height)
+                if (previewSurface == null || previewSurface?.isValid != true) {
+                    previewSurface = Surface(tex)
+                }
+                previewSurface
+            }
+            PreviewStreamSource.ULTRAWIDE -> {
+                val tex = standbyPreviewSurfaceTexture ?: return null
+                tex.setDefaultBufferSize(size.width, size.height)
+                if (standbyPreviewSurface == null || standbyPreviewSurface?.isValid != true) {
+                    standbyPreviewSurface = Surface(tex)
+                }
+                standbyPreviewSurface
+            }
+        }
+    }
+
+    private fun getQuickSwitchOptimalPreviewSize(descriptor: QuickLensDescriptor): Size {
+        val s = _state.value
+        if (s.captureMode == CaptureMode.VIDEO) {
+            val chars = getCameraCharacteristicsOrNull(descriptor.cameraId, "quick switch video size")
+            if (chars != null) {
+                val snapshot = VideoCapabilitiesResolver.resolve(
+                    characteristics = chars,
+                    requestedConfig = s.videoConfig,
+                    algorithmicStabilizationSupported = false,
+                )
+                return snapshot.capabilities.cameraInputSizesByResolution[snapshot.config.resolution]
+                    ?: snapshot.previewSize
+            }
+            return s.currentPreviewSize
+        }
+        val chars = getCameraCharacteristicsOrNull(
+            descriptor.physicalCameraId ?: descriptor.cameraId,
+            "quick switch preview size"
+        ) ?: getCameraCharacteristicsOrNull(descriptor.cameraId, "quick switch fallback preview size")
+        return if (chars != null) {
+            CameraUtils.getFixedPreviewSize(chars, s.aspectRatio)
+        } else {
+            s.currentPreviewSize
+        }
+    }
+
+    private fun getQuickSwitchFpsRange(descriptor: QuickLensDescriptor, isVideo: Boolean): Range<Int>? {
+        val chars = getCameraCharacteristicsOrNull(descriptor.cameraId, "quick switch fps") ?: return null
+        val ranges = chars.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            ?: return null
+        val targetFps = if (isVideo) _state.value.videoConfig.fps.fps else 30
+        return ranges.firstOrNull { it.lower == targetFps && it.upper == targetFps }
+            ?: ranges.firstOrNull { targetFps in it.lower..it.upper && it.upper == targetFps }
+            ?: if (isVideo) Range(targetFps, targetFps) else ranges.maxByOrNull { it.upper }
+    }
+
+    private fun applyQuickSwitchBaseSettings(
+        builder: CaptureRequest.Builder,
+        descriptor: QuickLensDescriptor
+    ) {
+        val prevCameraId = activeOpenCameraId
+        val prevPhysicalId = activeOutputPhysicalCameraId
+        val prevChars = cachedCharacteristics
+        val prevCharsId = cachedCharacteristicsCameraId
+        try {
+            val openChars = getCameraCharacteristicsOrNull(descriptor.cameraId, "quick switch base settings")
+            if (openChars != null) {
+                activeOpenCameraId = descriptor.cameraId
+                activeOutputPhysicalCameraId = descriptor.physicalCameraId
+                cacheActiveCameraCharacteristics(descriptor.cameraId, openChars)
+            }
+            applyBaseCameraSettings(builder, isCapture = false)
+        } finally {
+            activeOpenCameraId = prevCameraId
+            activeOutputPhysicalCameraId = prevPhysicalId
+            if (prevChars != null && prevCharsId.isNotEmpty()) {
+                cachedCharacteristics = prevChars
+                cachedCharacteristicsCameraId = prevCharsId
+            }
+        }
+    }
+
+    private fun refreshQuickSwitchLensCapabilities(descriptor: QuickLensDescriptor, targetZoom: Float) {
+        val openChars = getCameraCharacteristicsOrNull(descriptor.cameraId, "quick switch caps") ?: return
+        cacheActiveCameraCharacteristics(descriptor.cameraId, openChars)
+        cachedSensorOrientation = openChars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: cachedSensorOrientation
+        cachedLensFacing = openChars.get(CameraCharacteristics.LENS_FACING) ?: cachedLensFacing
+        val capabilities = openChars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+        isManualSensorSupported =
+            capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) &&
+                openChars.readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) != null &&
+                openChars.readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) != null
+        isFlashSupported = openChars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+        maxAfRegions = openChars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
+        maxAeRegions = openChars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
+        availableAfModes = openChars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+        availableAeModes = openChars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: intArrayOf()
+        availableAwbModes = openChars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf()
+        availableEdgeModes = openChars.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf()
+        availableNoiseReductionModes =
+            openChars.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES) ?: intArrayOf()
+        availableVideoStabilizationModes =
+            openChars.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES) ?: intArrayOf()
+        availableOpticalStabilizationModes =
+            openChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) ?: intArrayOf()
+        val capChars = descriptor.physicalCameraId?.let {
+            getCameraCharacteristicsOrNull(it, "quick switch physical caps")
+        } ?: openChars
+        isRawSupported = resolveRawCaptureOutput(capChars, descriptor.physicalCameraId) != null
+        isP010Supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            isOutputFormatAdvertised(capChars, ImageFormat.YCBCR_P010)
+        val previewSize = getQuickSwitchOptimalPreviewSize(descriptor)
+        val baseRatio = descriptor.baseZoomRatio.takeIf { it > 0f } ?: 1f
+        _state.update { s ->
+            s.copy(
+                isRawSupported = isRawSupported,
+                isP010Supported = isP010Supported,
+                currentPreviewSize = previewSize,
+                zoomRatio = (targetZoom / baseRatio).coerceAtLeast(0.01f),
+            )
+        }
+        refreshActiveFocusLimit()
+        if (_state.value.captureMode == CaptureMode.VIDEO) {
+            refreshVideoCapabilities(openChars)
+        }
+    }
+
+    private fun setupImageReaderForQuickSwitchCapture() {
+        val openCameraId = activeOpenCameraId.takeIf { it.isNotEmpty() } ?: return
+        val openChars = getCameraCharacteristicsOrNull(openCameraId, "quick switch photo reader") ?: return
+        val capCameraId = activeOutputPhysicalCameraId ?: openCameraId
+        val capChars = getCameraCharacteristicsOrNull(capCameraId, "quick switch photo reader cap") ?: openChars
+        val aspectRatio = _state.value.aspectRatio
+        val effectivelyUseRaw = requestedRawCaptureEnabled && isRawSupported
+        val rawOutput = if (effectivelyUseRaw) {
+            resolveRawCaptureOutput(capChars, activeOutputPhysicalCameraId)
+        } else {
+            null
+        }
+        val wantsP010 = !effectivelyUseRaw &&
+            isP010Supported &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            _state.value.useP010
+        val captureFormat = when {
+            rawOutput != null -> rawOutput.format
+            wantsP010 && isOutputFormatAdvertised(capChars, ImageFormat.YCBCR_P010) -> ImageFormat.YCBCR_P010
+            else -> ImageFormat.YUV_420_888
+        }
+        val captureSize = rawOutput?.size
+            ?: CameraUtils.getBestCaptureSize(capChars, aspectRatio, captureFormat)
+        safeCloseImageReader(imageReader)
+        val maxImages = resolveImageReaderMaxImages()
+        imageReaderMaxImages = maxImages
+        imageReader = ImageReader.newInstance(
+            captureSize.width,
+            captureSize.height,
+            captureFormat,
+            maxImages
+        ).apply {
+            setOnImageAvailableListener({ reader ->
+                try {
+                    while (canAcquireImage("Too many open images")) {
+                        val image = trackImage(reader.acquireNextImage()) ?: break
+                        processOrBufferImageForCaptureResult(image)
+                    }
+                } catch (e: Exception) {
+                    PLog.e(TAG, "Error in quick switch onImageAvailable", e)
+                    photoCaptures.values.filter { it.reader === reader }.toList()
+                        .forEach { failPhotoCapture(it, "image acquisition failed") }
+                }
+            }, cameraHandler)
+        }
+        _state.update { it.copy(currentCaptureSize = captureSize) }
+    }
+
+    private fun fallbackToPhotonCameraOpenFromQuickSwitch(
+        descriptor: QuickLensDescriptor,
+        targetZoom: Float
+    ) {
+        val surfaceTex = previewSurfaceTexture ?: return
+        val baseRatio = descriptor.baseZoomRatio.takeIf { it > 0f } ?: 1f
+        val relativeZoom = (targetZoom / baseRatio).coerceAtLeast(0.01f)
+        currentQuickUiZoom = targetZoom
+        quickSwitchManager.releaseStandby()
+        _state.update { s ->
+            s.copy(
+                currentCameraId = descriptor.cameraId,
+                currentLensType = descriptor.lensType,
+                zoomRatio = relativeZoom,
+                isUsingUltraWideSurface = false,
+                previewOverlapState = PreviewOverlapState(),
+            )
+        }
+        openCamera(
+            surfaceTexture = surfaceTex,
+            preserveVideoRecording = _state.value.videoRecordingState.isRecording
+        )
     }
 
 // ==================== 曝光控制 ====================
@@ -8510,6 +9185,13 @@ class Camera2Controller(private val context: Context) {
                 "monitorLut=${creativeLutConfig?.title}, recordingLut=${recordingLut?.title}, " +
                 "cameraInputHlg10=${cameraInputIsHlg10}"
         )
+        val enableQuickSwitchSecondary = _state.value.quickLensSwitchEnabled &&
+            !dualCaptureEnabled &&
+            _state.value.videoConfig.fps != VideoFpsPreset.FPS_120 &&
+            !useEnhancedStabilization
+        recordingPrimaryDescriptorKey = getCurrentQuickLensDescriptor()?.let(::descriptorKey)
+            ?: "$activeOpenCameraId:${activeOutputPhysicalCameraId ?: ""}"
+        recordingSecondaryDescriptorKey = null
         val started = videoRecorder.startRecording(
             size = outputSize,
             cameraInputSize = cameraInputSize,
@@ -8551,6 +9233,7 @@ class Camera2Controller(private val context: Context) {
             dualCaptureLayout = dualCaptureLayout,
             dualCapturePositionX = dualCapturePositionX,
             dualCapturePositionY = dualCapturePositionY,
+            enableSecondaryQuickSwitchInput = enableQuickSwitchSecondary,
             onError = { message ->
                 PLog.e(TAG, "Video recording error: $message")
                 onCameraError?.invoke(-1, message, false)
@@ -9037,6 +9720,13 @@ class Camera2Controller(private val context: Context) {
             return
         }
         val device = cameraDevice ?: return
+        if (!activeSessionHasPhotoReader) {
+            PLog.i(TAG, "Attaching photo ImageReader to QuickSwitch session before still capture")
+            pendingCaptureAfterPhotoReaderReady = { capture(onAccepted) }
+            setupImageReaderForQuickSwitchCapture()
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+            return
+        }
         val reader = imageReader ?: return
         if (captureSession == null) return
         val shot = reservePhotoCapture(_state.value, reader) ?: return
@@ -10237,6 +10927,10 @@ class Camera2Controller(private val context: Context) {
             pendingCameraOpenRequest = null
         }
         try {
+            zoomTransitionController.cancelTransition()
+            quickSwitchManager.releaseStandby()
+            pendingCaptureAfterPhotoReaderReady = null
+            activeSessionHasPhotoReader = false
             burstGyroRecorder.stop()
             pendingFrameMetadata.clear()
             cameraOpenGeneration++
@@ -10541,6 +11235,10 @@ class Camera2Controller(private val context: Context) {
         } else {
             closeCamera()
         }
+        zoomTransitionController.cancelTransition()
+        quickSwitchManager.releaseStandby()
+        releaseQuickSwitchStandbySurface()
+        quickSwitchScope.cancel()
         burstGyroRecorder.release()
         videoRecorder.release()
         stopBackgroundThread()

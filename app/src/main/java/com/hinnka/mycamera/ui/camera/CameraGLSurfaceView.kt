@@ -9,6 +9,8 @@ import android.util.AttributeSet
 import android.view.Surface
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.quickswitch.PreviewOverlapState
+import com.hinnka.mycamera.camera.quickswitch.PreviewStreamSource
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
 import com.hinnka.mycamera.raw.RawEnginePreviewPlan
@@ -66,6 +68,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
+    var onStandbySurfaceReady: ((SurfaceTexture) -> Unit)? = null
+    var onPreviewFrameSourceAvailable: ((PreviewStreamSource) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
     var onFirstPreviewFrame: (() -> Unit)? = null
     private var currentSurface: Surface? = null
@@ -90,6 +94,16 @@ class CameraGLSurfaceView @JvmOverloads constructor(
                 val surface = currentSurface ?: return@post
                 onSurfaceReady?.invoke(surface)
             }
+        }
+
+        renderer.onStandbySurfaceTextureAvailable = { standbyTexture ->
+            post {
+                onStandbySurfaceReady?.invoke(standbyTexture)
+            }
+        }
+
+        renderer.onPreviewFrameSourceAvailable = { source ->
+            onPreviewFrameSourceAvailable?.invoke(source)
         }
 
         // 设置渲染请求回调（当有新帧可用时由 LutRenderer 调用）
@@ -329,6 +343,35 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      * 获取 SurfaceTexture
      */
     fun getSurfaceTexture(): SurfaceTexture? = renderer.getSurfaceTexture()
+
+    fun getStandbySurfaceTexture(): SurfaceTexture? = renderer.getStandbySurfaceTexture()
+
+    fun setQuickLensSwitchEnabled(enabled: Boolean) {
+        queueEvent {
+            renderer.setQuickLensSwitchEnabled(enabled)
+            requestRender()
+        }
+    }
+
+    fun setStandbyPreviewSize(width: Int, height: Int) {
+        queueEvent {
+            renderer.setStandbyPreviewSize(width, height)
+        }
+    }
+
+    fun setUsingUltraWideSurface(useUw: Boolean) {
+        queueEvent {
+            renderer.setUsingUltraWideSurface(useUw)
+            requestRender()
+        }
+    }
+
+    fun setPreviewOverlapState(state: PreviewOverlapState) {
+        queueEvent {
+            renderer.setPreviewOverlapState(state)
+            requestRender()
+        }
+    }
 
     fun getRenderSurface(): Surface? = currentSurface
 

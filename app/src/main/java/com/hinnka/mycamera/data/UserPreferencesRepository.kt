@@ -293,7 +293,8 @@ data class UserPreferences(
     val activeEffectParamsJson: String = "",
     val customPresetsJson: String = "",
     val activePresetId: String? = null,
-    val deletedBuiltInIds: String = ""
+    val deletedBuiltInIds: String = "",
+    val quickLensSwitchEnabled: Boolean = false
 ) {
     val activeEffectParams: EffectParams
         get() = EffectParams.fromJson(activeEffectParamsJson)
@@ -585,6 +586,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val DELETED_BUILT_IN_IDS = stringPreferencesKey("deleted_built_in_ids")
         private val CAMERA_STARTUP_DEFAULTS_RESTORED_V1 =
             booleanPreferencesKey("camera_startup_defaults_restored_v1")
+        private val QUICK_LENS_SWITCH_ENABLED = booleanPreferencesKey("quick_lens_switch_enabled")
     }
 
     /**
@@ -969,7 +971,8 @@ class UserPreferencesRepository(private val context: Context) {
                 activeEffectParamsJson = preferences[ACTIVE_EFFECT_PARAMS_JSON] ?: "",
                 customPresetsJson = preferences[CUSTOM_PRESETS_JSON] ?: "",
                 activePresetId = preferences[ACTIVE_PRESET_ID],
-                deletedBuiltInIds = preferences[DELETED_BUILT_IN_IDS] ?: ""
+                deletedBuiltInIds = preferences[DELETED_BUILT_IN_IDS] ?: "",
+                quickLensSwitchEnabled = preferences[QUICK_LENS_SWITCH_ENABLED] ?: false
             ).also { decoded ->
                 decodedPreferences = preferences to decoded
             }
@@ -2084,6 +2087,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveEnableLogicalMultiCameraDiscovery(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[ENABLE_LOGICAL_MULTI_CAMERA_DISCOVERY] = enabled
+        }
+    }
+
+    suspend fun saveQuickLensSwitchEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[QUICK_LENS_SWITCH_ENABLED] = enabled
         }
     }
 

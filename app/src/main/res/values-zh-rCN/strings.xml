@@ -182,6 +182,8 @@
     <string name="settings_section_focus_lens">对焦与镜头</string>
     <string name="settings_focus_lens_group_autofocus">自动对焦</string>
     <string name="settings_focus_lens_group_lens_selection">镜头选择</string>
+    <string name="settings_quick_lens_switch">快速镜头切换</string>
+    <string name="settings_quick_lens_switch_description">保持备用镜头预热并协同同步渲染，实现拍照与录像期间零黑屏瞬时切换物理镜头</string>
     <string name="settings_eye_focus">人眼对焦</string>
     <string name="settings_eye_focus_description">检测画面中的人脸，并优先对稳定的人眼进行自动对焦</string>
     <string name="settings_focus_lens_group_virtual_lens_depth">虚拟镜头与景深</string>

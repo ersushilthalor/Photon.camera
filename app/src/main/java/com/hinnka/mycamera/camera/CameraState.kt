@@ -3,6 +3,8 @@ package com.hinnka.mycamera.camera
 import android.graphics.Rect
 import android.util.Range
 import android.util.Size
+import com.hinnka.mycamera.camera.quickswitch.BackgroundCameraStatus
+import com.hinnka.mycamera.camera.quickswitch.PreviewOverlapState
 import com.hinnka.mycamera.processor.MgcRawMaxMode
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawMetadata
@@ -412,6 +414,10 @@ data class CameraState(
     val zoomPanX: Float = 0f,
     val zoomPanY: Float = 0f,
     val zoomPanEnabled: Boolean = false,
+    val quickLensSwitchEnabled: Boolean = false,
+    val isUsingUltraWideSurface: Boolean = false,
+    val previewOverlapState: PreviewOverlapState = PreviewOverlapState(),
+    val quickSwitchBackgroundStatus: BackgroundCameraStatus = BackgroundCameraStatus.OFF,
 ) {
     val effectiveMeteringMode: MeteringMode
         get() = if (meteringPoint != null) MeteringMode.SPOT else meteringMode

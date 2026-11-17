@@ -24,6 +24,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.quickswitch.PreviewOverlapState
+import com.hinnka.mycamera.camera.quickswitch.PreviewStreamSource
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.raw.RawEnginePreviewPlan
 import kotlinx.coroutines.flow.StateFlow
@@ -89,6 +91,11 @@ fun CameraPreviewGL(
     videoPreviewStabilizationEnabled: Boolean = false,
     videoPreviewStabilizationStrength: Float = 0f,
     videoPreviewStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+    quickLensSwitchEnabled: Boolean = false,
+    isUsingUltraWideSurface: Boolean = false,
+    previewOverlapState: PreviewOverlapState = PreviewOverlapState(),
+    onStandbySurfaceTextureReady: ((SurfaceTexture?) -> Unit)? = null,
+    onPreviewFrameSourceAvailable: ((PreviewStreamSource) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val rotationDegrees = OrientationObserver.rotationDegrees
@@ -223,6 +230,12 @@ fun CameraPreviewGL(
                                 onFirstPreviewFrame?.invoke()
                             }
                         }
+                        glSurfaceView.onStandbySurfaceReady = { standbySt ->
+                            if (glSurfaceViewRef === glSurfaceView) {
+                                onStandbySurfaceTextureReady?.invoke(standbySt)
+                            }
+                        }
+                        glSurfaceView.onPreviewFrameSourceAvailable = onPreviewFrameSourceAvailable
 
                         viewWidth = glSurfaceView.width
                         viewHeight = glSurfaceView.height
@@ -321,6 +334,17 @@ fun CameraPreviewGL(
                         glSurfaceView.setAutoFocus(isAutoFocus)
                         glSurfaceView.setFocusPeakingEnabled(focusPeakingEnabled)
                         glSurfaceView.setEyeFocusBusy(isEyeFocusBusy)
+                        glSurfaceView.setQuickLensSwitchEnabled(quickLensSwitchEnabled)
+                        if (quickLensSwitchEnabled) {
+                            glSurfaceView.setStandbyPreviewSize(previewSize.width, previewSize.height)
+                            glSurfaceView.setUsingUltraWideSurface(isUsingUltraWideSurface)
+                            glSurfaceView.setPreviewOverlapState(previewOverlapState)
+                            glSurfaceView.getStandbySurfaceTexture()?.let { standbySt ->
+                                onStandbySurfaceTextureReady?.invoke(standbySt)
+                            }
+                        } else {
+                            onStandbySurfaceTextureReady?.invoke(null)
+                        }
                     },
                     modifier = Modifier.fillMaxSize()
                 )

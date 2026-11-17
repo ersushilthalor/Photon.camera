@@ -137,10 +137,14 @@ class VideoRecorder(
     private var requestedDualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE
     private var requestedDualCapturePositionX: Float = 0.66f
     private var requestedDualCapturePositionY: Float = 0.05f
+    private var requestedEnableSecondaryQuickSwitchInput: Boolean = false
     private var cameraInputStarted = false
     private var requestedCameraTimestampSource = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
     private var requestedSensorOrientationDegrees = 0
     private var cameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
+    private var lastRawCameraTimestampNs = UNSET_TIMESTAMP
+    private var lastOutputVideoPtsNs = UNSET_TIMESTAMP
+    private var streamClockOffsetNs = 0L
     private var timelineOriginUs = UNSET_TIMESTAMP
     private var pauseIntervals = mutableListOf<PauseInterval>()
     private var activePauseStartTimeUs = UNSET_TIMESTAMP
@@ -191,6 +195,11 @@ class VideoRecorder(
             isRecording && !stopRequested
         }
 
+    val secondaryCameraInputSurface: Surface?
+        get() = renderer?.secondaryInputSurface.takeIf {
+            isRecording && !stopRequested
+        }
+
     val dualCaptureInputSurface: Surface?
         get() = renderer?.dualCaptureInputSurface.takeIf {
             isRecording && !stopRequested
@@ -219,6 +228,7 @@ class VideoRecorder(
         dualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE,
         dualCapturePositionX: Float = 0.66f,
         dualCapturePositionY: Float = 0.05f,
+        enableSecondaryQuickSwitchInput: Boolean = false,
         onError: ((String) -> Unit)? = null,
         onFinished: ((Uri?) -> Unit)? = null
     ): Boolean {
@@ -232,6 +242,7 @@ class VideoRecorder(
         requestedDualCaptureLayout = dualCaptureLayout
         requestedDualCapturePositionX = dualCapturePositionX.coerceIn(0f, 1f)
         requestedDualCapturePositionY = dualCapturePositionY.coerceIn(0f, 1f)
+        requestedEnableSecondaryQuickSwitchInput = enableSecondaryQuickSwitchInput
         // SurfaceTexture 变换后的 OES 内容已经处于自然显示方向，编码画布必须继续使用
         // 已解析的显示尺寸（片门全开使用最大相机输入尺寸）。设备横竖屏差异只通过容器 rotation metadata 表达。
         requestedSize = requestedOutputSize
@@ -365,6 +376,37 @@ class VideoRecorder(
             if (restartStabilization && !isPaused && requestedEnhancedStabilization) {
                 renderer?.restartStabilizationForCameraSwitch(sensorOrientationDegrees)
             }
+        }
+    }
+
+    fun prepareSecondaryCameraSurface(
+        size: Size,
+        sensorOrientationDegrees: Int,
+    ): Surface? {
+        if (!isRecording || stopRequested) return null
+        val surface = secondaryCameraInputSurface ?: return null
+        runBlocking(renderDispatcher) {
+            renderer?.updateSecondaryInputGeometry(size, sensorOrientationDegrees)
+        }
+        return surface
+    }
+
+    fun onQuickSwitchCameraInput(
+        useSecondary: Boolean,
+        size: Size,
+        sensorOrientationDegrees: Int,
+        frontFacing: Boolean,
+    ) {
+        if (!isRecording || stopRequested) return
+        requestedFlipEncodedFrame = frontFacing
+        val mirrorHorizontally = frontFacing && requestedOrientationHintDegrees % 180 == 0
+        val mirrorVertically = frontFacing && requestedOrientationHintDegrees % 180 != 0
+        requestedCameraInputSize = size
+        requestedSensorOrientationDegrees = sensorOrientationDegrees
+        scope.launch(renderDispatcher) {
+            if (!isRecording || stopRequested) return@launch
+            renderer?.updateMirrorTransform(mirrorHorizontally, mirrorVertically)
+            renderer?.switchActiveCameraInput(useSecondary, size, sensorOrientationDegrees)
         }
     }
 
@@ -544,6 +586,7 @@ class VideoRecorder(
             dualCaptureLayout = requestedDualCaptureLayout,
             dualCapturePositionX = requestedDualCapturePositionX,
             dualCapturePositionY = requestedDualCapturePositionY,
+            enableSecondaryQuickSwitchInput = requestedEnableSecondaryQuickSwitchInput,
         )
         renderer = realtimeRenderer
         realtimeRenderer.initialize(
@@ -1054,19 +1097,40 @@ class VideoRecorder(
     }
 
     private fun mapCameraTimestampToBoottimeNs(cameraTimestampNs: Long): Long {
-        if (requestedCameraTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
-            return cameraTimestampNs
+        val rawBoottimeNs = if (requestedCameraTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
+            cameraTimestampNs
+        } else {
+            if (cameraTimestampToBoottimeOffsetNs == UNSET_TIMESTAMP) {
+                cameraTimestampToBoottimeOffsetNs = SystemClock.elapsedRealtimeNanos() - cameraTimestampNs
+                PLog.w(
+                    TAG,
+                    "Camera timestamp source is not REALTIME; calibrated to BOOTTIME with " +
+                        "offsetNs=$cameraTimestampToBoottimeOffsetNs"
+                )
+            }
+            cameraTimestampNs + cameraTimestampToBoottimeOffsetNs
         }
 
-        if (cameraTimestampToBoottimeOffsetNs == UNSET_TIMESTAMP) {
-            cameraTimestampToBoottimeOffsetNs = SystemClock.elapsedRealtimeNanos() - cameraTimestampNs
-            PLog.w(
-                TAG,
-                "Camera timestamp source is not REALTIME; calibrated to BOOTTIME with " +
-                    "offsetNs=$cameraTimestampToBoottimeOffsetNs"
-            )
+        if (!requestedEnableSecondaryQuickSwitchInput) {
+            return rawBoottimeNs
         }
-        return cameraTimestampNs + cameraTimestampToBoottimeOffsetNs
+
+        val frameIntervalNs = NANOS_PER_SECOND / requestedFps.coerceAtLeast(1)
+        var ptsNs = rawBoottimeNs + streamClockOffsetNs
+        if (lastOutputVideoPtsNs != UNSET_TIMESTAMP) {
+            if (ptsNs <= lastOutputVideoPtsNs || (ptsNs - lastOutputVideoPtsNs) > 150_000_000L) {
+                streamClockOffsetNs = (lastOutputVideoPtsNs + frameIntervalNs) - rawBoottimeNs
+                ptsNs = rawBoottimeNs + streamClockOffsetNs
+            }
+            val minStepNs = maxOf(1_000_000L, frameIntervalNs / 4L)
+            if (ptsNs <= lastOutputVideoPtsNs) {
+                ptsNs = lastOutputVideoPtsNs + minStepNs
+                streamClockOffsetNs = ptsNs - rawBoottimeNs
+            }
+        }
+        lastRawCameraTimestampNs = rawBoottimeNs
+        lastOutputVideoPtsNs = ptsNs
+        return ptsNs
     }
 
     private fun establishTimelineOrigin(firstVideoPresentationTimeUs: Long) {
@@ -1626,6 +1690,9 @@ class VideoRecorder(
         }
         synchronized(timelineLock) {
             cameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
+            lastRawCameraTimestampNs = UNSET_TIMESTAMP
+            lastOutputVideoPtsNs = UNSET_TIMESTAMP
+            streamClockOffsetNs = 0L
             timelineOriginUs = UNSET_TIMESTAMP
             pauseIntervals = mutableListOf()
             activePauseStartTimeUs = UNSET_TIMESTAMP

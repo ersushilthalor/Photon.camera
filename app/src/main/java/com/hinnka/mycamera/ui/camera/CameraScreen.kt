@@ -547,6 +547,10 @@ fun CameraScreen(
     }
 
     fun setZoomWithPreviewTransition(targetZoom: Float) {
+        if (state.quickLensSwitchEnabled && !viewModel.isVideoLensLocked()) {
+            viewModel.setQuickZoomRatio(targetZoom, isPresetTap = true)
+            return
+        }
         if (viewModel.isVideoLensLocked() ||
             viewModel.isCurrentLensCustomZoomRatioStop(targetZoom)
         ) {
@@ -589,6 +593,11 @@ fun CameraScreen(
     }
 
     fun animateZoomStopTo(targetZoom: Float, requestedCameraId: String? = null) {
+        if (state.quickLensSwitchEnabled && !viewModel.isVideoLensLocked()) {
+            zoomStopAnimationJob?.cancel()
+            viewModel.startQuickZoomTransition(targetZoom, requestedCameraId)
+            return
+        }
         val currentCamera = state.getCurrentCameraInfo()
         val startZoom = viewModel.zoomRatioByMain
             .takeIf { it.isFinite() && it > 0f }
@@ -1040,7 +1049,7 @@ fun CameraScreen(
                     availableCameras = state.availableCameras,
                     currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
                     onZoomChange = { animateZoomStopTo(it) },
-                    onPreviewZoomChange = viewModel::setZoomRatio,
+                    onPreviewZoomChange = { if (state.quickLensSwitchEnabled) viewModel.setQuickZoomRatio(it) else viewModel.setZoomRatio(it) },
                     onZoomStopClick = { animateZoomStopTo(it) },
                     onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                     modifier = Modifier
@@ -1333,6 +1342,11 @@ fun CameraScreen(
                     // 相机准备完成后再创建 Surface，首次只打开最终选中的镜头。
                     if (isCameraPrepared) {
                         CameraPreviewGL(
+                            quickLensSwitchEnabled = state.quickLensSwitchEnabled,
+                            isUsingUltraWideSurface = state.isUsingUltraWideSurface,
+                            previewOverlapState = state.previewOverlapState,
+                            onStandbySurfaceTextureReady = viewModel::bindQuickSwitchStandbySurface,
+                            onPreviewFrameSourceAvailable = viewModel::onPreviewFrameSourceAvailable,
                             aspectRatio = previewAspectRatio,
                             previewSize = previewSize,
                             captureSize = state.currentCaptureSize,
@@ -1774,7 +1788,7 @@ fun CameraScreen(
                             availableCameras = state.availableCameras,
                             currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
                             onZoomChange = { animateZoomStopTo(it) },
-                            onPreviewZoomChange = viewModel::setZoomRatio,
+                            onPreviewZoomChange = { if (state.quickLensSwitchEnabled) viewModel.setQuickZoomRatio(it) else viewModel.setZoomRatio(it) },
                             onZoomStopClick = { animateZoomStopTo(it) },
                             onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                             onFilterClick = {

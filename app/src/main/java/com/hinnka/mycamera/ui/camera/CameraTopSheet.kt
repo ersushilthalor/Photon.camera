@@ -56,8 +56,6 @@ import com.hinnka.mycamera.ui.components.RawRenderingEngineSettingsPanel
 import com.hinnka.mycamera.video.*
 import com.hinnka.mycamera.video.VideoCodec
 import com.hinnka.mycamera.ui.icons.AppIcons
-import com.hinnka.mycamera.ui.theme.AccentColor
-import com.hinnka.mycamera.ui.theme.OnAccentColor
 
 private enum class VideoSettingPanel {
     ASPECT_RATIO,
