@@ -50,7 +50,6 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.SpectralFilmSelection
-import com.hinnka.mycamera.raw.fotufilm.FotufilmDocument
 import com.hinnka.mycamera.ui.components.AppModalBottomSheet
 import com.hinnka.mycamera.ui.components.RawDcpLensOption
 import com.hinnka.mycamera.ui.components.RawRenderingEngineSettingsPanel
@@ -113,7 +112,6 @@ fun CameraTopSheet(
     rawToneMappingParameters: RawToneMappingParameters,
     rawSpectralFilmSelection: SpectralFilmSelection?,
     rawSpectralFilmPrint: String?,
-    rawFotufilmDocument: FotufilmDocument?,
     ultraHdrEnabled: Boolean,
     onUltraHdrToggle: (Boolean) -> Unit,
     photoPreviewStabilizationEnabled: Boolean,
@@ -128,7 +126,6 @@ fun CameraTopSheet(
     onRawToneMappingParametersChange: (RawToneMappingParameters) -> Unit,
     onRawSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
     onRawSpectralFilmPrintChange: (String?) -> Unit,
-    onRawFotufilmDocumentChange: (FotufilmDocument) -> Unit,
     meteringMode: MeteringMode,
     onMeteringModeChange: (MeteringMode) -> Unit,
     onFilterManageClick: () -> Unit,
