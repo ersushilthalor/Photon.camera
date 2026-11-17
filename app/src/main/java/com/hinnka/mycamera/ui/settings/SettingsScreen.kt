@@ -1001,7 +1001,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
         )
-        CompositionLocalProvider(LocalSettingsPrismalBackdrop provides settingsGlassBackdrop) {
+        CompositionLocalProvider(LocalSettingsPrismalBackdrop provides null) {
             CompositionLocalProvider(LocalRippleConfiguration provides settingsRippleConfiguration) {
                 Column(
                     modifier = Modifier
@@ -5785,7 +5785,6 @@ private fun CaptureButtonAppearanceItem(
     modifier: Modifier = Modifier,
     preview: @Composable () -> Unit
 ) {
-    val backdrop = LocalSettingsPrismalBackdrop.current
     val tileContent: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
         Column(
             modifier = Modifier.weight(1f),
