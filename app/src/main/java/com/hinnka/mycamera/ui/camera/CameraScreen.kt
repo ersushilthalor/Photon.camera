@@ -78,7 +78,6 @@ import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.PhotoCaptureProgress
 import com.hinnka.mycamera.data.CaptureButtonStyle
-import com.hinnka.mycamera.data.LiquidGlassSettingsStore
 import com.hinnka.mycamera.data.DevelopAnimationStyle
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -252,10 +251,6 @@ fun CameraScreen(
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
     val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
-    val liquidGlassSettings by LiquidGlassSettingsStore.settings.collectAsState()
-    LaunchedEffect(context) {
-        LiquidGlassSettingsStore.load(context.applicationContext)
-    }
     val currentLutId by viewModel.currentLutId.collectAsState()
     val lutNameOverlayState = rememberLutNameOverlayState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
@@ -879,7 +874,6 @@ fun CameraScreen(
 
         val backgroundPainter = rememberBackgroundPainter(viewModel)
         val modeSwitcherBackdrop = rememberLiquidGlassBackdrop()
-        val videoTopBarBackdrop = rememberLiquidGlassBackdrop()
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
@@ -913,27 +907,6 @@ fun CameraScreen(
             isVideoMode && state.videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE
 
         val density = LocalDensity.current
-
-        // Render the menu glass in the existing camera GL compositor. This samples
-        // the same final preview texture and never captures a second bitmap stream.
-        LaunchedEffect(
-            activePanel,
-            cameraGLSurfaceView,
-            previewGlBounds,
-            topSheetGlassBounds,
-            liquidGlassSettings,
-            density,
-        ) {
-            val glView = cameraGLSurfaceView ?: return@LaunchedEffect
-            val overlayBounds: FloatArray? = null
-            glView.setLiquidGlassOverlays(
-                bounds = overlayBounds,
-                cornerRadiusPx = with(density) {
-                    liquidGlassSettings.cornerRadiusDp.dp.toPx()
-                },
-                settings = liquidGlassSettings,
-            )
-        }
 
         val width = with(density) { constraints.maxWidth.toDp() }
         val height = with(density) { constraints.maxHeight.toDp() }
@@ -1054,7 +1027,6 @@ fun CameraScreen(
                 onSettingsClick = {
                     activePanel = if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
                 },
-                glassBackdrop = videoTopBarBackdrop,
                 modifier = Modifier
                     .padding(top = topSafePadding)
                     .offset(y = topBarOffset)
@@ -1923,7 +1895,6 @@ fun CameraScreen(
                     Box(
                         modifier = Modifier
                             .requiredSize(cardWidth, cardHeight)
-                            .liquidGlassBackdropSource(videoTopBarBackdrop)
                     ) {
                         viewfinder()
                     }
