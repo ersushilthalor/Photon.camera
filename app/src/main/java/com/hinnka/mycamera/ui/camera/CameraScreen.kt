@@ -1905,7 +1905,7 @@ fun CameraScreen(
                                 .requiredHeight(cardHeight)
                                 // Keep video top controls at their original screen position
                                 // while the viewfinder itself is shifted down.
-                                .offset(y = -VideoViewfinderVerticalOffset),
+                                .offset(y = -VideoViewfinderVerticalOffset + 10.dp),
                             contentAlignment = Alignment.TopCenter
                         ) {
                             topBar()
