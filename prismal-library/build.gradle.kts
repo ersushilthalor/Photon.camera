@@ -15,20 +15,12 @@ android {
 
     defaultConfig {
         minSdk = 25
-        consumerProguardFiles("../external/PrismalAGSL/Prismal/consumer-rules.pro")
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
-    }
-
-    sourceSets {
-        getByName("main") {
-            manifest.srcFile("../external/PrismalAGSL/Prismal/src/main/AndroidManifest.xml")
-            java.setSrcDirs(listOf("../external/PrismalAGSL/Prismal/src/main/java"))
-            assets.setSrcDirs(listOf("../external/PrismalAGSL/Prismal/src/main/assets"))
-        }
     }
 }
 
@@ -39,6 +31,7 @@ dependencies {
     api(libs.androidx.compose.ui)
     api(libs.androidx.compose.ui.graphics)
     api(libs.androidx.compose.runtime)
+    implementation(libs.androidx.material3)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.startup.runtime)

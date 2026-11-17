@@ -1,17 +1,9 @@
-import java.util.Properties
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
-}
-
-val localProperties = Properties().apply {
-    val localPropertiesFile = rootProject.file("local.properties")
-    if (localPropertiesFile.exists()) {
-        localPropertiesFile.inputStream().use { load(it) }
-    }
+    alias(libs.plugins.secrets)
 }
 
 fun String.toBuildConfigString(): String =
@@ -50,9 +42,14 @@ android {
         )
         buildConfigField(
             "String",
-            "BUILT_IN_API_KEY",
-            localProperties.getProperty("BUILT_IN_API_KEY_GOOGLE", "").toBuildConfigString()
+            "FLAVOR",
+            "\"default\""
         )
+    }
+
+    secrets {
+        propertiesFileName = ".env"
+        defaultPropertiesFileName = ".env.example"
     }
 
     signingConfigs {
@@ -91,28 +88,6 @@ android {
         checkReleaseBuilds = false
     }
 
-    flavorDimensions += "channel"
-    productFlavors {
-        create("dev") {
-            dimension = "channel"
-            applicationId = "com.hinnka.mycamera.dev"
-        }
-        create("google") {
-            dimension = "channel"
-        }
-        create("default") {
-            dimension = "channel"
-        }
-        create("samsung") {
-            dimension = "channel"
-            applicationId = "com.samsung.android.scan3d"
-        }
-        create("meitu") {
-            dimension = "channel"
-            applicationId = "com.meitu.meiyancamera"
-        }
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -132,23 +107,10 @@ android {
     }
 
     sourceSets {
-        getByName("dev") {
+        getByName("main") {
             java {
                 srcDir("src/default/java")
             }
-            manifest.srcFile("src/default/AndroidManifest.xml")
-        }
-        getByName("samsung") {
-            java {
-                srcDir("src/default/java")
-            }
-            manifest.srcFile("src/default/AndroidManifest.xml")
-        }
-        getByName("meitu") {
-            java {
-                srcDir("src/default/java")
-            }
-            manifest.srcFile("src/default/AndroidManifest.xml")
         }
     }
     
@@ -213,15 +175,8 @@ dependencies {
     implementation("com.google.mediapipe:tasks-vision:1.0.0")
 
 
-    // Bugly for default flavor
-    "defaultImplementation"(libs.bugly.crashreport)
-    "samsungImplementation"(libs.bugly.crashreport)
-    "meituImplementation"(libs.bugly.crashreport)
-    "devImplementation"(libs.bugly.crashreport)
-
-    // Billing for google flavor
-    "googleImplementation"(libs.google.billing)
-    "googleImplementation"(libs.google.billing.ktx)
+    // Bugly crash reporting
+    implementation(libs.bugly.crashreport)
 
     // Reorderable for drag-and-drop list reordering
     implementation("sh.calvin.reorderable:reorderable:2.4.3")
