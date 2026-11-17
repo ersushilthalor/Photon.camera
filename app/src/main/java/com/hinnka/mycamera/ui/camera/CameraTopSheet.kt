@@ -1457,7 +1457,7 @@ fun QuickSettingButton(
         modifier = modifier
             .height(48.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(Color.White.copy(alpha = 0.15f))
+            .background(Color.Black)
             .clickable { onClick() }
             .padding(horizontal = 8.dp, vertical = 6.dp),
         contentAlignment = Alignment.CenterStart
@@ -1567,7 +1567,7 @@ fun QuickSettingToggle(
                     .clip(androidx.compose.foundation.shape.CircleShape)
                     .background(
                         if (checked) {
-                            Color.White.copy(alpha = contentAlpha)
+                            OnAccentColor.copy(alpha = contentAlpha)
                         } else {
                             Color.White.copy(alpha = 0.2f * contentAlpha)
                         }
