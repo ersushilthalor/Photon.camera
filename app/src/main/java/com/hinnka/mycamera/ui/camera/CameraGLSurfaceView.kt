@@ -385,18 +385,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
-    /** Real-time subject crop: immutable state swap, avoiding a queued GL task per camera frame. */
-    fun setSubjectCrop(centerX: Float, centerY: Float, zoom: Float) {
-        renderer.setSubjectTrackingCrop(
-            com.hinnka.mycamera.tracking.TrackingCrop(
-                centerX = centerX.coerceIn(0f, 1f),
-                centerY = centerY.coerceIn(0f, 1f),
-                zoom = zoom.coerceIn(1f, 8f),
-            )
-        )
-        requestRender()
-    }
-
     /**
      * 捕获预览帧
      * @param callback 捕获完成后的回调，在主线程调用

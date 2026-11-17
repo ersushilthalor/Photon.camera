@@ -18,7 +18,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -64,8 +63,6 @@ fun CameraTopBar(
     onVideoFpsClick: () -> Unit,
     videoHdrEnabled: Boolean,
     onVideoHdrToggle: () -> Unit,
-    videoSubjectTrackingEnabled: Boolean,
-    onVideoSubjectTrackingSettingsClick: () -> Unit,
     onSettingsClick: () -> Unit,
     glassBackdrop: LiquidGlassBackdrop,
     modifier: Modifier = Modifier
@@ -81,8 +78,6 @@ fun CameraTopBar(
             onVideoFpsClick = onVideoFpsClick,
             videoHdrEnabled = videoHdrEnabled,
             onVideoHdrToggle = onVideoHdrToggle,
-            videoSubjectTrackingEnabled = videoSubjectTrackingEnabled,
-            onVideoSubjectTrackingSettingsClick = onVideoSubjectTrackingSettingsClick,
             onSettingsClick = onSettingsClick,
             glassBackdrop = glassBackdrop,
             modifier = modifier
@@ -207,22 +202,6 @@ private fun TopBarActionButton(
 }
 
 @Composable
-private fun TrackingSettingsIcon(tint: Color) {
-    Canvas(modifier = Modifier.size(18.dp)) {
-        val center = Offset(size.width * 0.5f, size.height * 0.5f)
-        val radius = size.minDimension * 0.31f
-        val stroke = 1.8.dp.toPx()
-        drawCircle(color = tint, radius = radius, center = center, style = Stroke(width = stroke))
-        drawCircle(color = tint, radius = stroke * 0.8f, center = center)
-        val gap = radius * 0.55f
-        drawLine(tint, Offset(center.x, 0f), Offset(center.x, center.y - gap), stroke)
-        drawLine(tint, Offset(center.x, center.y + gap), Offset(center.x, size.height), stroke)
-        drawLine(tint, Offset(0f, center.y), Offset(center.x - gap, center.y), stroke)
-        drawLine(tint, Offset(center.x + gap, center.y), Offset(size.width, center.y), stroke)
-    }
-}
-
-@Composable
 private fun SixDotMenuIcon() {
     Column(
         verticalArrangement = Arrangement.spacedBy(2.5.dp),
@@ -254,8 +233,6 @@ private fun VideoTopBar(
     onVideoFpsClick: () -> Unit,
     videoHdrEnabled: Boolean,
     onVideoHdrToggle: () -> Unit,
-    videoSubjectTrackingEnabled: Boolean,
-    onVideoSubjectTrackingSettingsClick: () -> Unit,
     onSettingsClick: () -> Unit,
     glassBackdrop: LiquidGlassBackdrop,
     modifier: Modifier = Modifier
@@ -331,31 +308,22 @@ private fun VideoTopBar(
                         )
                     }
 
-                    if (videoSubjectTrackingEnabled) {
-                        TopBarActionButton(
-                            onClick = onVideoSubjectTrackingSettingsClick,
-                            contentDescription = stringResource(R.string.ai_subject_tracking_settings),
-                        ) {
-                            TrackingSettingsIcon(tint = AccentColor)
-                        }
-                    } else {
-                        TopBarActionButton(
-                            onClick = {
-                                if (!videoConfig.logProfile.isEnabled) onVideoHdrToggle()
-                            },
-                            contentDescription = "HDR"
-                        ) {
-                            Icon(
-                                imageVector = AppIcons.Contrast,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp).autoRotate(),
-                                tint = when {
-                                    videoConfig.logProfile.isEnabled -> Color.White.copy(alpha = 0.3f)
-                                    videoHdrEnabled -> AccentColor
-                                    else -> Color.White
-                                }
-                            )
-                        }
+                    TopBarActionButton(
+                        onClick = {
+                            if (!videoConfig.logProfile.isEnabled) onVideoHdrToggle()
+                        },
+                        contentDescription = "HDR"
+                    ) {
+                        Icon(
+                            imageVector = AppIcons.Contrast,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp).autoRotate(),
+                            tint = when {
+                                videoConfig.logProfile.isEnabled -> Color.White.copy(alpha = 0.3f)
+                                videoHdrEnabled -> AccentColor
+                                else -> Color.White
+                            }
+                        )
                     }
 
                     TopBarActionButton(

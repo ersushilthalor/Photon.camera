@@ -23,7 +23,6 @@ import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoLogProfile
-import com.hinnka.mycamera.tracking.TrackingCrop
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.ArrayDeque
@@ -500,9 +499,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val mvpMatrix = FloatArray(16)
     private val stabilizationMvpMatrix = FloatArray(16)
     private val eisFallbackMvpMatrix = FloatArray(16)
-    @Volatile private var subjectTrackingCrop = TrackingCrop.WIDE
-    private val subjectTrackingTransformMatrix = FloatArray(16)
-    private val subjectTrackingMvpMatrix = FloatArray(16)
 
     // Primary Camera2 preview input.
     private var surfaceTexture: SurfaceTexture? = null
@@ -1690,28 +1686,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             }
         }
 
-        val crop = subjectTrackingCrop
-        if (crop.zoom <= 1.001f) return baseMatrix
-        val centerNdcX = crop.centerX * 2f - 1f
-        val centerNdcY = 1f - crop.centerY * 2f
-        Matrix.setIdentityM(subjectTrackingTransformMatrix, 0)
-        Matrix.scaleM(subjectTrackingTransformMatrix, 0, crop.zoom, crop.zoom, 1f)
-        Matrix.translateM(
-            subjectTrackingTransformMatrix,
-            0,
-            -centerNdcX,
-            -centerNdcY,
-            0f,
-        )
-        Matrix.multiplyMM(
-            subjectTrackingMvpMatrix,
-            0,
-            subjectTrackingTransformMatrix,
-            0,
-            baseMatrix,
-            0,
-        )
-        return subjectTrackingMvpMatrix
+        return baseMatrix
     }
 
     private fun useCurrentOesFrame() {
@@ -2936,14 +2911,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         liquidGlassOverlayBounds = safeBounds
         liquidGlassOverlayCornerRadiusPx = cornerRadiusPx.coerceAtLeast(0f)
         liquidGlassSettings = settings.sanitized()
-    }
-
-    fun setSubjectTrackingCrop(crop: TrackingCrop) {
-        subjectTrackingCrop = crop.copy(
-            centerX = crop.centerX.coerceIn(0f, 1f),
-            centerY = crop.centerY.coerceIn(0f, 1f),
-            zoom = crop.zoom.coerceIn(1f, 8f),
-        )
     }
 
     fun setSourceCrop(crop: PhantomPipCrop) {

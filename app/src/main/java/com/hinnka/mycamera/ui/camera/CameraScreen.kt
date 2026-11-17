@@ -95,7 +95,6 @@ import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoStabilizationMode
-import com.hinnka.mycamera.tracking.SubjectTrackingSettings
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.isActive
@@ -231,8 +230,6 @@ fun CameraScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
-    val subjectTrackingUiState by viewModel.subjectTrackingUiState.collectAsState()
-    var showSubjectTrackingSettings by remember { mutableStateOf(false) }
     var previousPreviewCaptureMode by remember { mutableStateOf(state.captureMode) }
     val isPhotoVideoModeTransition = previousPreviewCaptureMode != state.captureMode
     var dualCaptureEnabled by remember { mutableStateOf(false) }
@@ -242,25 +239,10 @@ fun CameraScreen(
             dualCaptureEnabled = false
             viewModel.setDualCaptureEnabled(false)
         }
-        if (state.captureMode != CaptureMode.VIDEO && subjectTrackingUiState.enabled) {
-            viewModel.setSubjectTrackingEnabled(false)
-            showSubjectTrackingSettings = false
-        }
         if (isPhotoVideoModeTransition) {
             delay(PhotoVideoViewfinderExpansionDurationMillis.toLong())
         }
         previousPreviewCaptureMode = state.captureMode
-    }
-    LaunchedEffect(state.videoConfig.fps, subjectTrackingUiState.enabled) {
-        if (subjectTrackingUiState.enabled && state.videoConfig.fps == VideoFpsPreset.FPS_120) {
-            viewModel.setSubjectTrackingEnabled(false)
-            showSubjectTrackingSettings = false
-            android.widget.Toast.makeText(
-                context,
-                context.getString(R.string.ai_subject_tracking_high_speed_unsupported),
-                android.widget.Toast.LENGTH_LONG,
-            ).show()
-        }
     }
 
     val uiStyle by viewModel.uiStyle.collectAsState()
@@ -1078,10 +1060,6 @@ fun CameraScreen(
                 onVideoHdrToggle = {
                     viewModel.setVideoHdrEnabled(!videoHdrEnabled)
                 },
-                videoSubjectTrackingEnabled = subjectTrackingUiState.enabled,
-                onVideoSubjectTrackingSettingsClick = {
-                    showSubjectTrackingSettings = true
-                },
                 onSettingsClick = {
                     activePanel = if (activePanel == ActivePanel.SETTINGS) ActivePanel.NONE else ActivePanel.SETTINGS
                 },
@@ -1381,12 +1359,6 @@ fun CameraScreen(
                     val currentCameraId = state.currentCameraId
                     val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
                         .collectAsState(initial = 0)
-                    val trackingEyeAssistActive = subjectTrackingUiState.enabled &&
-                        subjectTrackingUiState.settings.humanEyeAssist &&
-                        viewModel.isEyeFocusRuntimeAvailable &&
-                        state.captureMode == CaptureMode.VIDEO &&
-                        state.isPreviewActive &&
-                        !state.isCapturing
                     val eyeFocusActive = eyeFocusEnabled &&
                         viewModel.isEyeFocusRuntimeAvailable &&
                         state.isAutoFocus &&
@@ -1438,11 +1410,6 @@ fun CameraScreen(
                             onTap = { x, y, w, h ->
                                 if (activePanel != ActivePanel.NONE) {
                                     activePanel = ActivePanel.NONE
-                                } else if (state.captureMode == CaptureMode.VIDEO && subjectTrackingUiState.enabled) {
-                                    viewModel.selectSubjectForTracking(
-                                        (x.toFloat() / w.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f),
-                                        (y.toFloat() / h.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f),
-                                    )
                                 } else if (state.isFocusLocked) {
                                     viewModel.unlockFocus()
                                 } else {
@@ -1465,7 +1432,7 @@ fun CameraScreen(
                                 )
                             },
                             onEyeFocusInputAvailable = if (
-                                eyeFocusActive || trackingEyeAssistActive || portraitMaskActive
+                                eyeFocusActive || portraitMaskActive
                             ) {
                                 viewModel::handleEyeFocusInputUpdate
                             } else {
@@ -1968,25 +1935,6 @@ fun CameraScreen(
                             .liquidGlassBackdropSource(videoTopBarBackdrop)
                     ) {
                         viewfinder()
-                        if (
-                            isVideoMode &&
-                            subjectTrackingUiState.enabled &&
-                            subjectTrackingUiState.settings.showTrackingBox
-                        ) {
-                            val trackingRect = subjectTrackingUiState.snapshot.rect
-                                ?.let(viewModel::mapTrackingRectToDisplay)
-                            if (
-                                trackingRect != null &&
-                                subjectTrackingUiState.snapshot.state !=
-                                    com.hinnka.mycamera.tracking.SubjectTrackingState.IDLE
-                            ) {
-                                SubjectTrackingBoundingBox(
-                                    rect = trackingRect,
-                                    state = subjectTrackingUiState.snapshot.state,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
-                            }
-                        }
                     }
                     if (isVideoMode && activePanel != ActivePanel.SETTINGS) {
                         // The six-dot menu takes the toolbar's place while its panel is open.
@@ -2135,25 +2083,6 @@ fun CameraScreen(
                     !state.videoRecordingState.isRecording &&
                     !state.videoRecordingState.isProcessing,
             onVideoStabilizationModeChange = viewModel::setVideoStabilizationMode,
-            videoSubjectTrackingEnabled = subjectTrackingUiState.enabled,
-            onVideoSubjectTrackingClick = {
-                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
-                    android.widget.Toast.makeText(
-                        context,
-                        context.getString(R.string.ai_subject_tracking_stop_recording),
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                } else if (state.videoConfig.fps == VideoFpsPreset.FPS_120) {
-                    android.widget.Toast.makeText(
-                        context,
-                        context.getString(R.string.ai_subject_tracking_high_speed_unsupported),
-                        android.widget.Toast.LENGTH_LONG,
-                    ).show()
-                } else {
-                    viewModel.setSubjectTrackingEnabled(!subjectTrackingUiState.enabled)
-                    activePanel = ActivePanel.NONE
-                }
-            },
             onVideoDualCaptureClick = {
                 if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
                     android.widget.Toast.makeText(
@@ -2248,14 +2177,6 @@ fun CameraScreen(
             contentTopPadding = CameraTopBarBaseTopPadding + topSafePadding,
             onGlassBoundsChanged = { bounds -> topSheetGlassBounds = bounds },
         )
-
-        if (showSubjectTrackingSettings && subjectTrackingUiState.enabled) {
-            SubjectTrackingSettingsDialog(
-                settings = subjectTrackingUiState.settings,
-                onSettingsChange = viewModel::updateSubjectTrackingSettings,
-                onDismiss = { showSubjectTrackingSettings = false },
-            )
-        }
 
         // During navigation measurement or window resizing, the viewport can be
         // shorter than the toolbar. The panel then has no available vertical space.

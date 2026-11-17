@@ -100,9 +100,6 @@ class RealtimeVideoRenderer(
             encoderColorConfig.pipeline != VideoEncodedColorPipeline.CUSTOM_LOG &&
             encoderColorConfig.pipeline != VideoEncodedColorPipeline.HLG10
     private val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
-    @Volatile private var subjectTrackingCrop = com.hinnka.mycamera.tracking.TrackingCrop.WIDE
-    private val subjectTrackingTransformMatrix = FloatArray(16)
-    private val subjectTrackingMvpMatrix = FloatArray(16)
     private val firstPassMvpMatrix = FloatArray(16).also {
         Matrix.setIdentityM(it, 0)
         if (mirrorHorizontally || mirrorVertically) {
@@ -319,40 +316,6 @@ class RealtimeVideoRenderer(
      *
      * @return 写入编码器的帧时间戳（纳秒）；没有有效帧时返回 null。
      */
-    /** Update a normalized crop without queueing work from the camera analysis thread. */
-    fun setSubjectCrop(centerX: Float, centerY: Float, zoom: Float) {
-        subjectTrackingCrop = com.hinnka.mycamera.tracking.TrackingCrop(
-            centerX = centerX.coerceIn(0f, 1f),
-            centerY = centerY.coerceIn(0f, 1f),
-            zoom = zoom.coerceIn(1f, 8f),
-        )
-    }
-
-    private fun resolveSubjectTrackingMvpMatrix(): FloatArray {
-        val crop = subjectTrackingCrop
-        if (crop.zoom <= 1.001f) return firstPassMvpMatrix
-        val centerNdcX = crop.centerX * 2f - 1f
-        val centerNdcY = 1f - crop.centerY * 2f
-        Matrix.setIdentityM(subjectTrackingTransformMatrix, 0)
-        Matrix.scaleM(subjectTrackingTransformMatrix, 0, crop.zoom, crop.zoom, 1f)
-        Matrix.translateM(
-            subjectTrackingTransformMatrix,
-            0,
-            -centerNdcX,
-            -centerNdcY,
-            0f,
-        )
-        Matrix.multiplyMM(
-            subjectTrackingMvpMatrix,
-            0,
-            subjectTrackingTransformMatrix,
-            0,
-            firstPassMvpMatrix,
-            0,
-        )
-        return subjectTrackingMvpMatrix
-    }
-
     fun renderLatestFrame(
         mapPresentationTimeNs: (cameraTimestampNs: Long) -> Long,
     ): Long? {
@@ -415,7 +378,7 @@ class RealtimeVideoRenderer(
             textureId = sourceTextureId,
             sourceStMatrix = sourceStMatrix,
             cropRect = sourceCropRect,
-            mvpMatrix = resolveSubjectTrackingMvpMatrix(),
+            mvpMatrix = firstPassMvpMatrix,
             enableVideoLog = videoLogProfile.isEnabled && !cameraInputAlreadyHlg10,
             presentationTimeNs = timestampNs,
             viewport = resolvePrimaryViewport(),

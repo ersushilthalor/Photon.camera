@@ -22,11 +22,6 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.*
-import com.hinnka.mycamera.tracking.SubjectTrackingCoordinator
-import com.hinnka.mycamera.tracking.SubjectTrackingInputResolution
-import com.hinnka.mycamera.tracking.SubjectTrackingSettings
-import com.hinnka.mycamera.tracking.SubjectTrackingUiState
-import com.hinnka.mycamera.tracking.TrackingRect
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.CameraFeaturePreferencesUpdate
 import com.hinnka.mycamera.data.CaptureButtonStyle
@@ -598,25 +593,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     private val cameraController = Camera2Controller(application)
-    private val _subjectTrackingUiState = MutableStateFlow(SubjectTrackingUiState())
-    val subjectTrackingUiState: StateFlow<SubjectTrackingUiState> = _subjectTrackingUiState.asStateFlow()
-    private val subjectTrackingCoordinator = SubjectTrackingCoordinator(
-        context = application,
-        onUiState = { next ->
-            viewModelScope.launch(Dispatchers.Main.immediate) {
-                _subjectTrackingUiState.value = next
-            }
-        },
-        onCrop = { crop ->
-            // Camera2 applies this crop to the sensor stream shared by preview and recording.
-            // Return the effective crop so the tracker can invert the exact applied transform.
-            cameraController.setSubjectTrackingCrop(crop)
-        },
-        onResolutionFallback = cameraController::setSubjectTrackingInputResolution,
-    ).also {
-        cameraController.onSubjectTrackingImage = it::onCameraImage
-    }
-
     // 内容仓库（单例，与 GalleryViewModel 共享）
     private val contentRepository = ContentRepository.getInstance(application)
     private val presetPackageManager = PresetPackageManager(application, contentRepository)
@@ -4987,9 +4963,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             cameraState.isRawSupported &&
             cameraState.isPreviewActive &&
             !cameraState.isCapturing
-        val acceptsTrackingEyeAssist = isTrackingEyeAssistActive() &&
-            cameraState.isPreviewActive &&
-            !cameraState.isCapturing
         val acceptsEyeFocus = eyeFocusEnabled.value &&
             isEyeFocusRuntimeAvailable &&
             cameraState.isPreviewActive &&
@@ -4997,7 +4970,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             !cameraState.isHyperfocalFocusEnabled &&
             !cameraState.isCapturing &&
             (cameraState.focusPoint == null || cameraState.focusPointSource == FocusPointSource.EYE)
-        if (!acceptsEyeFocus && !acceptsTrackingEyeAssist && !acceptsPortraitMask) {
+        if (!acceptsEyeFocus && !acceptsPortraitMask) {
             frame.bitmap.recycle()
             completeEyeFocusInput()
             return
@@ -5006,7 +4979,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (
             !previewEyeFocusProcessor.processFrame(
                 frame = frame,
-                detectEyeTarget = acceptsEyeFocus || acceptsTrackingEyeAssist,
+                detectEyeTarget = acceptsEyeFocus,
                 createFaceMask = acceptsPortraitMask,
             )
         ) {
@@ -5017,21 +4990,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun handleEyeFocusTarget(target: PreviewEyeFocusProcessor.EyeTarget) {
         val cameraState = state.value
-        if (
-            isTrackingEyeAssistActive() &&
-            cameraState.isPreviewActive &&
-            !cameraState.isCapturing
-        ) {
-            val faceRect = TrackingRect.fromLTRB(
-                target.faceLeft,
-                target.faceTop,
-                target.faceRight,
-                target.faceBottom,
-            )
-            mapDisplayTrackingRectToSensor(faceRect)
-                ?.let(subjectTrackingCoordinator::updateHumanFaceRect)
-        }
-
         if (
             !eyeFocusEnabled.value ||
             !isEyeFocusRuntimeAvailable ||
@@ -7357,141 +7315,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _canStartShutterAnimation.value = true
     }
 
-    fun setSubjectTrackingEnabled(enabled: Boolean) {
-        if (state.value.captureMode != CaptureMode.VIDEO) return
-        if (enabled && (
-                state.value.videoRecordingState.isRecording ||
-                    state.value.videoRecordingState.isProcessing
-            )
-        ) return
-        val trackingSettings = _subjectTrackingUiState.value.settings
-        if (enabled && trackingSettings.humanEyeAssist && isEyeFocusRuntimeAvailable) {
-            previewEyeFocusProcessor.prewarm()
-        } else if (!enabled && !eyeFocusEnabled.value) {
-            previewEyeFocusProcessor.resetTracking()
-        }
-        val resolution = trackingSettings.inputResolution
-        // Clear any stale texture crop; the Camera2 request now owns subject zoom.
-        glSurfaceView?.setSubjectCrop(0.5f, 0.5f, 1f)
-        subjectTrackingCoordinator.setEnabled(enabled)
-        cameraController.setSubjectTrackingEnabled(enabled, resolution)
-    }
-
-    fun updateSubjectTrackingSettings(settings: SubjectTrackingSettings) {
-        subjectTrackingCoordinator.updateSettings(settings)
-        if (
-            settings.humanEyeAssist &&
-            _subjectTrackingUiState.value.enabled &&
-            isEyeFocusRuntimeAvailable
-        ) {
-            previewEyeFocusProcessor.prewarm()
-        } else if (!settings.humanEyeAssist && !eyeFocusEnabled.value) {
-            previewEyeFocusProcessor.resetTracking()
-        }
-        cameraController.setSubjectTrackingInputResolution(settings.inputResolution)
-    }
-
-    fun selectSubjectForTracking(normalizedX: Float, normalizedY: Float) {
-        // The viewfinder already shows the Camera2-cropped stream; taps are in that frame.
-        val sensorPoint = mapDisplayTapToSensor(
-            normalizedX.coerceIn(0f, 1f),
-            normalizedY.coerceIn(0f, 1f),
-            subjectTrackingDisplayRotationDegrees(),
-        )
-        subjectTrackingCoordinator.selectSubject(sensorPoint.first, sensorPoint.second)
-    }
-
-    private fun subjectTrackingDisplayRotationDegrees(): Int {
-        val sensorOrientation = cameraController.getSensorOrientation()
-        val deviceRotation = OrientationObserver.captureRotationDegrees.toInt()
-        val isFrontCamera = state.value.getCurrentCameraInfo()?.lensFacing ==
-            CameraCharacteristics.LENS_FACING_FRONT
-        val rotation = if (isFrontCamera) {
-            sensorOrientation - deviceRotation
-        } else {
-            sensorOrientation + deviceRotation
-        }
-        return Math.floorMod(rotation, 360)
-    }
-
-    private fun mapDisplayTapToSensor(x: Float, y: Float, rotationDegrees: Int): Pair<Float, Float> {
-        return when (rotationDegrees) {
-            90 -> y to (1f - x)
-            180 -> (1f - x) to (1f - y)
-            270 -> (1f - y) to x
-            else -> x to y
-        }
-    }
-
-    fun mapTrackingRectToDisplay(sensorRect: TrackingRect): TrackingRect? {
-        val rotation = subjectTrackingDisplayRotationDegrees()
-        val rotated = transformTrackingRect(sensorRect) { x, y ->
-            when (rotation) {
-                90 -> (1f - y) to x
-                180 -> (1f - x) to (1f - y)
-                270 -> y to (1f - x)
-                else -> x to y
-            }
-        } ?: return null
-
-        return rotated
-    }
-
-    private fun mapDisplayTrackingRectToSensor(displayRect: TrackingRect): TrackingRect? {
-        val rotation = subjectTrackingDisplayRotationDegrees()
-        return transformTrackingRect(displayRect) { x, y ->
-            mapDisplayTapToSensor(x, y, rotation)
-        }
-    }
-
-    private fun transformTrackingRect(
-        rect: TrackingRect,
-        transform: (Float, Float) -> Pair<Float, Float>,
-    ): TrackingRect? {
-        val points = listOf(
-            transform(rect.left, rect.top),
-            transform(rect.right, rect.top),
-            transform(rect.left, rect.bottom),
-            transform(rect.right, rect.bottom),
-        )
-        return clippedTrackingRect(
-            points.minOf { it.first },
-            points.minOf { it.second },
-            points.maxOf { it.first },
-            points.maxOf { it.second },
-        )
-    }
-
-    private fun clippedTrackingRect(
-        left: Float,
-        top: Float,
-        right: Float,
-        bottom: Float,
-    ): TrackingRect? {
-        val clippedLeft = left.coerceIn(0f, 1f)
-        val clippedTop = top.coerceIn(0f, 1f)
-        val clippedRight = right.coerceIn(0f, 1f)
-        val clippedBottom = bottom.coerceIn(0f, 1f)
-        if (clippedRight <= clippedLeft || clippedBottom <= clippedTop) return null
-        return TrackingRect.fromLTRB(clippedLeft, clippedTop, clippedRight, clippedBottom)
-    }
-
-    private fun isTrackingEyeAssistActive(): Boolean {
-        val tracking = _subjectTrackingUiState.value
-        return state.value.captureMode == CaptureMode.VIDEO &&
-            tracking.enabled &&
-            tracking.settings.humanEyeAssist &&
-            isEyeFocusRuntimeAvailable
-    }
-
-    fun unlockTrackedSubject() {
-        subjectTrackingCoordinator.unlockSubject()
-    }
-
     override fun onCleared() {
         super.onCleared()
-        cameraController.onSubjectTrackingImage = null
-        subjectTrackingCoordinator.close()
         cameraController.onEnhancedStabilizationUnavailable = null
         cameraReopenJob?.cancel()
         cameraErrorRecoveryJob?.cancel()

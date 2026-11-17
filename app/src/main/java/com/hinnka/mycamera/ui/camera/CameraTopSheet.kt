@@ -97,8 +97,6 @@ fun CameraTopSheet(
     videoStabilizationMode: VideoStabilizationMode,
     videoActionModeAvailable: Boolean,
     onVideoStabilizationModeChange: (VideoStabilizationMode) -> Unit,
-    videoSubjectTrackingEnabled: Boolean,
-    onVideoSubjectTrackingClick: () -> Unit,
     onVideoDualCaptureClick: () -> Unit,
     videoCodec: VideoCodec,
     onVideoCodecChange: (VideoCodec) -> Unit,
@@ -365,19 +363,6 @@ fun CameraTopSheet(
                                     contentDescription = null,
                                     tint = tint,
                                     modifier = Modifier.size(34.dp)
-                                )
-                            }
-                            VideoMenuItem(
-                                label = stringResource(R.string.ai_subject_tracking),
-                                active = videoSubjectTrackingEnabled,
-                                modifier = itemModifier,
-                                onClick = onVideoSubjectTrackingClick
-                            ) { tint ->
-                                Text(
-                                    text = "◎",
-                                    color = tint,
-                                    fontSize = 34.sp,
-                                    fontWeight = FontWeight.Light,
                                 )
                             }
                             VideoMenuItem(

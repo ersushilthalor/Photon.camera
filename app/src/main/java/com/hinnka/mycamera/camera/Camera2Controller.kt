@@ -68,8 +68,6 @@ import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoRecordingState
 import com.hinnka.mycamera.video.VideoStabilizationMode
 import com.hinnka.mycamera.video.resolveSurfaceTextureVideoOrientationDegrees
-import com.hinnka.mycamera.tracking.SubjectTrackingInputResolution
-import com.hinnka.mycamera.tracking.TrackingCrop
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
@@ -315,12 +313,6 @@ class Camera2Controller(private val context: Context) {
     val dualCaptureStreamSize: StateFlow<Size?> = _dualCaptureStreamSize.asStateFlow()
     private var imageReader: ImageReader? = null
     private var stabilizationImageReader: StabilizationImageReader? = null
-    @Volatile private var subjectTrackingEnabled = false
-    @Volatile private var subjectTrackingCrop = TrackingCrop.WIDE
-    @Volatile private var subjectTrackingInputSize = Size(1280, 720)
-    private var subjectTrackingImageReader: ImageReader? = null
-    @Volatile private var subjectTrackingSourceSize: Size? = null
-    @Volatile var onSubjectTrackingImage: ((Image) -> Unit)? = null
 
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal)
     private var nrLevel = NoiseReductionLevel.DEFAULT
@@ -2236,9 +2228,6 @@ class Camera2Controller(private val context: Context) {
             safeCloseImageReader(imageReader)
             imageReader = null
             closeStabilizationImageReader()
-            safeCloseImageReader(subjectTrackingImageReader)
-            subjectTrackingImageReader = null
-            subjectTrackingSourceSize = null
         }
     }
 
@@ -3401,17 +3390,6 @@ class Camera2Controller(private val context: Context) {
             _state.value.videoConfig.fps == VideoFpsPreset.FPS_120 &&
             _state.value.videoRecordingState.shouldAttachCameraInput()
         val stabilizationReader = if (highSpeedVideo) null else ensureStabilizationImageReader()
-        val subjectReader = if (captureMode == CaptureMode.VIDEO && !highSpeedVideo) {
-            ensureSubjectTrackingImageReader()
-        } else {
-            if (highSpeedVideo && subjectTrackingEnabled) {
-                PLog.w(TAG, "AI subject tracking pauses for the 120fps constrained high-speed session")
-                safeCloseImageReader(subjectTrackingImageReader)
-                subjectTrackingImageReader = null
-                subjectTrackingSourceSize = null
-            }
-            null
-        }
         val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
         val videoSurface = if (
             captureMode == CaptureMode.VIDEO &&
@@ -3450,7 +3428,6 @@ class Camera2Controller(private val context: Context) {
             previewRequestBuilder = device.createCaptureRequest(templateType).apply {
                 addTarget(surface)
                 stabilizationReader?.surface?.let(::addTarget)
-                subjectReader?.surface?.let(::addTarget)
                 videoSurface?.let(::addTarget)
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦）
@@ -3464,7 +3441,6 @@ class Camera2Controller(private val context: Context) {
 
             val surfaces = mutableListOf(surface)
             stabilizationReader?.surface?.let(surfaces::add)
-            subjectReader?.surface?.let(surfaces::add)
             videoSurface?.let(surfaces::add)
             if (captureMode == CaptureMode.PHOTO) {
                 val captureReader = reader ?: return
@@ -3519,9 +3495,6 @@ class Camera2Controller(private val context: Context) {
                         add(createOutputConfiguration(surface))
                         stabilizationReader?.surface?.let { eisSurface ->
                             add(createOutputConfiguration(eisSurface))
-                        }
-                        subjectReader?.surface?.let { trackingSurface ->
-                            add(createOutputConfiguration(trackingSurface))
                         }
                         videoSurface?.let { encoderSurface ->
                             add(createOutputConfiguration(
@@ -3690,74 +3663,6 @@ class Camera2Controller(private val context: Context) {
                 return
             }
             handlePreviewSessionFailure("create session exception", openGeneration, e)
-        }
-    }
-
-    private fun ensureSubjectTrackingImageReader(): ImageReader? {
-        val handler = cameraHandler ?: return null
-        if (!subjectTrackingEnabled || _state.value.captureMode != CaptureMode.VIDEO) return null
-        val requested = subjectTrackingInputSize
-        subjectTrackingImageReader?.let { existing ->
-            if (existing.width == requested.width && existing.height == requested.height) return existing
-            safeCloseImageReader(existing)
-            subjectTrackingImageReader = null
-            subjectTrackingSourceSize = null
-        }
-        val characteristics = cachedCharacteristics ?: run {
-            val id = activeOpenCameraId.takeIf { it.isNotBlank() } ?: return null
-            getCameraCharacteristicsCached(id)
-        }
-        val supportedSizes = characteristics
-            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?.getOutputSizes(ImageFormat.YUV_420_888)
-            ?.toList()
-            .orEmpty()
-        if (supportedSizes.isEmpty()) {
-            PLog.w(TAG, "AI subject tracking unavailable: camera has no YUV_420_888 output")
-            return null
-        }
-        val requestedAspect = requested.width.toFloat() / requested.height.toFloat()
-        val selectedSize = supportedSizes
-            .filter { kotlin.math.abs(it.width.toFloat() / it.height.toFloat() - requestedAspect) < 0.035f }
-            .minByOrNull { kotlin.math.abs(it.width - requested.width) + kotlin.math.abs(it.height - requested.height) }
-            ?: supportedSizes.minByOrNull {
-                kotlin.math.abs(it.width - requested.width) + kotlin.math.abs(it.height - requested.height)
-            }
-            ?: return null
-
-        return try {
-            ImageReader.newInstance(
-                selectedSize.width,
-                selectedSize.height,
-                ImageFormat.YUV_420_888,
-                3,
-            ).apply {
-                setOnImageAvailableListener({ source ->
-                    val image = try {
-                        source.acquireLatestImage()
-                    } catch (error: IllegalStateException) {
-                        PLog.w(TAG, "AI tracking frame could not be acquired: ${error.message}")
-                        null
-                    } ?: return@setOnImageAvailableListener
-                    val callback = onSubjectTrackingImage
-                    if (callback == null) {
-                        image.close()
-                    } else {
-                        try {
-                            callback(image)
-                        } catch (error: Exception) {
-                            try { image.close() } catch (_: Exception) { }
-                            PLog.e(TAG, "AI tracking image callback failed", error)
-                        }
-                    }
-                }, handler)
-                subjectTrackingImageReader = this
-                subjectTrackingSourceSize = selectedSize
-                PLog.i(TAG, "AI subject tracking YUV stream configured: ${selectedSize.width}x${selectedSize.height}")
-            }
-        } catch (error: Exception) {
-            PLog.e(TAG, "Unable to create AI tracking YUV stream", error)
-            null
         }
     }
 
@@ -5584,30 +5489,6 @@ class Camera2Controller(private val context: Context) {
             val zoomRatio = userZoomRatio
             val activeRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
 
-            if (subjectTrackingEnabled && state.captureMode == CaptureMode.VIDEO && activeRect != null) {
-                // The YUV analysis, viewfinder, and encoder targets share this Camera2 request.
-                // Apply the tracking crop to the sensor readout, not to the GL/encoder texture.
-                val streamAspect = subjectTrackingSourceSize?.let { size ->
-                    size.width.toFloat() / size.height.toFloat()
-                }?.takeIf { it.isFinite() && it > 0f }
-                    ?: (activeRect.width().toFloat() / activeRect.height().coerceAtLeast(1))
-                val trackingViewport = buildAspectRatioCropRegion(activeRect, streamAspect)
-                val baseZoom = requestedDeviceZoomRatio.coerceAtLeast(1f)
-                    .coerceAtMost(maxSupportedZoom.coerceAtLeast(1f))
-                val baseRegion = if (!logicalAutoSwitch && state.zoomPanEnabled &&
-                    state.getCurrentCameraInfo()?.supportsFreeformZoomPan == true
-                ) {
-                    buildZoomPanCropRegion(trackingViewport, baseZoom, state.zoomPanX, state.zoomPanY)
-                } else {
-                    buildCenteredCropRegion(trackingViewport, baseZoom)
-                }
-                val trackingRegion = buildTrackingCropRegion(baseRegion, subjectTrackingCrop)
-                // Do not combine a non-1x CONTROL_ZOOM_RATIO with SCALER_CROP_REGION.
-                zoomRatioRange?.let { builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1f) }
-                builder.set(CaptureRequest.SCALER_CROP_REGION, trackingRegion)
-                return
-            }
-
             applyZoomRequestSettings(
                 builder = builder,
                 zoomRatio = zoomRatio,
@@ -5712,36 +5593,6 @@ class Camera2Controller(private val context: Context) {
             cropLeft + cropWidth,
             cropTop + cropHeight
         )
-    }
-
-    private fun buildAspectRatioCropRegion(activeRect: Rect, aspectRatio: Float): Rect {
-        val safeAspect = aspectRatio.takeIf { it.isFinite() && it > 0f }
-            ?: (activeRect.width().toFloat() / activeRect.height().coerceAtLeast(1))
-        val activeAspect = activeRect.width().toFloat() / activeRect.height().coerceAtLeast(1)
-        return if (activeAspect > safeAspect) {
-            val width = (activeRect.height() * safeAspect).roundToInt()
-                .coerceIn(1, activeRect.width())
-            val left = activeRect.left + (activeRect.width() - width) / 2
-            Rect(left, activeRect.top, left + width, activeRect.bottom)
-        } else {
-            val height = (activeRect.width() / safeAspect).roundToInt()
-                .coerceIn(1, activeRect.height())
-            val top = activeRect.top + (activeRect.height() - height) / 2
-            Rect(activeRect.left, top, activeRect.right, top + height)
-        }
-    }
-
-    private fun buildTrackingCropRegion(baseRegion: Rect, crop: TrackingCrop): Rect {
-        val zoom = crop.zoom.coerceIn(1f, 8f)
-        val width = (baseRegion.width() / zoom).roundToInt().coerceIn(1, baseRegion.width())
-        val height = (baseRegion.height() / zoom).roundToInt().coerceIn(1, baseRegion.height())
-        val requestedCenterX = baseRegion.left + crop.centerX.coerceIn(0f, 1f) * baseRegion.width()
-        val requestedCenterY = baseRegion.top + crop.centerY.coerceIn(0f, 1f) * baseRegion.height()
-        val left = (requestedCenterX - width * 0.5f).roundToInt()
-            .coerceIn(baseRegion.left, baseRegion.right - width)
-        val top = (requestedCenterY - height * 0.5f).roundToInt()
-            .coerceIn(baseRegion.top, baseRegion.bottom - height)
-        return Rect(left, top, left + width, top + height)
     }
 
     private fun Rect.toCameraCoordinateRect(): CameraCoordinateRect {
@@ -7985,129 +7836,6 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    fun setSubjectTrackingEnabled(
-        enabled: Boolean,
-        resolution: SubjectTrackingInputResolution = SubjectTrackingInputResolution.P720,
-    ) {
-        val action = {
-            subjectTrackingEnabled = enabled
-            subjectTrackingCrop = TrackingCrop.WIDE
-            subjectTrackingInputSize = Size(resolution.width, resolution.height)
-            // The sensor crop is shared by preview and recording; clear the former GPU crop.
-            videoRecorder.setSubjectCrop(0.5f, 0.5f, 1f)
-            if (!enabled) {
-                safeCloseImageReader(subjectTrackingImageReader)
-                subjectTrackingImageReader = null
-                subjectTrackingSourceSize = null
-            }
-            if (_state.value.captureMode == CaptureMode.VIDEO &&
-                !_state.value.videoRecordingState.isRecording &&
-                !_state.value.videoRecordingState.isProcessing
-            ) {
-                createPreviewSession()
-            } else if (_state.value.captureMode == CaptureMode.VIDEO) {
-                previewRequestBuilder?.let { builder ->
-                    applyZoomSettings(builder, _state.value, isCapture = false)
-                    updatePreview()
-                }
-            }
-        }
-        val handler = cameraHandler
-        if (handler != null) {
-            // Always defer session replacement until the current ImageReader callback closes its frame.
-            handler.post { action() }
-        } else {
-            action()
-        }
-    }
-
-    fun setSubjectTrackingInputResolution(resolution: SubjectTrackingInputResolution) {
-        val action = {
-            if (subjectTrackingInputSize.width != resolution.width ||
-                subjectTrackingInputSize.height != resolution.height
-            ) {
-                subjectTrackingInputSize = Size(resolution.width, resolution.height)
-                if (subjectTrackingEnabled &&
-                    _state.value.captureMode == CaptureMode.VIDEO &&
-                    !_state.value.videoRecordingState.isRecording &&
-                    !_state.value.videoRecordingState.isProcessing
-                ) {
-                    safeCloseImageReader(subjectTrackingImageReader)
-                    subjectTrackingImageReader = null
-                    subjectTrackingSourceSize = null
-                    createPreviewSession()
-                }
-            }
-        }
-        val handler = cameraHandler
-        if (handler != null) {
-            // Resolution fallback can originate inside onImageAvailable; defer reader teardown.
-            handler.post { action() }
-        } else {
-            action()
-        }
-    }
-
-    fun setSubjectTrackingCrop(crop: TrackingCrop): TrackingCrop {
-        val handler = cameraHandler
-        if (handler != null && Looper.myLooper() != handler.looper) {
-            handler.post { setSubjectTrackingCrop(crop) }
-            return crop.copy(
-                centerX = crop.centerX.coerceIn(0f, 1f),
-                centerY = crop.centerY.coerceIn(0f, 1f),
-                zoom = crop.zoom.coerceIn(1f, 8f),
-            )
-        }
-
-        val nextCrop = if (subjectTrackingEnabled && _state.value.captureMode == CaptureMode.VIDEO) {
-            val maxTrackingZoom = resolveMaxSubjectTrackingZoom()
-            TrackingCrop(
-                centerX = crop.centerX.coerceIn(0f, 1f),
-                centerY = crop.centerY.coerceIn(0f, 1f),
-                zoom = crop.zoom.coerceIn(1f, maxTrackingZoom),
-            )
-        } else {
-            TrackingCrop.WIDE
-        }
-        val previous = subjectTrackingCrop
-        subjectTrackingCrop = nextCrop
-        val changed = kotlin.math.abs(previous.centerX - nextCrop.centerX) > 0.0005f ||
-            kotlin.math.abs(previous.centerY - nextCrop.centerY) > 0.0005f ||
-            kotlin.math.abs(previous.zoom - nextCrop.zoom) > 0.0005f
-        if (changed && handler != null) {
-            try {
-                val builder = previewRequestBuilder
-                if (builder != null) {
-                    applyZoomSettings(builder, _state.value, isCapture = false)
-                    updatePreview()
-                }
-            } catch (error: Exception) {
-                PLog.e(TAG, "Failed to update Camera2 subject-tracking crop", error)
-            }
-        }
-        return nextCrop
-    }
-
-    private fun resolveMaxSubjectTrackingZoom(): Float {
-        val openCameraId = getActiveOpenCameraId().takeIf { it.isNotBlank() } ?: return 8f
-        return runCatching {
-            val characteristics = resolveZoomRequestCharacteristics(openCameraId)
-            val maxZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
-            val zoomRange = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
-            val maxSupportedZoom = (zoomRange?.upper ?: maxZoom).coerceAtLeast(1f)
-            val state = _state.value
-            val camera = state.getCurrentCameraInfo()
-            val logicalAutoSwitch = shouldUseLogicalMultiCameraZoom(state, camera)
-            val requestedBaseZoom = if (logicalAutoSwitch) {
-                getTargetZoomRatioByMain(state, camera)
-            } else {
-                state.zoomRatio
-            }
-            val baseZoom = requestedBaseZoom.coerceAtLeast(1f).coerceAtMost(maxSupportedZoom)
-            (maxSupportedZoom / baseZoom).coerceIn(1f, 8f)
-        }.getOrDefault(8f)
-    }
-
     fun setVideoResolution(resolution: VideoResolutionPreset) {
         val currentConfig = _state.value.videoConfig
         _state.value = _state.value.copy(
@@ -9022,9 +8750,6 @@ class Camera2Controller(private val context: Context) {
                 addTarget(previewTarget)
                 stabilizationImageReader?.surface
                     ?.takeIf { useEnhancedStabilization }
-                    ?.let(::addTarget)
-                subjectTrackingImageReader?.surface
-                    ?.takeIf { subjectTrackingEnabled && _state.value.captureMode == CaptureMode.VIDEO }
                     ?.let(::addTarget)
                 encoderTarget
                     ?.takeIf { includeVideoSurface && !useEnhancedStabilization }

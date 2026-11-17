@@ -28,7 +28,6 @@ import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.utils.PLog
-import com.hinnka.mycamera.tracking.TrackingCrop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
@@ -146,7 +145,6 @@ class VideoRecorder(
     private var pauseIntervals = mutableListOf<PauseInterval>()
     private var activePauseStartTimeUs = UNSET_TIMESTAMP
 
-    @Volatile private var requestedSubjectTrackingCrop = TrackingCrop.WIDE
     private var requestedSize = Size(1080, 1920)
     private var requestedFps = 30
     private var outputDateTakenMs: Long = 0L
@@ -515,19 +513,6 @@ class VideoRecorder(
         renderer?.setCameraInputHlg10Source(enabled)
     }
 
-    /** Same GPU crop is applied to every frame sent to the MediaCodec input surface. */
-    fun setSubjectCrop(centerX: Float, centerY: Float, zoom: Float) {
-        val crop = TrackingCrop(
-            centerX = centerX.coerceIn(0f, 1f),
-            centerY = centerY.coerceIn(0f, 1f),
-            zoom = zoom.coerceIn(1f, 8f),
-        )
-        requestedSubjectTrackingCrop = crop
-        // Renderer state is an immutable volatile swap; the GL thread reads it on its next frame.
-        // Do not enqueue one coroutine per camera frame.
-        renderer?.setSubjectCrop(crop.centerX, crop.centerY, crop.zoom)
-    }
-
     fun isRecording(): Boolean = isRecording && !stopRequested
 
     fun setPreferredAudioInputId(audioInputId: String) {
@@ -565,8 +550,6 @@ class VideoRecorder(
             encoderSurface = encoderSurface,
             onFrameAvailable = ::onRealtimeFrameAvailable,
         )
-        val subjectCrop = requestedSubjectTrackingCrop
-        realtimeRenderer.setSubjectCrop(subjectCrop.centerX, subjectCrop.centerY, subjectCrop.zoom)
         PLog.d(
             TAG,
             "Realtime video renderer initialized: ${requestedSize.width}x${requestedSize.height} @ ${requestedFps}fps"
