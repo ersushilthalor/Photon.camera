@@ -1001,7 +1001,6 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
         )
-        CompositionLocalProvider(LocalSettingsPrismalBackdrop provides null) {
             CompositionLocalProvider(LocalRippleConfiguration provides settingsRippleConfiguration) {
                 Column(
                     modifier = Modifier
@@ -2401,7 +2400,7 @@ fun SettingsScreen(
             }
         }
     }
-        }
+        
     }
 
     if (showBackupSelectionDialog) {
