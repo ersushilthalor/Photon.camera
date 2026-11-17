@@ -254,8 +254,8 @@ private fun VideoTopBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 18.dp, start = 8.dp, end = 8.dp)
-            .height(56.dp),
+            .padding(top = 14.dp, start = 8.dp, end = 8.dp)
+            .height(48.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -276,7 +276,7 @@ private fun VideoTopBar(
             // Use the same compact grouped control capsule and touch targets as photo mode.
             Box(
                 modifier = Modifier
-                    .height(36.dp)
+                    .height(32.dp)
                     .clip(CircleShape)
             ) {
                 LiquidGlassSurface(
@@ -287,8 +287,8 @@ private fun VideoTopBar(
                 ) {}
                 Row(
                     modifier = Modifier
-                        .height(36.dp)
-                        .padding(horizontal = 4.dp),
+                        .height(32.dp)
+                        .padding(horizontal = 3.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -348,7 +348,7 @@ private fun VideoParameterCluster(
 ) {
     Box(
         modifier = Modifier
-            .height(36.dp)
+            .height(32.dp)
             .clip(CircleShape)
     ) {
         LiquidGlassSurface(
@@ -359,8 +359,8 @@ private fun VideoParameterCluster(
         ) {}
         Row(
             modifier = Modifier
-                .height(36.dp)
-                .padding(horizontal = 12.dp),
+                .height(32.dp)
+                .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
