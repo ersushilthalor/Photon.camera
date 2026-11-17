@@ -93,7 +93,7 @@ fun CameraTopBar(
             modifier = Modifier
                 .height(36.dp)
                 .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.13f))
+                .background(Color(0xCC171717))
                 .clickable(enabled = rawSupported, onClick = onRawToggle)
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -122,7 +122,7 @@ fun CameraTopBar(
             modifier = Modifier
                 .height(36.dp)
                 .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.13f))
+                .background(Color(0xCC171717))
                 .padding(horizontal = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -151,7 +151,7 @@ fun CameraTopBar(
                 Icon(
                     painter = painterResource(R.drawable.ic_live_photo),
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp).autoRotate(),
+                    modifier = Modifier.size(16.dp).autoRotate(),
                     tint = if (useLivePhoto) AccentColor else Color.White
                 )
                 if (!useLivePhoto) {
@@ -272,7 +272,7 @@ private fun VideoTopBar(
                         Icon(
                             imageVector = if (videoConfig.torchEnabled) AppIcons.FlashlightOn else AppIcons.FlashlightOff,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp).autoRotate(),
+                            modifier = Modifier.size(16.dp).autoRotate(),
                             tint = when {
                                 !videoCapabilities.supportsTorch -> Color.White.copy(alpha = 0.3f)
                                 videoConfig.torchEnabled -> AccentColor
@@ -290,7 +290,7 @@ private fun VideoTopBar(
                         Icon(
                             imageVector = AppIcons.Contrast,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp).autoRotate(),
+                            modifier = Modifier.size(16.dp).autoRotate(),
                             tint = when {
                                 videoConfig.logProfile.isEnabled -> Color.White.copy(alpha = 0.3f)
                                 videoHdrEnabled -> AccentColor
@@ -391,7 +391,7 @@ private fun VideoActionIcon(
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            modifier = Modifier.size(18.dp).autoRotate(),
+            modifier = Modifier.size(16.dp).autoRotate(),
             tint = if (enabled) {
                 if (active) AccentColor else Color.White
             } else {
