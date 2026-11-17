@@ -27,8 +27,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
@@ -144,7 +142,6 @@ fun CameraTopSheet(
     refocusAvailable: Boolean,
     contentTopPadding: Dp = CameraTopSheetContentTopPadding,
     modifier: Modifier = Modifier,
-    onGlassBoundsChanged: (Rect?) -> Unit = {},
 ) {
     var expandedVideoPanel by rememberSaveable { mutableStateOf<VideoSettingPanel?>(null) }
     var showPhotoAspectOptions by rememberSaveable { mutableStateOf(false) }
@@ -160,10 +157,6 @@ fun CameraTopSheet(
         showContentManagementOptions = false
         showPhotoAspectOptions = false
     }
-    LaunchedEffect(visible) {
-        if (!visible) onGlassBoundsChanged(null)
-    }
-
     LaunchedEffect(useRaw) {
         if (!useRaw) {
             showRenderingEngineSheet = false
@@ -205,9 +198,6 @@ fun CameraTopSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 600.dp)
-                .onGloballyPositioned { coordinates ->
-                    onGlassBoundsChanged(coordinates.boundsInRoot())
-                }
         ) {
             Column(
                 modifier = Modifier

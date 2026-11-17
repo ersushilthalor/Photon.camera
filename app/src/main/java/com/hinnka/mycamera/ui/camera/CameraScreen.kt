@@ -313,7 +313,6 @@ fun CameraScreen(
     var cameraScreenBounds by remember { mutableStateOf<Rect?>(null) }
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var previewGlBounds by remember { mutableStateOf<Rect?>(null) }
-    var topSheetGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var cameraGLSurfaceView by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
     var zoomJoystickOpen by remember { mutableStateOf(false) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
@@ -1446,8 +1445,8 @@ fun CameraScreen(
                     if (state.captureMode == CaptureMode.VIDEO && dualCaptureEnabled) {
                         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                             val insetPadding = 12.dp
-                            val insetWidth = maxWidth * 0.33f
-                            val dualInsetAspectRatio = 3f / 4f
+                            val insetWidth = maxWidth * 0.34f - insetPadding * 2
+                            val dualInsetAspectRatio = 9f / 16f
                             val insetHeight = insetWidth / dualInsetAspectRatio
                             val insetOuterWidth = insetWidth + insetPadding * 2
                             val insetOuterHeight = insetHeight + insetPadding * 2
@@ -1493,7 +1492,7 @@ fun CameraScreen(
                                     .fillMaxHeight()
                             }
                             val pipShape = RoundedCornerShape(
-                                if (dualCaptureLayout == DualCaptureLayout.PICTURE_IN_PICTURE) 16.dp else 0.dp
+                                if (dualCaptureLayout == DualCaptureLayout.PICTURE_IN_PICTURE) 12.dp else 0.dp
                             )
                             Box(
                                 modifier = frontPreviewModifier
@@ -2137,7 +2136,6 @@ fun CameraScreen(
             onOppoPhotoSettingsChange = viewModel::updateOppoPhotoSettings,
             refocusAvailable = state.minimumFocusDistance > 0f,
             contentTopPadding = CameraTopBarBaseTopPadding + topSafePadding,
-            onGlassBoundsChanged = { bounds -> topSheetGlassBounds = bounds },
         )
 
         // During navigation measurement or window resizing, the viewport can be

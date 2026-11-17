@@ -1,10 +1,6 @@
 package com.hinnka.mycamera.ui.components
 
 import com.hinnka.mycamera.ui.theme.AccentColor
-import androidx.compose.ui.graphics.Brush
-import com.styropyr0.prismal.drawPrismalGlass
-import com.styropyr0.prismal.effects.applyPrismalGlassEffects
-import com.styropyr0.prismal.sources.rememberPrismalCanvasSource
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -156,20 +152,6 @@ fun ColorRecipePanel(
         param != RecipeParam.CHROMATIC_ABERRATION &&
         param != RecipeParam.NOISE &&
         param != RecipeParam.LOW_RES
-    }
-
-    val density = LocalDensity.current
-    // PrismalAGSL Glass Panel material from the supplied PrismalAGSL source archive.
-    // The sheet itself uses Android cross-window blur for the live camera preview;
-    // this procedural source provides the refracting highlight/tint layer for controls.
-    val recipeGlassBackdrop = rememberPrismalCanvasSource {
-        drawRect(
-            Brush.linearGradient(
-                colors = listOf(Color(0xFF596575), Color(0xFF20242C), Color(0xFF111318)),
-                start = Offset.Zero,
-                end = Offset(size.width, size.height)
-            )
-        )
     }
 
     val context = LocalContext.current.applicationContext
@@ -441,27 +423,7 @@ fun ColorRecipePanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(containerShape)
-                .drawPrismalGlass(
-                    backdrop = recipeGlassBackdrop,
-                    shape = { containerShape },
-                    effects = {
-                        applyPrismalGlassEffects(
-                            density = density,
-                            adaptiveLuminance = false,
-                            luminance = 0.42f,
-                            blurRadiusPx = with(density) { 18.dp.toPx() },
-                            refractionHeightPx = with(density) { 22.dp.toPx() },
-                            refractionAmountPx = with(density) { 20.dp.toPx() },
-                            saturation = 1.18f,
-                            depthEffect = true,
-                            chromaticAberration = 0.12f,
-                            useVibrancy = true,
-                        )
-                    },
-                    onDrawSurface = {
-                        drawRect(Color(0xFF111318).copy(alpha = if (isCurveDragging) 0.18f else 0.30f))
-                    }
-                )
+                .background(Color(0xFF111318).copy(alpha = if (isCurveDragging) 0.18f else 0.30f), containerShape)
                 .border(
                     0.7.dp,
                     Color.White.copy(alpha = if (isCurveDragging) 0.10f else 0.20f),
@@ -565,8 +527,6 @@ fun ColorRecipePanel(
                         )
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    glassBackdrop = recipeGlassBackdrop,
-                    glassDensity = density,
                 )
 
                 Spacer(modifier = Modifier.height(6.dp))
@@ -1024,8 +984,6 @@ private fun BasicRecipeAdjuster(
     onDisplayValueChange: (Float) -> Unit,
     onReset: () -> Unit,
     modifier: Modifier = Modifier,
-    glassBackdrop: com.styropyr0.prismal.PrismalBackdrop,
-    glassDensity: androidx.compose.ui.unit.Density,
 ) {
     val range = basicDisplayRange(control)
     val accent = getBasicControlColor(control)
@@ -1035,27 +993,7 @@ private fun BasicRecipeAdjuster(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .drawPrismalGlass(
-                backdrop = glassBackdrop,
-                shape = { RoundedCornerShape(18.dp) },
-                effects = {
-                    applyPrismalGlassEffects(
-                        density = glassDensity,
-                        adaptiveLuminance = false,
-                        luminance = 0.38f,
-                        blurRadiusPx = with(glassDensity) { 14.dp.toPx() },
-                        refractionHeightPx = with(glassDensity) { 14.dp.toPx() },
-                        refractionAmountPx = with(glassDensity) { 14.dp.toPx() },
-                        saturation = 1.12f,
-                        depthEffect = true,
-                        chromaticAberration = 0.08f,
-                        useVibrancy = true,
-                    )
-                },
-                onDrawSurface = {
-                    drawRect(Color(0xFF20242B).copy(alpha = 0.30f))
-                }
-            )
+            .background(Color(0xFF20242B).copy(alpha = 0.30f), RoundedCornerShape(18.dp))
             .border(0.7.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(18.dp))
             .pointerInput(Unit) {
                 detectTapGestures(
@@ -1111,8 +1049,6 @@ private fun BasicRecipeAdjuster(
                 zeroValue = 0.0f,
                 height = 34.dp,
                 modifier = Modifier.fillMaxWidth(),
-                glassBackdrop = glassBackdrop,
-                glassDensity = glassDensity,
             )
         } else {
             val isSigned = range.start < 0f
@@ -1131,8 +1067,6 @@ private fun BasicRecipeAdjuster(
                 zeroValue = 0f,
                 height = 34.dp,
                 modifier = Modifier.fillMaxWidth(),
-                glassBackdrop = glassBackdrop,
-                glassDensity = glassDensity,
             )
         }
     }
@@ -1153,8 +1087,6 @@ private fun RecipeScaleRuler(
     modifier: Modifier = Modifier,
     zeroValue: Float = 0f,
     height: Dp = 32.dp,
-    glassBackdrop: com.styropyr0.prismal.PrismalBackdrop? = null,
-    glassDensity: androidx.compose.ui.unit.Density? = null,
 ) {
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
@@ -1179,35 +1111,9 @@ private fun RecipeScaleRuler(
         modifier = modifier
             .fillMaxWidth()
             .height(height)
-            .then(
-                if (glassBackdrop != null && glassDensity != null) {
-                    Modifier
-                        .drawPrismalGlass(
-                            backdrop = glassBackdrop,
-                            shape = { CircleShape },
-                            effects = {
-                                applyPrismalGlassEffects(
-                                    density = glassDensity,
-                                    adaptiveLuminance = false,
-                                    luminance = 0.4f,
-                                    blurRadiusPx = with(glassDensity) { 10.dp.toPx() },
-                                    refractionHeightPx = with(glassDensity) { 12.dp.toPx() },
-                                    refractionAmountPx = with(glassDensity) { 12.dp.toPx() },
-                                    saturation = 1.1f,
-                                    depthEffect = true,
-                                    chromaticAberration = 0.06f,
-                                    useVibrancy = true,
-                                )
-                            },
-                            onDrawSurface = {
-                                drawRect(Color.White.copy(alpha = 0.035f))
-                            }
-                        )
-                        .border(0.5.dp, Color.White.copy(alpha = 0.14f), CircleShape)
-                } else {
-                    Modifier
-                }
-            )
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.035f), CircleShape)
+            .border(0.5.dp, Color.White.copy(alpha = 0.14f), CircleShape)
             .pointerInput(values) {
                 detectTapGestures(
                     onDoubleTap = {

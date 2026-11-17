@@ -3190,8 +3190,7 @@ fun TextInputSettingItem(
 }
 
 /**
- * Dropdown setting item. Settings selectors use the standard compact row and Material menu;
- * the Prismal material remains reserved for camera-surface controls.
+ * Dropdown setting item. Settings selectors use the standard compact row and Material menu.
  */
 @Composable
 fun DropdownSettingItem(
@@ -5784,27 +5783,7 @@ private fun CaptureButtonAppearanceItem(
     modifier: Modifier = Modifier,
     preview: @Composable () -> Unit
 ) {
-    val tileContent: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
-        Column(
-            modifier = Modifier.weight(1f),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Box(
-                modifier = Modifier.height(48.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                preview()
-            }
-            Text(
-                text = label,
-                color = if (selected) AccentColor else Color.White.copy(alpha = 0.7f),
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
+
 
     Column(
         modifier = modifier
@@ -5835,7 +5814,6 @@ private fun CaptureButtonAppearanceItem(
             )
         }
     }
-}
 @Composable
 private fun BackgroundItem(
     name: String,
