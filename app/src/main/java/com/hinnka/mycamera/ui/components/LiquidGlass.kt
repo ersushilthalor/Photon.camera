@@ -8,6 +8,7 @@ import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
@@ -41,6 +42,7 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -114,8 +116,16 @@ fun LiquidGlassSurface(
     cornerRadius: Dp = 24.dp,
     openBottomEdge: Boolean = false,
     style: LiquidGlassStyle = LiquidGlassStyle(),
+    enabled: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
+    if (!enabled) {
+        Box(
+            modifier = modifier.background(Color(0xB31A1A1A), RoundedCornerShape(cornerRadius)),
+            content = content,
+        )
+        return
+    }
     val glassStyle = style
     var positionInRoot by remember { mutableStateOf(Offset.Unspecified) }
     val shaders = remember { if (LENS_SUPPORTED) GlassShaders() else null }
