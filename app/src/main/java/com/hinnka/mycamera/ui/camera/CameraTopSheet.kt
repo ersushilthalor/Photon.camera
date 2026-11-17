@@ -50,6 +50,7 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.SpectralFilmSelection
+import com.hinnka.mycamera.raw.fotufilm.FotufilmDocument
 import com.hinnka.mycamera.ui.components.AppModalBottomSheet
 import com.hinnka.mycamera.ui.components.RawDcpLensOption
 import com.hinnka.mycamera.ui.components.RawRenderingEngineSettingsPanel
@@ -112,6 +113,7 @@ fun CameraTopSheet(
     rawToneMappingParameters: RawToneMappingParameters,
     rawSpectralFilmSelection: SpectralFilmSelection?,
     rawSpectralFilmPrint: String?,
+    rawFotufilmDocument: FotufilmDocument?,
     ultraHdrEnabled: Boolean,
     onUltraHdrToggle: (Boolean) -> Unit,
     photoPreviewStabilizationEnabled: Boolean,
@@ -126,6 +128,7 @@ fun CameraTopSheet(
     onRawToneMappingParametersChange: (RawToneMappingParameters) -> Unit,
     onRawSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
     onRawSpectralFilmPrintChange: (String?) -> Unit,
+    onRawFotufilmDocumentChange: (FotufilmDocument) -> Unit,
     meteringMode: MeteringMode,
     onMeteringModeChange: (MeteringMode) -> Unit,
     onFilterManageClick: () -> Unit,
@@ -144,10 +147,10 @@ fun CameraTopSheet(
     modifier: Modifier = Modifier,
 ) {
     var expandedVideoPanel by rememberSaveable { mutableStateOf<VideoSettingPanel?>(null) }
-    var showPhotoAspectOptions by rememberSaveable { mutableStateOf(false) }
     var showRenderingEngineSheet by rememberSaveable { mutableStateOf(false) }
     var showOppoPipelineSheet by rememberSaveable { mutableStateOf(false) }
     var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
+
     fun handleContentManagementAction(action: () -> Unit) {
         showContentManagementOptions = false
         action()
@@ -155,8 +158,9 @@ fun CameraTopSheet(
 
     LaunchedEffect(visible, captureMode) {
         showContentManagementOptions = false
-        showPhotoAspectOptions = false
+        expandedVideoPanel = null
     }
+
     LaunchedEffect(useRaw) {
         if (!useRaw) {
             showRenderingEngineSheet = false
@@ -165,446 +169,473 @@ fun CameraTopSheet(
 
     AnimatedVisibility(
         visible = visible,
-        // Match OppoCam's six-dot menu: a compact card that unfolds from the top
-        // instead of a full-width square sheet.
-        // The menu scales from the six-dot trigger's top-right position. As the
-        // top bar disappears, the card grows out from that same point instead of
-        // appearing as an unrelated sheet over the controls.
-        enter = fadeIn(animationSpec = tween(110)) +
-            scaleIn(
-                initialScale = 0.035f,
-                transformOrigin = TransformOrigin(0.94f, 0.04f),
-                animationSpec = spring(dampingRatio = 0.86f, stiffness = 300f)
-            ) +
-            expandVertically(
-                expandFrom = Alignment.Top,
-                animationSpec = spring(dampingRatio = 0.88f, stiffness = 320f)
-            ),
-        exit = fadeOut(animationSpec = tween(120)) +
-            scaleOut(
-                targetScale = 0.94f,
-                transformOrigin = TransformOrigin(0.94f, 0.04f),
-                animationSpec = tween(140)
-            ) +
-            shrinkVertically(
-                shrinkTowards = Alignment.Top,
-                animationSpec = tween(150)
-            ),
+        enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
         modifier = modifier
-            .fillMaxWidth()
-            .padding(top = contentTopPadding, start = 5.dp, end = 5.dp)
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 600.dp)
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
+                .background(Color.Black)
+                .padding(top = contentTopPadding)
+                .autoRotate(matchParentSize = true)
+                .padding(horizontal = 24.dp)
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 16.dp)
-                    .autoRotate()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
             ) {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState())
-                ) {
                 if (captureMode == CaptureMode.PHOTO) {
                     val isProfessionalMode = useRaw && isRawSupported
-                    Column(modifier = Modifier.padding(vertical = 16.dp)) {
-                        QuickSettingGrid(columns = 3, itemHeight = 90.dp) { itemModifier ->
-                            VideoMenuItem(
-                                label = "REFOCUS",
-                                active = oppoPhotoSettings.refocusEnabled,
-                                enabled = refocusAvailable && !isProfessionalMode,
-                                modifier = itemModifier,
-                                onClick = {
-                                    val enabled = !oppoPhotoSettings.refocusEnabled
-                                    onOppoPhotoSettingsChange(
-                                        oppoPhotoSettings.copy(
-                                            refocusEnabled = enabled,
-                                            autoHdrEnabled = if (enabled) false else oppoPhotoSettings.autoHdrEnabled
-                                        )
-                                    )
-                                }
-                            ) { tint ->
-                                PhotoRefocusGlyph(tint)
-                            }
-                            VideoMenuItem(
-                                label = "LIVE",
-                                active = useLivePhoto,
-                                modifier = itemModifier,
-                                onClick = onLivePhotoToggle
-                            ) { tint ->
-                                PhotoLiveGlyph(tint)
-                            }
-                            VideoMenuItem(
-                                label = "ASPECT",
-                                modifier = itemModifier,
-                                onClick = { showPhotoAspectOptions = !showPhotoAspectOptions }
-                            ) { tint ->
-                                PhotoAspectGlyph(tint, aspectRatio.getDisplayName())
-                            }
-                            VideoMenuItem(
-                                label = "TIMER",
-                                active = timerSeconds > 0,
-                                modifier = itemModifier,
-                                onClick = onTimerToggle
-                            ) { tint ->
-                                PhotoTimerGlyph(tint, timerSeconds)
-                            }
-                            VideoMenuItem(
-                                label = "BRUST",
-                                active = oppoPhotoSettings.fastShutterEnabled,
-                                enabled = !isProfessionalMode,
-                                modifier = itemModifier,
-                                onClick = {
-                                    onOppoPhotoSettingsChange(
-                                        oppoPhotoSettings.copy(
-                                            fastShutterEnabled = !oppoPhotoSettings.fastShutterEnabled
-                                        )
-                                    )
-                                }
-                            ) { tint ->
-                                PhotoBurstGlyph(tint)
-                            }
-                            VideoMenuItem(
-                                label = "STYLES",
-                                active = if (isProfessionalMode) true else oppoPhotoSettings.customPipelineEnabled,
-                                modifier = itemModifier,
-                                onClick = {
-                                    if (isProfessionalMode) {
-                                        showRenderingEngineSheet = true
-                                    } else {
-                                        showOppoPipelineSheet = true
-                                    }
-                                }
-                            ) { tint ->
-                                PhotoStylesGlyph(tint)
-                            }
-                            VideoMenuItem(
-                                label = "FILTER",
-                                modifier = itemModifier,
-                                onClick = onPhotoFilterClick
-                            ) { tint ->
-                                PhotoFilterGlyph(tint)
-                            }
-                            VideoMenuItem(
-                                label = "DEPTH",
-                                modifier = itemModifier,
-                                onClick = onPhotoDepthClick
-                            ) { tint ->
-                                PhotoDepthGlyph(tint)
-                            }
-                            VideoMenuItem(
-                                label = "SETTINGS",
-                                modifier = itemModifier,
-                                onClick = onMoreSettingsClick
-                            ) { tint ->
-                                Icon(
-                                    imageVector = Icons.Default.Settings,
-                                    contentDescription = null,
-                                    tint = tint,
-                                    modifier = Modifier.size(34.dp)
+
+                    SectionLabel(title = stringResource(R.string.aspect_ratio))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AspectRatio.sanitizeTopSheetRatios(topSheetAspectRatios).forEach { ratio ->
+                            val isSelected = aspectRatio == ratio
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 40.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) AccentColor else Color.Black)
+                                    .clickable { onAspectRatioChange(ratio) }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = ratio.getDisplayName(),
+                                    color = if (isSelected) OnAccentColor else Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                 )
                             }
                         }
-
-                        AnimatedVisibility(
-                            visible = showPhotoAspectOptions,
-                            enter = expandVertically() + fadeIn(),
-                            exit = shrinkVertically() + fadeOut()
-                        ) {
-                            Column {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                VideoSettingExpandedPanel {
-                                    FlowRow(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        AspectRatio.sanitizeTopSheetRatios(topSheetAspectRatios).forEach { ratio ->
-                                            VideoOptionChip(
-                                                title = ratio.getDisplayName(),
-                                                selected = aspectRatio == ratio,
-                                                onClick = {
-                                                    showPhotoAspectOptions = false
-                                                    onAspectRatioChange(ratio)
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    QuickSettingGrid { itemModifier ->
+                        if (isProfessionalMode) {
+                            QuickSettingButton2(
+                                title = stringResource(R.string.settings_raw_color_engine),
+                                checked = true,
+                                onClick = { showRenderingEngineSheet = true },
+                                modifier = itemModifier
+                            )
+                        } else {
+                            QuickSettingToggle(
+                                title = stringResource(R.string.settings_use_jpg_max),
+                                checked = useJpgMax,
+                                onCheckedChange = onJpgMaxToggle,
+                                modifier = itemModifier
+                            )
+                            QuickSettingToggle(
+                                title = stringResource(R.string.settings_use_multiple_exposure),
+                                checked = useMultipleExposure,
+                                onCheckedChange = onMultipleExposureToggle,
+                                modifier = itemModifier
+                            )
+                        }
+
+                        QuickSettingToggle(
+                            title = stringResource(R.string.settings_ultra_hdr_gain_map),
+                            checked = ultraHdrEnabled,
+                            onCheckedChange = onUltraHdrToggle,
+                            modifier = itemModifier
+                        )
+                        QuickSettingToggle(
+                            title = stringResource(R.string.camera_preview_stabilization),
+                            checked = photoPreviewStabilizationEnabled,
+                            onCheckedChange = onPhotoPreviewStabilizationChange,
+                            enabled = photoPreviewStabilizationAvailable,
+                            modifier = itemModifier
+                        )
+                        MeteringModeQuickSetting(
+                            meteringMode = meteringMode,
+                            onMeteringModeChange = onMeteringModeChange,
+                            modifier = itemModifier
+                        )
+                        ToolboxQuickSetting(
+                            onToolboxClick = onToolboxClick,
+                            modifier = itemModifier
+                        )
+                        ContentManagementQuickSetting(
+                            onClick = { showContentManagementOptions = !showContentManagementOptions },
+                            modifier = itemModifier
+                        )
+
+                        QuickSettingToggle(
+                            title = "LIVE PHOTO",
+                            checked = useLivePhoto,
+                            onCheckedChange = { onLivePhotoToggle() },
+                            modifier = itemModifier
+                        )
+                        QuickSettingValue(
+                            title = "TIMER",
+                            value = if (timerSeconds > 0) "${timerSeconds}s" else "Off",
+                            onClick = onTimerToggle,
+                            modifier = itemModifier
+                        )
+                        QuickSettingToggle(
+                            title = "REFOCUS",
+                            checked = oppoPhotoSettings.refocusEnabled,
+                            enabled = refocusAvailable && !isProfessionalMode,
+                            onCheckedChange = { enabled ->
+                                onOppoPhotoSettingsChange(
+                                    oppoPhotoSettings.copy(
+                                        refocusEnabled = enabled,
+                                        autoHdrEnabled = if (enabled) false else oppoPhotoSettings.autoHdrEnabled
+                                    )
+                                )
+                            },
+                            modifier = itemModifier
+                        )
+                        QuickSettingToggle(
+                            title = "BURST",
+                            checked = oppoPhotoSettings.fastShutterEnabled,
+                            enabled = !isProfessionalMode,
+                            onCheckedChange = { enabled ->
+                                onOppoPhotoSettingsChange(
+                                    oppoPhotoSettings.copy(fastShutterEnabled = enabled)
+                                )
+                            },
+                            modifier = itemModifier
+                        )
+                        QuickSettingButton2(
+                            title = "STYLES",
+                            checked = isProfessionalMode || oppoPhotoSettings.customPipelineEnabled,
+                            onClick = {
+                                if (isProfessionalMode) {
+                                    showRenderingEngineSheet = true
+                                } else {
+                                    showOppoPipelineSheet = true
+                                }
+                            },
+                            modifier = itemModifier
+                        )
+                        QuickSettingButton(
+                            title = "FILTER",
+                            icon = AppIcons.AutoAwesome,
+                            onClick = onPhotoFilterClick,
+                            modifier = itemModifier
+                        )
+                        QuickSettingButton(
+                            title = "DEPTH",
+                            icon = AppIcons.Tune,
+                            onClick = onPhotoDepthClick,
+                            modifier = itemModifier
+                        )
+                    }
+
+                    ContentManagementOptionsPanel(
+                        visible = showContentManagementOptions,
+                        onFilterManageClick = {
+                            handleContentManagementAction(onFilterManageClick)
+                        },
+                        onFrameManageClick = {
+                            handleContentManagementAction(onFrameManageClick)
+                        },
+                        onPresetManageClick = {
+                            handleContentManagementAction(onPresetManageClick)
+                        }
+                    )
                 } else {
-                    // The floating window's outer bounds stay unchanged; only the video
-                    // menu content is replaced by the reference's 3x3 circular icon grid.
-                    Column(modifier = Modifier.padding(vertical = 16.dp)) {
-                        QuickSettingGrid(columns = 3, itemHeight = 90.dp) { itemModifier ->
-                            VideoMenuItem(
-                                label = "FLASH",
-                                active = videoTorchEnabled,
-                                modifier = itemModifier,
-                                onClick = onVideoTorchToggle
-                            ) { tint ->
-                                Icon(
-                                    imageVector = if (videoTorchEnabled) AppIcons.FlashOn else AppIcons.FlashOff,
-                                    contentDescription = null,
-                                    tint = tint,
-                                    modifier = Modifier.size(34.dp)
-                                )
-                            }
-                            VideoMenuItem(
-                                label = "ACTION",
-                                active = videoStabilizationMode == VideoStabilizationMode.ENHANCED,
-                                enabled = videoActionModeAvailable,
-                                modifier = itemModifier,
-                                onClick = {
-                                    if (videoActionModeAvailable) {
-                                        onVideoStabilizationModeChange(
-                                            if (videoStabilizationMode == VideoStabilizationMode.ENHANCED) {
-                                                VideoStabilizationMode.OFF
-                                            } else {
-                                                VideoStabilizationMode.ENHANCED
-                                            }
-                                        )
-                                    }
-                                }
-                            ) { tint ->
-                                VideoActionGlyph(
-                                    tint = tint,
-                                    active = videoStabilizationMode == VideoStabilizationMode.ENHANCED
-                                )
-                            }
-                            VideoMenuItem(
-                                label = "DUAL CAPTURE",
-                                modifier = itemModifier,
-                                onClick = onVideoDualCaptureClick
-                            ) { tint ->
-                                VideoDualCaptureGlyph(tint)
-                            }
-                            VideoMenuItem(
-                                label = "FORMAT",
-                                active = videoHdrEnabled,
-                                modifier = itemModifier,
-                                onClick = {
-                                    expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.CODEC) {
-                                        null
-                                    } else {
-                                        VideoSettingPanel.CODEC
-                                    }
-                                }
-                            ) { tint ->
+                    SectionLabel(title = stringResource(R.string.video_aspect_chip))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        VideoAspectRatio.entries.forEach { ratio ->
+                            val isSelected = videoAspectRatio == ratio
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 40.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) AccentColor else Color.Black)
+                                    .clickable { onVideoAspectRatioChange(ratio) }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
                                 Text(
-                                    text = if (videoHdrEnabled) "HDR" else "SDR",
-                                    color = tint,
-                                    fontSize = 19.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                            VideoMenuItem(
-                                label = "BITRATE",
-                                modifier = itemModifier,
-                                onClick = {
-                                    expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.BITRATE) {
-                                        null
-                                    } else {
-                                        VideoSettingPanel.BITRATE
-                                    }
-                                }
-                            ) { tint ->
-                                Text(
-                                    text = videoBitrate.bitrateMbps.toString(),
-                                    color = tint,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                            VideoMenuItem(
-                                label = "LOG",
-                                active = videoLogProfile.isEnabled,
-                                modifier = itemModifier,
-                                onClick = {
-                                    expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.LOG_PROFILE) {
-                                        null
-                                    } else {
-                                        VideoSettingPanel.LOG_PROFILE
-                                    }
-                                }
-                            ) { tint ->
-                                VideoLogGlyph(tint)
-                            }
-                            VideoMenuItem(
-                                label = "ASPECTS\nRATIO",
-                                modifier = itemModifier,
-                                onClick = {
-                                    expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.ASPECT_RATIO) {
-                                        null
-                                    } else {
-                                        VideoSettingPanel.ASPECT_RATIO
-                                    }
-                                }
-                            ) { tint ->
-                                VideoAspectRatioGlyph(tint)
-                            }
-                            VideoMenuItem(
-                                label = "SETTINGS",
-                                modifier = itemModifier,
-                                onClick = onMoreSettingsClick
-                            ) { tint ->
-                                Icon(
-                                    imageVector = Icons.Default.Settings,
-                                    contentDescription = null,
-                                    tint = tint,
-                                    modifier = Modifier.size(34.dp)
+                                    text = videoAspectRatioLabel(ratio),
+                                    color = if (isSelected) OnAccentColor else Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                 )
                             }
                         }
+                    }
 
-                        AnimatedVisibility(
-                            visible = expandedVideoPanel != null,
-                            enter = expandVertically() + fadeIn(),
-                            exit = shrinkVertically() + fadeOut()
-                        ) {
-                            Column {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                VideoSettingExpandedPanel {
-                                    when (expandedVideoPanel) {
-                                        VideoSettingPanel.ASPECT_RATIO -> {
-                                            FlowRow(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
-                                                VideoAspectRatio.entries.forEach { ratio ->
-                                                    VideoOptionChip(
-                                                        title = videoAspectRatioLabel(ratio),
-                                                        selected = videoAspectRatio == ratio,
-                                                        onClick = { onVideoAspectRatioChange(ratio) }
-                                                    )
-                                                }
-                                            }
-                                        }
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                                        VideoSettingPanel.LOG_PROFILE -> {
-                                            FlowRow(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
-                                                availableVideoLogProfiles.forEach { profile ->
-                                                    VideoOptionChip(
-                                                        title = videoLogProfileLabel(profile),
-                                                        selected = videoLogProfile == profile,
-                                                        onClick = { onVideoLogProfileChange(profile) }
-                                                    )
-                                                }
-                                            }
-                                        }
+                    QuickSettingGrid(columns = 2, itemHeight = 40.dp) { itemModifier ->
+                        VideoSettingTile(
+                            title = stringResource(R.string.video_log_chip),
+                            summary = videoLogProfileLabel(videoLogProfile),
+                            expanded = expandedVideoPanel == VideoSettingPanel.LOG_PROFILE,
+                            onClick = {
+                                expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.LOG_PROFILE) {
+                                    null
+                                } else {
+                                    VideoSettingPanel.LOG_PROFILE
+                                }
+                            },
+                            modifier = itemModifier
+                        )
+                        VideoSettingTile(
+                            title = stringResource(R.string.video_bitrate_chip),
+                            summary = "${videoBitrate.bitrateMbps}M",
+                            expanded = expandedVideoPanel == VideoSettingPanel.BITRATE,
+                            onClick = {
+                                expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.BITRATE) {
+                                    null
+                                } else {
+                                    VideoSettingPanel.BITRATE
+                                }
+                            },
+                            modifier = itemModifier
+                        )
+                        VideoSettingTile(
+                            title = stringResource(R.string.video_codec_chip),
+                            summary = videoCodec.displayName,
+                            expanded = expandedVideoPanel == VideoSettingPanel.CODEC,
+                            onClick = {
+                                expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.CODEC) {
+                                    null
+                                } else {
+                                    VideoSettingPanel.CODEC
+                                }
+                            },
+                            modifier = itemModifier
+                        )
+                        VideoSettingTile(
+                            title = stringResource(R.string.video_microphone_title),
+                            summary = selectedVideoAudioInputLabel(
+                                selectedAudioInputId = videoAudioInputId,
+                                options = videoAudioInputOptions
+                            ),
+                            expanded = expandedVideoPanel == VideoSettingPanel.MICROPHONE,
+                            onClick = {
+                                expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.MICROPHONE) {
+                                    null
+                                } else {
+                                    VideoSettingPanel.MICROPHONE
+                                }
+                            },
+                            modifier = itemModifier
+                        )
+                    }
 
-                                        VideoSettingPanel.BITRATE -> {
-                                            FlowRow(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
-                                                VideoBitratePreset.entries.forEach { bitrate ->
-                                                    VideoOptionChip(
-                                                        title = "${bitrate.bitrateMbps}M",
-                                                        selected = videoBitrate == bitrate,
-                                                        onClick = { onVideoBitrateChange(bitrate) }
-                                                    )
-                                                }
-                                            }
-                                        }
+                    QuickSettingGrid(columns = 2, itemHeight = 48.dp) { itemModifier ->
+                        QuickSettingToggle(
+                            title = "FLASH",
+                            checked = videoTorchEnabled,
+                            onCheckedChange = { onVideoTorchToggle() },
+                            modifier = itemModifier
+                        )
+                        QuickSettingToggle(
+                            title = "HDR",
+                            checked = videoHdrEnabled,
+                            onCheckedChange = { onVideoHdrToggle() },
+                            modifier = itemModifier
+                        )
+                        QuickSettingToggle(
+                            title = "ACTION",
+                            checked = videoStabilizationMode == VideoStabilizationMode.ENHANCED,
+                            enabled = videoActionModeAvailable,
+                            onCheckedChange = { enabled ->
+                                onVideoStabilizationModeChange(
+                                    if (enabled) VideoStabilizationMode.ENHANCED else VideoStabilizationMode.OFF
+                                )
+                            },
+                            modifier = itemModifier
+                        )
+                        QuickSettingValue(
+                            title = "DUAL CAPTURE",
+                            value = "Open",
+                            onClick = onVideoDualCaptureClick,
+                            modifier = itemModifier
+                        )
+                    }
 
-                                        VideoSettingPanel.CODEC -> {
-                                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                Column {
-                                                    SectionLabel(title = "DYNAMIC RANGE")
-                                                    FlowRow(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                                    ) {
-                                                        VideoOptionChip(
-                                                            title = "HDR",
-                                                            selected = videoHdrEnabled,
-                                                            enabled = !videoLogProfile.isEnabled,
-                                                            onClick = {
-                                                                if (!videoHdrEnabled && !videoLogProfile.isEnabled) onVideoHdrToggle()
-                                                            }
-                                                        )
-                                                        VideoOptionChip(
-                                                            title = "SDR",
-                                                            selected = !videoHdrEnabled,
-                                                            enabled = !videoLogProfile.isEnabled,
-                                                            onClick = {
-                                                                if (videoHdrEnabled && !videoLogProfile.isEnabled) onVideoHdrToggle()
-                                                            }
-                                                        )
-                                                    }
-                                                }
-                                                Column {
-                                                    SectionLabel(title = "VIDEO CODEC")
-                                                    FlowRow(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                                    ) {
-                                                        VideoCodec.entries.forEach { codec ->
-                                                            VideoOptionChip(
-                                                                title = codec.displayName,
-                                                                selected = videoCodec == codec,
-                                                                onClick = { onVideoCodecChange(codec) }
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        VideoSettingPanel.MICROPHONE -> {
-                                            FlowRow(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
+                    AnimatedVisibility(
+                        visible = expandedVideoPanel != null,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Column {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            VideoSettingExpandedPanel {
+                                when (expandedVideoPanel) {
+                                    VideoSettingPanel.ASPECT_RATIO -> {
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            VideoAspectRatio.entries.forEach { ratio ->
                                                 VideoOptionChip(
-                                                    title = stringResource(R.string.video_microphone_auto),
-                                                    selected = videoAudioInputId == VIDEO_AUDIO_INPUT_AUTO,
-                                                    onClick = { onVideoAudioInputChange(VIDEO_AUDIO_INPUT_AUTO) }
+                                                    title = videoAspectRatioLabel(ratio),
+                                                    selected = videoAspectRatio == ratio,
+                                                    onClick = { onVideoAspectRatioChange(ratio) }
                                                 )
-                                                videoAudioInputOptions.forEach { option ->
-                                                    VideoOptionChip(
-                                                        title = videoAudioInputLabel(option),
-                                                        selected = videoAudioInputId == option.id,
-                                                        onClick = { onVideoAudioInputChange(option.id) }
-                                                    )
-                                                }
                                             }
                                         }
-
-                                        null -> Unit
                                     }
+
+                                    VideoSettingPanel.LOG_PROFILE -> {
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            availableVideoLogProfiles.forEach { profile ->
+                                                VideoOptionChip(
+                                                    title = videoLogProfileLabel(profile),
+                                                    selected = videoLogProfile == profile,
+                                                    onClick = { onVideoLogProfileChange(profile) }
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    VideoSettingPanel.BITRATE -> {
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            VideoBitratePreset.entries.forEach { bitrate ->
+                                                VideoOptionChip(
+                                                    title = "${bitrate.bitrateMbps}M",
+                                                    selected = videoBitrate == bitrate,
+                                                    onClick = { onVideoBitrateChange(bitrate) }
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    VideoSettingPanel.CODEC -> {
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            VideoCodec.entries.forEach { codec ->
+                                                VideoOptionChip(
+                                                    title = codec.displayName,
+                                                    selected = videoCodec == codec,
+                                                    onClick = { onVideoCodecChange(codec) }
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    VideoSettingPanel.MICROPHONE -> {
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            VideoOptionChip(
+                                                title = stringResource(R.string.video_microphone_auto),
+                                                selected = videoAudioInputId == VIDEO_AUDIO_INPUT_AUTO,
+                                                onClick = { onVideoAudioInputChange(VIDEO_AUDIO_INPUT_AUTO) }
+                                            )
+                                            videoAudioInputOptions.forEach { option ->
+                                                VideoOptionChip(
+                                                    title = videoAudioInputLabel(option),
+                                                    selected = videoAudioInputId == option.id,
+                                                    onClick = { onVideoAudioInputChange(option.id) }
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    null -> Unit
                                 }
                             }
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    ContentManagementQuickSetting(
+                        onClick = { showContentManagementOptions = !showContentManagementOptions },
+                        modifier = Modifier.fillMaxWidth().height(40.dp)
+                    )
+                    ContentManagementOptionsPanel(
+                        visible = showContentManagementOptions,
+                        onFilterManageClick = {
+                            handleContentManagementAction(onFilterManageClick)
+                        },
+                        onFrameManageClick = {
+                            handleContentManagementAction(onFrameManageClick)
+                        },
+                        onPresetManageClick = {
+                            handleContentManagementAction(onPresetManageClick)
+                        }
+                    )
                 }
 
-
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black)
+                            .clickable(onClick = onMoreSettingsClick)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.Black),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = stringResource(R.string.settings_title),
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            imageVector = AppIcons.ChevronRight,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.3f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
             }
         }
-    }
     }
 
     if (showOppoPipelineSheet) {
         OppoPhotoPipelineSheet(
             settings = oppoPhotoSettings,
             onSettingsChange = onOppoPhotoSettingsChange,
-            onDismiss = { showOppoPipelineSheet = false },
+            onDismiss = { showOppoPipelineSheet = false }
         )
     }
 
@@ -620,7 +651,6 @@ fun CameraTopSheet(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
-            // Fill the sheet so switching engines only changes the scroll range, never the anchors.
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -648,12 +678,15 @@ fun CameraTopSheet(
                     onRawToneMappingParametersChange = onRawToneMappingParametersChange,
                     onSpectralFilmSelectionChange = onRawSpectralFilmSelectionChange,
                     onSpectralFilmPrintChange = onRawSpectralFilmPrintChange,
+                    fotufilmDocument = rawFotufilmDocument,
+                    onFotufilmDocumentChange = onRawFotufilmDocumentChange,
                     inlineEngineOptions = true,
-                    showToneMappingControls = true,
+                    showToneMappingControls = true
                 )
             }
         }
     }
+
 }
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -1089,6 +1122,7 @@ private fun VideoAspectRatioGlyph(tint: Color) {
     }
 }
 
+
 @Composable
 private fun VideoSettingTile(
     title: String,
@@ -1100,13 +1134,15 @@ private fun VideoSettingTile(
     Column(
         modifier = modifier
             .height(40.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (expanded) AccentColor else Color.Black)
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically)
     ) {
         Text(
             text = title,
-            color = if (expanded) Color.White.copy(alpha = 0.75f) else Color.White.copy(alpha = 0.72f),
+            color = if (expanded) OnAccentColor.copy(alpha = 0.75f) else Color.White.copy(alpha = 0.72f),
             fontSize = 9.sp,
             lineHeight = 12.sp,
             fontWeight = FontWeight.Medium,
@@ -1118,7 +1154,7 @@ private fun VideoSettingTile(
         ) {
             QuickSettingLabel(
                 text = summary,
-                color = if (expanded) Color.White else Color.White,
+                color = if (expanded) OnAccentColor else Color.White,
                 maxFontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
@@ -1126,7 +1162,7 @@ private fun VideoSettingTile(
             Icon(
                 imageVector = if (expanded) AppIcons.ExpandLess else AppIcons.OpenInFull,
                 contentDescription = null,
-                tint = if (expanded) Color.White else Color.White.copy(alpha = 0.8f),
+                tint = if (expanded) OnAccentColor else Color.White.copy(alpha = 0.8f),
                 modifier = Modifier.size(12.dp)
             )
         }
@@ -1140,6 +1176,8 @@ private fun VideoSettingExpandedPanel(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.Black)
             .padding(14.dp),
         content = content
     )
@@ -1155,6 +1193,8 @@ private fun VideoOptionChip(
     Box(
         modifier = Modifier
             .heightIn(min = 36.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) AccentColor else Color.Black)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
@@ -1163,7 +1203,7 @@ private fun VideoOptionChip(
             text = title,
             color = when {
                 !enabled -> Color.White.copy(alpha = 0.38f)
-                selected -> Color.White
+                selected -> OnAccentColor
                 else -> Color.White.copy(alpha = 0.72f)
             },
             fontSize = 12.sp,
@@ -1383,7 +1423,7 @@ fun QuickSettingValue(
         modifier = modifier
             .height(48.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(Color.White.copy(alpha = 0.15f))
+            .background(Color.Black)
             .clickable { onClick() }
             .padding(horizontal = 8.dp, vertical = 6.dp),
         contentAlignment = Alignment.CenterStart
@@ -1457,9 +1497,7 @@ fun QuickSettingButton2(
             .height(48.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (checked) Color.White else Color.White.copy(
-                    alpha = 0.15f
-                )
+                if (checked) AccentColor else Color.Black
             )
             .clickable { onClick() }
             .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -1472,14 +1510,14 @@ fun QuickSettingButton2(
         ) {
             QuickSettingLabel(
                 text = title,
-                color = if (checked) Color.White else Color.White.copy(alpha = 0.9f),
+                color = if (checked) OnAccentColor else Color.White.copy(alpha = 0.9f),
                 fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal,
                 modifier = Modifier.weight(1f)
             )
             Icon(
                 imageVector = AppIcons.ChevronRight,
                 contentDescription = null,
-                tint = if (checked) Color.White else Color.White.copy(alpha = 0.9f),
+                tint = if (checked) OnAccentColor else Color.White.copy(alpha = 0.9f),
                 modifier = Modifier.size(14.dp)
             )
         }
@@ -1500,9 +1538,7 @@ fun QuickSettingToggle(
             .height(48.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (checked) Color.White.copy(alpha = contentAlpha) else Color.White.copy(
-                    alpha = 0.15f
-                )
+                if (checked) AccentColor.copy(alpha = contentAlpha) else Color.Black
             )
             .clickable(enabled = enabled) { onCheckedChange(!checked) }
             .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -1516,7 +1552,7 @@ fun QuickSettingToggle(
             QuickSettingLabel(
                 text = title,
                 color = if (checked) {
-                    Color.White.copy(alpha = contentAlpha)
+                    OnAccentColor.copy(alpha = contentAlpha)
                 } else {
                     Color.White.copy(alpha = 0.9f * contentAlpha)
                 },
