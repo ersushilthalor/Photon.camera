@@ -229,7 +229,6 @@ private fun VideoTopBar(
     videoHdrEnabled: Boolean,
     onVideoHdrToggle: () -> Unit,
     onSettingsClick: () -> Unit,
-    glassBackdrop: LiquidGlassBackdrop,
     modifier: Modifier = Modifier
 ) {
     Box(
