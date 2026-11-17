@@ -12,7 +12,6 @@ fun String.toBuildConfigString(): String =
 android {
     namespace = "com.hinnka.mycamera"
     compileSdk = 36
-    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "com.hinnka.mycamera"
@@ -22,18 +21,6 @@ android {
         versionName = "1.28.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        
-        ndk {
-            abiFilters += listOf("arm64-v8a")
-        }
-
-        externalNativeBuild {
-            cmake {
-                arguments += "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
-                // Build the JNI library and its dependencies, excluding libjpeg tools/tests.
-                targets += "my-native-lib"
-            }
-        }
 
         buildConfigField(
             "String",
@@ -54,7 +41,7 @@ android {
 
     signingConfigs {
         getByName("debug") {
-            storeFile = file("debug.keystore")
+            storeFile = file("${rootDir}/debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
@@ -111,13 +98,6 @@ android {
             java {
                 srcDir("src/default/java")
             }
-        }
-    }
-    
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
         }
     }
 }

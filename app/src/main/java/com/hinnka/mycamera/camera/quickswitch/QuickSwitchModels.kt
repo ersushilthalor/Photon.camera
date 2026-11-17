@@ -73,18 +73,8 @@ data class QuickLensDescriptor(
     val equivalent35mmFocalMm: Float = 0f,
     val sensorWidthMm: Float = 0f,
     val focalLengthMm: Float = 0f,
-    val sensorOrientation: Int = 0,
     val isZoomPreset: Boolean = false
-) {
-    /** Maps the quick-switch role back to PhotonCamera's camera-state lens type. */
-    val lensType: LensType
-        get() = when (role) {
-            QuickLensRole.FRONT -> LensType.FRONT
-            QuickLensRole.ULTRAWIDE -> LensType.BACK_ULTRA_WIDE
-            QuickLensRole.TELEPHOTO, QuickLensRole.TELEPHOTO_3X -> LensType.BACK_TELEPHOTO
-            QuickLensRole.WIDE -> LensType.BACK_MAIN
-        }
-}
+)
 
 object QuickLensResolver {
 
@@ -137,7 +127,6 @@ object QuickLensResolver {
             equivalent35mmFocalMm = eqFocal,
             sensorWidthMm = sensorWidthMm,
             focalLengthMm = info.focalLength,
-            sensorOrientation = info.sensorOrientation,
             isZoomPreset = info.isVirtualIszLens
         )
     }
@@ -181,7 +170,6 @@ object QuickLensResolver {
                                 ?: CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM,
                             sensorWidthMm = 0f,
                             focalLengthMm = uwPhysical.focalLength,
-                            sensorOrientation = backMain.sensorOrientation,
                             isZoomPreset = false
                         )
                     )
