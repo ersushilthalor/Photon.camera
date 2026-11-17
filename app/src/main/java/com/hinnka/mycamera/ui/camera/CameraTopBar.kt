@@ -40,9 +40,6 @@ import com.hinnka.mycamera.video.VideoConfig
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.ui.icons.AppIcons
-import com.hinnka.mycamera.ui.components.LiquidGlassBackdrop
-import com.hinnka.mycamera.ui.components.LiquidGlassSurface
-import com.hinnka.mycamera.ui.components.LiquidGlassStyle
 
 @Composable
 fun CameraTopBar(
@@ -64,7 +61,6 @@ fun CameraTopBar(
     videoHdrEnabled: Boolean,
     onVideoHdrToggle: () -> Unit,
     onSettingsClick: () -> Unit,
-    glassBackdrop: LiquidGlassBackdrop,
     modifier: Modifier = Modifier
 ) {
     if (captureMode == CaptureMode.VIDEO) {
@@ -79,7 +75,6 @@ fun CameraTopBar(
             videoHdrEnabled = videoHdrEnabled,
             onVideoHdrToggle = onVideoHdrToggle,
             onSettingsClick = onSettingsClick,
-            glassBackdrop = glassBackdrop,
             modifier = modifier
         )
         return
@@ -143,7 +138,7 @@ fun CameraTopBar(
                         2 -> AppIcons.FlashlightOn
                         else -> AppIcons.FlashOff
                     },
-                    modifier = Modifier.size(18.dp).autoRotate(),
+                    modifier = Modifier.size(16.dp).autoRotate(),
                     contentDescription = null,
                     tint = Color.White
                 )
@@ -191,7 +186,7 @@ private fun TopBarActionButton(
 ) {
     Box(
         modifier = Modifier
-            .size(30.dp)
+            .size(28.dp)
             .clip(CircleShape)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { this.contentDescription = contentDescription }
@@ -237,25 +232,11 @@ private fun VideoTopBar(
     glassBackdrop: LiquidGlassBackdrop,
     modifier: Modifier = Modifier
 ) {
-    val videoTopBarGlassStyle = remember {
-        LiquidGlassStyle(
-            blurRadius = 20.dp,
-            refractionHeight = 18.dp,
-            refractionAmount = 4.dp,
-            saturation = 1.2f,
-            tint = Color(0x55000000),
-            highlightWidth = 0.65.dp,
-            highlightBlur = 0.7.dp,
-            highlightAlpha = 0.36f,
-            fallbackColor = Color(0xB3262626)
-        )
-    }
-
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 14.dp, start = 8.dp, end = 8.dp)
-            .height(48.dp),
+            .padding(top = 8.dp, start = 8.dp, end = 8.dp)
+            .height(40.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -267,8 +248,6 @@ private fun VideoTopBar(
             // including during recording, and each value remains independently tappable.
             VideoParameterCluster(
                 videoConfig = videoConfig,
-                glassBackdrop = glassBackdrop,
-                glassStyle = videoTopBarGlassStyle,
                 onResolutionClick = onVideoResolutionClick,
                 onFpsClick = onVideoFpsClick
             )
@@ -276,18 +255,13 @@ private fun VideoTopBar(
             // Use the same compact grouped control capsule and touch targets as photo mode.
             Box(
                 modifier = Modifier
-                    .height(32.dp)
+                    .height(30.dp)
                     .clip(CircleShape)
+                    .background(Color(0xCC171717))
             ) {
-                LiquidGlassSurface(
-                    backdrop = glassBackdrop,
-                    modifier = Modifier.matchParentSize(),
-                    cornerRadius = 18.dp,
-                    style = videoTopBarGlassStyle
-                ) {}
                 Row(
                     modifier = Modifier
-                        .height(32.dp)
+                        .height(30.dp)
                         .padding(horizontal = 3.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -341,26 +315,19 @@ private fun VideoTopBar(
 @Composable
 private fun VideoParameterCluster(
     videoConfig: VideoConfig,
-    glassBackdrop: LiquidGlassBackdrop,
-    glassStyle: LiquidGlassStyle,
     onResolutionClick: () -> Unit,
     onFpsClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
-            .height(32.dp)
+            .height(30.dp)
             .clip(CircleShape)
+            .background(Color(0xCC171717))
     ) {
-        LiquidGlassSurface(
-            backdrop = glassBackdrop,
-            modifier = Modifier.matchParentSize(),
-            cornerRadius = 18.dp,
-            style = glassStyle
-        ) {}
         Row(
             modifier = Modifier
-                .height(32.dp)
-                .padding(horizontal = 10.dp),
+                .height(30.dp)
+                .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
