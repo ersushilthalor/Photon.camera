@@ -40,12 +40,6 @@ android {
     }
 
     signingConfigs {
-        getByName("debug") {
-            storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
         create("release") {
             val storeFileProp = project.findProperty("RELEASE_STORE_FILE") as? String
             if (storeFileProp != null) {
@@ -60,7 +54,6 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
-            signingConfig = signingConfigs.getByName("debug")
         }
         release {
             isMinifyEnabled = true
