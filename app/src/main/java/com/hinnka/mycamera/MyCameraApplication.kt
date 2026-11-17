@@ -29,6 +29,9 @@ class MyCameraApplication : Application() {
         super.onCreate()
         StartupTrace.mark("Application.onCreate start")
         instance = this
+        applicationScope.launch(Dispatchers.IO) {
+            removeLegacyDetectorFiles()
+        }
         applicationScope.launch(Dispatchers.Default) {
             RawSceneExposureEstimator.warmUp(this@MyCameraApplication)
         }
@@ -78,6 +81,18 @@ class MyCameraApplication : Application() {
                 }
         }
         StartupTrace.mark("Application.onCreate end")
+    }
+
+    private fun removeLegacyDetectorFiles() {
+        listOf(
+            "efficientdet_lite0_coco_person.tflite",
+            "efficientdet_lite0_coco_person.tflite.download",
+        ).forEach { fileName ->
+            val staleFile = java.io.File(filesDir, fileName)
+            if (staleFile.exists() && !staleFile.delete()) {
+                PLog.w(TAG, "Unable to remove obsolete detector file: $fileName")
+            }
+        }
     }
 
     private fun recoverPrivateGalleryIndex() {
