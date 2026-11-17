@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.*
+import com.hinnka.mycamera.camera.quickswitch.PreviewStreamSource
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.data.CameraFeaturePreferencesUpdate
 import com.hinnka.mycamera.data.CaptureButtonStyle
