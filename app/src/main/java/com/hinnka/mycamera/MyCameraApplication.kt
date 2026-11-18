@@ -21,9 +21,11 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MyCameraApplication : Application() {
     private val applicationScope = MainScope()
+    private val deferredPostPreviewWorkStarted = AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
@@ -31,9 +33,6 @@ class MyCameraApplication : Application() {
         instance = this
         applicationScope.launch(Dispatchers.IO) {
             removeLegacyDetectorFiles()
-        }
-        applicationScope.launch(Dispatchers.Default) {
-            RawSceneExposureEstimator.warmUp(this@MyCameraApplication)
         }
         applicationScope.launch(Dispatchers.IO) {
             runCatching {
@@ -57,7 +56,6 @@ class MyCameraApplication : Application() {
         phantomService = StartupTrace.measure("PhantomService()") {
             PhantomService(this)
         }
-        recoverPrivateGalleryIndex()
 //        AppUpdateManager.startSilentUpdate(this)
 
         val userPreferencesRepository = contentRepository.userPreferencesRepository
@@ -81,6 +79,23 @@ class MyCameraApplication : Application() {
                 }
         }
         StartupTrace.mark("Application.onCreate end")
+    }
+
+    /**
+     * Start CPU/disk work that does not contribute to the first camera frame.
+     * The hook is idempotent and is called after the first preview has rendered.
+     */
+    fun startDeferredPostPreviewWork() {
+        if (!deferredPostPreviewWorkStarted.compareAndSet(false, true)) return
+        StartupTrace.mark("Application deferred post-preview work started")
+        applicationScope.launch(Dispatchers.Default) {
+            runCatching {
+                RawSceneExposureEstimator.warmUp(this@MyCameraApplication)
+            }.onFailure { error ->
+                PLog.w(TAG, "RAW scene estimator warm-up failed", error)
+            }
+        }
+        recoverPrivateGalleryIndex()
     }
 
     private fun removeLegacyDetectorFiles() {
