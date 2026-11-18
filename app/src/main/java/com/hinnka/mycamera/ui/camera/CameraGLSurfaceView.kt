@@ -23,6 +23,7 @@ import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 import com.hinnka.mycamera.video.VideoLogProfile
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -82,6 +83,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
         // 设置 SurfaceTexture 可用回调
         renderer.onSurfaceTextureAvailable = { surfaceTexture ->
+            StartupTrace.mark("CameraGLSurfaceView SurfaceTexture ready")
             // 在 GL 线程中创建 Surface
             currentSurface = Surface(surfaceTexture)
 
@@ -110,6 +112,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
 
         renderer.onFirstFrameRendered = {
+            StartupTrace.mark("CameraGLSurfaceView first preview frame rendered")
             post { onFirstPreviewFrame?.invoke() }
         }
 
