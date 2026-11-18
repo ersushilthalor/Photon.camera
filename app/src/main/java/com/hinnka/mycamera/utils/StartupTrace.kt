@@ -2,11 +2,12 @@ package com.hinnka.mycamera.utils
 
 import android.os.Process
 import android.os.SystemClock
+import com.hinnka.mycamera.BuildConfig
 import java.util.concurrent.atomic.AtomicBoolean
 
 object StartupTrace {
     private const val TAG = "StartupTrace"
-    const val ENABLED = false
+    const val ENABLED = BuildConfig.DEBUG
     private val processStartElapsedMs = Process.getStartElapsedRealtime()
     private val fullyDrawnReported = AtomicBoolean(false)
 
