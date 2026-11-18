@@ -1607,12 +1607,14 @@ private fun VideoSettingTile(
                 color = if (expanded) OnAccentColor.copy(alpha = 0.82f) else AccentColor,
                 fontWeight = FontWeight.SemiBold,
                 maxFontSize = 9.sp,
+                maxLines = 1,
                 modifier = Modifier.fillMaxWidth()
             )
             QuickSettingLabel(
                 text = summary,
                 color = if (expanded) OnAccentColor else Color.White,
                 maxFontSize = 10.sp,
+                maxLines = 1,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1659,7 +1661,8 @@ private fun VideoMenuToggleTile(
                     text = title,
                     color = Color.White.copy(alpha = alpha),
                     fontWeight = FontWeight.SemiBold,
-                    maxFontSize = 9.5.sp
+                    maxFontSize = 9.5.sp,
+                    maxLines = 1
                 )
                 Spacer(Modifier.width(3.dp))
                 Box(
@@ -1712,13 +1715,15 @@ private fun VideoMenuActionTile(
                 text = title,
                 color = AccentColor,
                 maxFontSize = 9.sp,
+                maxLines = 1,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.fillMaxWidth()
             )
             QuickSettingLabel(
                 text = value,
                 color = Color.White.copy(alpha = 0.72f),
-                maxFontSize = 8.5.sp
+                maxFontSize = 8.5.sp,
+                maxLines = 1
             )
         }
     }
@@ -2093,7 +2098,8 @@ private fun QuickSettingLabel(
     color: Color,
     modifier: Modifier = Modifier,
     fontWeight: FontWeight = FontWeight.Normal,
-    maxFontSize: TextUnit = 10.sp
+    maxFontSize: TextUnit = 10.sp,
+    maxLines: Int = 2
 ) {
     BasicText(
         text = text,
@@ -2104,7 +2110,7 @@ private fun QuickSettingLabel(
             fontSize = maxFontSize,
             lineHeight = 1.2.em
         ),
-        maxLines = 2,
+        maxLines = maxLines,
         autoSize = TextAutoSize.StepBased(minFontSize = 8.sp, maxFontSize = maxFontSize)
     )
 }
