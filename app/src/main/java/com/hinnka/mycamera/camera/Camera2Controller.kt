@@ -1169,6 +1169,9 @@ class Camera2Controller(private val context: Context) {
             request: CaptureRequest,
             failure: CaptureFailure,
         ) {
+            if (session === captureSession && _state.value.videoRecordingState.isRecording) {
+                videoRecorder.recordCaptureFailure()
+            }
             val flashTag = request.tag as? StillFlashRequestTag
             if (flashTag != null) {
                 val pending = stillFlashPrecapture ?: return
@@ -1176,6 +1179,17 @@ class Camera2Controller(private val context: Context) {
                     abortStillFlashPrecapture("request failed: frame=${failure.frameNumber} reason=${failure.reason}")
                 }
                 return
+            }
+        }
+
+        override fun onCaptureBufferLost(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            target: Surface,
+            frameNumber: Long,
+        ) {
+            if (session === captureSession && _state.value.videoRecordingState.isRecording) {
+                videoRecorder.recordCaptureBufferLost()
             }
         }
 
@@ -1214,6 +1228,9 @@ class Camera2Controller(private val context: Context) {
             }
 
             lastCaptureResult = result
+            if (session === captureSession && _state.value.videoRecordingState.isRecording) {
+                result.get(CaptureResult.SENSOR_TIMESTAMP)?.let(videoRecorder::recordSensorTimestamp)
+            }
             logVideoCaptureStats(result)
             if (session === captureSession) {
                 updateEnginePreviewSource(result)
@@ -1309,64 +1326,72 @@ class Camera2Controller(private val context: Context) {
                 }
             }
 
-            // 获取相机实际使用的参数
-            val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
-            val actualExposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
-            val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
-            // 判断是否为自动曝光模式（包括所有 AE_MODE_ON 的变体）
-            val isAutoExposure = aeMode == CaptureResult.CONTROL_AE_MODE_ON
-                    || aeMode == CaptureResult.CONTROL_AE_MODE_ON_AUTO_FLASH
-                    || aeMode == CaptureResult.CONTROL_AE_MODE_ON_ALWAYS_FLASH
-            val exposureCompensation = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
-            val awbMode = result.get(CaptureResult.CONTROL_AWB_MODE) ?: _state.value.awbMode
-            val whiteBalanceResult = readWhiteBalanceResult(result, awbMode)
-            lastWhiteBalanceResult = whiteBalanceResult
-            val actualAwbTemperature =
-                whiteBalanceResult.colorTemperature ?: whiteBalanceResult.gains?.let(::estimateKelvinFromRggbGains)
-            val actualAwbGains = whiteBalanceResult.gains?.toStateGains()
-            val awbRange = resolveAwbTemperatureRange()
-            val canAdjustWhiteBalance =
-                if (_state.value.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF) {
-                    manualWhiteBalanceAnchor != null
-                } else {
-                    canAdjustManualWhiteBalance(whiteBalanceResult)
-                }
-            val aperture = result.get(CaptureResult.LENS_APERTURE)
-            val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
-
-            // 关键修复：只在自动曝光模式下更新 ISO 和快门速度
-            // 手动模式下保持用户设置不变（因为预览使用的是限制后的曝光时间，不是用户设置的值）
-            _state.value = _state.value.copy(
-                iso = if (isAutoExposure && _state.value.isIsoAuto) actualIso ?: _state.value.iso else _state.value.iso,
-                shutterSpeed = if (isAutoExposure && _state.value.isShutterSpeedAuto) actualExposureTimeNs
-                    ?: _state.value.shutterSpeed else _state.value.shutterSpeed,
-                // In-flight results must not undo a user's WB mode change. A session without
-                // a manual anchor still reports the automatic fallback used by the request.
-                awbMode = if (_state.value.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF &&
-                    manualWhiteBalanceAnchor == null
-                ) awbMode else _state.value.awbMode,
-                actualAwbTemperature = actualAwbTemperature,
-                actualAwbTint = whiteBalanceResult.colorTint,
-                actualAwbGains = actualAwbGains,
-                canAdjustWhiteBalance = canAdjustWhiteBalance,
-                supportsCctWhiteBalance = supportsCctWhiteBalance(),
-                awbTemperatureMin = awbRange.lower,
-                awbTemperatureMax = awbRange.upper,
-                physicalAperture = aperture ?: _state.value.physicalAperture,
-                // 手动对焦保留用户目标值，避免镜头移动中的回报值改变后续拍摄和预览请求。
-                focusDistance = if (_state.value.isAutoFocus) focusDistance else _state.value.focusDistance
-            )
-            pendingRetainedAwbTemperature?.let { temperature ->
-                if (canAdjustManualWhiteBalance(whiteBalanceResult)) {
-                    setAwbTemperature(temperature)
-                    if (pendingRetainedAwbTemperature == null) {
-                        PLog.d(TAG, "Restored retained white balance: ${temperature}K")
+            // Capture callbacks remain frame-accurate for AF, AE triggers and EIS above.
+            // UI-facing exposure/WB metadata changes much more slowly, so publish at 10 Hz
+            // rather than rebuilding CameraState and notifying Compose for every sensor frame.
+            val metadataNowMs = SystemClock.elapsedRealtime()
+            if (metadataNowMs - lastCaptureMetadataUiUpdateMs >= 100L) {
+                lastCaptureMetadataUiUpdateMs = metadataNowMs
+                // 获取相机实际使用的参数
+                val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
+                val actualExposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+                // 判断是否为自动曝光模式（包括所有 AE_MODE_ON 的变体）
+                val isAutoExposure = aeMode == CaptureResult.CONTROL_AE_MODE_ON
+                        || aeMode == CaptureResult.CONTROL_AE_MODE_ON_AUTO_FLASH
+                        || aeMode == CaptureResult.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+                val exposureCompensation = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
+                val awbMode = result.get(CaptureResult.CONTROL_AWB_MODE) ?: _state.value.awbMode
+                val whiteBalanceResult = readWhiteBalanceResult(result, awbMode)
+                lastWhiteBalanceResult = whiteBalanceResult
+                val actualAwbTemperature =
+                    whiteBalanceResult.colorTemperature ?: whiteBalanceResult.gains?.let(::estimateKelvinFromRggbGains)
+                val actualAwbGains = whiteBalanceResult.gains?.toStateGains()
+                val awbRange = resolveAwbTemperatureRange()
+                val canAdjustWhiteBalance =
+                    if (_state.value.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF) {
+                        manualWhiteBalanceAnchor != null
+                    } else {
+                        canAdjustManualWhiteBalance(whiteBalanceResult)
+                    }
+                val aperture = result.get(CaptureResult.LENS_APERTURE)
+                val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
+    
+                // 关键修复：只在自动曝光模式下更新 ISO 和快门速度
+                // 手动模式下保持用户设置不变（因为预览使用的是限制后的曝光时间，不是用户设置的值）
+                _state.value = _state.value.copy(
+                    iso = if (isAutoExposure && _state.value.isIsoAuto) actualIso ?: _state.value.iso else _state.value.iso,
+                    shutterSpeed = if (isAutoExposure && _state.value.isShutterSpeedAuto) actualExposureTimeNs
+                        ?: _state.value.shutterSpeed else _state.value.shutterSpeed,
+                    // In-flight results must not undo a user's WB mode change. A session without
+                    // a manual anchor still reports the automatic fallback used by the request.
+                    awbMode = if (_state.value.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF &&
+                        manualWhiteBalanceAnchor == null
+                    ) awbMode else _state.value.awbMode,
+                    actualAwbTemperature = actualAwbTemperature,
+                    actualAwbTint = whiteBalanceResult.colorTint,
+                    actualAwbGains = actualAwbGains,
+                    canAdjustWhiteBalance = canAdjustWhiteBalance,
+                    supportsCctWhiteBalance = supportsCctWhiteBalance(),
+                    awbTemperatureMin = awbRange.lower,
+                    awbTemperatureMax = awbRange.upper,
+                    physicalAperture = aperture ?: _state.value.physicalAperture,
+                    // 手动对焦保留用户目标值，避免镜头移动中的回报值改变后续拍摄和预览请求。
+                    focusDistance = if (_state.value.isAutoFocus) focusDistance else _state.value.focusDistance
+                )
+                pendingRetainedAwbTemperature?.let { temperature ->
+                    if (canAdjustManualWhiteBalance(whiteBalanceResult)) {
+                        setAwbTemperature(temperature)
+                        if (pendingRetainedAwbTemperature == null) {
+                            PLog.d(TAG, "Restored retained white balance: ${temperature}K")
+                        }
                     }
                 }
             }
         }
     }
 
+    private var lastCaptureMetadataUiUpdateMs = 0L
     private var lastAfState: Int? = null
 
     private fun logVideoCaptureStats(result: TotalCaptureResult) {
@@ -5179,26 +5204,27 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun applyVideoFpsRange(builder: CaptureRequest.Builder, targetFps: Int) {
+        if (targetFps <= 0) return
         val characteristics = getActiveOpenCameraCharacteristics() ?: return
-        val availableRanges =
-            characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return
-        
-        // 寻找完全匹配的固定帧率区间，例如 [60, 60]
-        val exactRange = availableRanges.firstOrNull { it.lower == targetFps && it.upper == targetFps }
-        
-        val resolvedRange = if (exactRange != null) {
-            exactRange
-        } else {
-            // 如果设备未宣传 [60, 60]，但为了稳定吐出 60fps，我们强行构造并锁定固定区间 [targetFps, targetFps]
-            val forced = android.util.Range(targetFps, targetFps)
+        val availableRanges = characteristics.readMetadataOrNull(
+            CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES
+        ) ?: return
+
+        // Only submit an FPS range that the active camera explicitly advertises.
+        // Never manufacture [fps, fps]: some HALs reject it, while others silently
+        // ignore it and continue at a variable or lower frame rate.
+        val exactRange = availableRanges.firstOrNull {
+            it.lower == targetFps && it.upper == targetFps
+        }
+        if (exactRange == null) {
             PLog.w(
                 TAG,
-                "Camera characteristics do not advertise exact $targetFps fps range, forcing $forced. " +
+                "Skipping unsupported fixed $targetFps fps request. " +
                     "Advertised ranges=${availableRanges.joinToString()}"
             )
-            forced
+            return
         }
-        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, resolvedRange)
+        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, exactRange)
     }
 
     /**
@@ -8437,6 +8463,27 @@ class Camera2Controller(private val context: Context) {
         creativeRecipeParams: ColorRecipeParams? = null,
         orientationOffsetDegrees: Int = 0
     ) {
+        // CameraViewModel.capture() is called by the shutter UI. MediaCodec setup,
+        // renderer initialization and muxer creation are blocking operations, so
+        // serialize preparation on the camera worker instead of stalling Main.
+        val handler = cameraHandler ?: run {
+            onCameraError?.invoke(-1, "Camera background thread is unavailable.", false)
+            return
+        }
+        if (Looper.myLooper() !== handler.looper) {
+            if (!handler.post {
+                    startVideoRecording(
+                        creativeLutConfig = creativeLutConfig,
+                        creativeRecipeParams = creativeRecipeParams,
+                        orientationOffsetDegrees = orientationOffsetDegrees,
+                    )
+                }
+            ) {
+                onCameraError?.invoke(-1, "Unable to schedule video preparation.", false)
+            }
+            return
+        }
+
         if (_state.value.captureMode != CaptureMode.VIDEO ||
             _state.value.videoRecordingState.isRecording ||
             _state.value.videoRecordingState.isProcessing
@@ -8455,7 +8502,7 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
-        if (_state.value.videoCapabilities.availableFps.isEmpty()) {
+        if (_state.value.videoConfig.fps !in _state.value.videoCapabilities.availableFps) {
             onCameraError?.invoke(
                 -1,
                 context.getString(com.hinnka.mycamera.R.string.camera_video_fps_unavailable),
