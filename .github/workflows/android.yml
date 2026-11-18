@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - perf/camera-startup-4k30
   pull_request:
     branches:
       - main
