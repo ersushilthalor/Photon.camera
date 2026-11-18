@@ -32,6 +32,7 @@ import com.hinnka.mycamera.raw.RawEnginePreviewSource
 import com.hinnka.mycamera.raw.RawCameraCalibration
 import com.hinnka.mycamera.raw.RawColorCalibrationPolicy
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -1212,6 +1213,7 @@ class Camera2Controller(private val context: Context) {
 
             if (session === captureSession && _state.value.previewFirstFrameTimestampNs == null) {
                 result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestamp ->
+                    StartupTrace.mark("Camera2 first capture result", "sensorTimestampNs=$timestamp")
                     _state.update { it.copy(previewFirstFrameTimestampNs = timestamp) }
                 }
             }
@@ -2709,6 +2711,7 @@ class Camera2Controller(private val context: Context) {
     ) {
         val surfaceTexture = request.surfaceTexture
         val preserveVideoRecording = request.preserveVideoRecording
+        StartupTrace.mark("Camera2.openCameraNow start", "preserveRecording=$preserveVideoRecording")
         clearPointFocusState()
         val openGeneration = if (reuseCameraDevice == null) {
             ++cameraOpenGeneration
@@ -2780,6 +2783,7 @@ class Camera2Controller(private val context: Context) {
                     return
                 }
                 PLog.d(TAG, "Camera opened/reused: ${camera.id}")
+                StartupTrace.mark("Camera2.CameraDevice.onOpened", "cameraId=${camera.id}")
                 cameraDeviceLifecycle = CameraDeviceLifecycle.OPEN
                 cameraDevice = camera
                 if (dualCaptureEnabled && captureMode == CaptureMode.VIDEO) {
@@ -3258,6 +3262,7 @@ class Camera2Controller(private val context: Context) {
                 PLog.i(TAG, "Reusing CameraDevice ${reuseCameraDevice.id} for capture-mode session rebuild")
                 cameraStateCallback.onOpened(reuseCameraDevice)
             } else {
+                StartupTrace.mark("Camera2Manager.openCamera called", "cameraId=$openCameraId")
                 cameraManager.openCamera(openCameraId, cameraStateCallback, cameraHandler)
             }
 
@@ -4256,6 +4261,10 @@ class Camera2Controller(private val context: Context) {
             return
         }
         captureSession = session
+        StartupTrace.mark(
+            "Camera2 capture session configured",
+            "mode=${_state.value.captureMode}, sessionGeneration=$sessionGeneration"
+        )
         _state.update { it.copy(previewFirstFrameTimestampNs = null) }
 
         try {
