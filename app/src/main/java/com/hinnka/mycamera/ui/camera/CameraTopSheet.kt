@@ -182,6 +182,7 @@ fun CameraTopSheet(
                 .padding(top = if (captureMode == CaptureMode.VIDEO) 24.dp else 26.dp)
                 .autoRotate()
                 .padding(horizontal = if (captureMode == CaptureMode.VIDEO) 20.dp else 24.dp)
+                .padding(bottom = 10.dp)
         ) {
             Column {
                 if (captureMode == CaptureMode.PHOTO) {
