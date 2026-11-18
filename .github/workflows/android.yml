@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -52,6 +55,9 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
+      - name: Run JVM unit tests
+        run: ./gradlew --no-daemon :app:testDebugUnitTest --stacktrace
+
       - name: Build Debug APK
         run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
 
@@ -64,6 +70,7 @@ jobs:
           sha256sum "$APK_PATH"
 
       - name: Publish APK to GitHub Releases
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
