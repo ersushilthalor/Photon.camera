@@ -28,6 +28,7 @@ import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.DEFAULT_CAMERA_MENU_TRANSPARENCY
 import com.hinnka.mycamera.data.CaptureSoundRepository
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.data.DevelopAnimationStyle
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.data.PreferenceUpdateValue
