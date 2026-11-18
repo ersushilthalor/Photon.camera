@@ -7,7 +7,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object StartupTrace {
     private const val TAG = "StartupTrace"
-    const val ENABLED = BuildConfig.DEBUG
+    val ENABLED = BuildConfig.DEBUG
     private val processStartElapsedMs = Process.getStartElapsedRealtime()
     private val fullyDrawnReported = AtomicBoolean(false)
 
