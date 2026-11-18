@@ -73,6 +73,11 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            // Keep CI's downloadable debug APK optimized just like the release build.
+            // R8 removes unreachable code and resource shrinking removes unused resources.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
