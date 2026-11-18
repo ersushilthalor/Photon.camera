@@ -4,13 +4,13 @@ import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
-import android.media.MediaRecorder
 import android.os.Build
 import android.util.Range
 import android.util.Size
 import com.hinnka.mycamera.camera.readMetadataOrNull
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.abs
+import kotlin.math.ceil
 
 object VideoCapabilitiesResolver {
 
@@ -38,22 +38,11 @@ object VideoCapabilitiesResolver {
         val streamConfigMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val previewOutputSizes = streamConfigMap?.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
         val yuvOutputSizes = streamConfigMap?.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()
-        // Dedicated recording uses a SurfaceTexture input, including full-sensor sizes
-        // that may not be advertised for MediaRecorder.
-        val advertisedRecordingSizes = resolveRecordingOutputSizes(characteristics)
-        // Some front/ultra-wide sensors expose an ~8 MP 4:3 SurfaceTexture stream
-        // but do not advertise a 3840x2160 MediaRecorder stream. The app records
-        // through its SurfaceTexture + GL renderer, so use that sensor stream as
-        // the source and let the renderer crop/scale to the selected 4K output.
-        val hasNativeUhdRecorderSize = advertisedRecordingSizes.any {
-            maxOf(it.width, it.height) >= VideoResolutionPreset.UHD_2160P.longEdge
-        }
-        val hasEightMpFourThreeSource = previewOutputSizes.any(::isEightMpFourThreeSource)
-        val recordingOutputSizes = when {
-            requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE -> previewOutputSizes
-            !hasNativeUhdRecorderSize && hasEightMpFourThreeSource -> previewOutputSizes
-            else -> advertisedRecordingSizes
-        }
+        // VideoRecorder receives camera frames through a SurfaceTexture, not a
+        // MediaRecorder surface. Therefore the encoder output preset must be backed
+        // by a matching PRIVATE/SurfaceTexture camera stream. Do not advertise an
+        // encoded 4K size when the camera source would have to be upscaled.
+        val recordingOutputSizes = previewOutputSizes
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         val openGateAspect = resolveOpenGatePortraitAspectRatio(activeArray, sensorOrientation)
@@ -93,21 +82,29 @@ object VideoCapabilitiesResolver {
             requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
         )
         val cameraInputSize = cameraInputSizesByResolution[resolvedResolution] ?: fallbackPreviewSize
-        // Keep the live video viewfinder on the same selected-resolution camera stream.
-        // The 1080p-sized preview is only a fallback when no matching input stream is available.
-        val previewSize = cameraInputSize
-
-        val availableFps = resolveAvailableFps(
-            characteristics = characteristics,
-            cameraInputSize = cameraInputSize,
-            previewSize = previewSize
-        )
-        val resolvedFps = requestedConfig.fps.takeIf { availableFps.contains(it) }
-            ?: availableFps.firstOrNull()
-            ?: VideoFpsPreset.FPS_30
+        // Keep the encoder's camera input at the selected capture size, but use a
+        // separate 1080p-class stream for the on-screen viewfinder. The latter is
+        // display-bound and does not need a second full-resolution pixel workload.
+        val previewSize = fallbackPreviewSize
 
         val enhancedCameraInputSize =
             enhancedStabilizationInputSizesByResolution[resolvedResolution]
+        val availableFps = if (cameraInputSizesByResolution.isEmpty()) {
+            emptyList()
+        } else {
+            resolveAvailableFps(
+                characteristics = characteristics,
+                cameraInputSize = cameraInputSize,
+                previewSize = previewSize,
+                enhancedStabilizationInputSize = enhancedCameraInputSize.takeIf {
+                    algorithmicStabilizationSupported
+                }
+            )
+        }
+        val resolvedFps = requestedConfig.fps.takeIf { availableFps.contains(it) }
+            ?: availableFps.firstOrNull()
+            ?: requestedConfig.fps
+
         val enhancedStabilizationAvailable = algorithmicStabilizationSupported &&
             enhancedCameraInputSize != null
 
@@ -230,25 +227,7 @@ object VideoCapabilitiesResolver {
             .firstOrNull()
         if (nativeSize != null) return nativeSize
 
-        // UHD is an encoded output preset, not a requirement that the sensor itself
-        // produce 8.3 MP. If the camera exposes a genuine ~8 MP 4:3 source, allow it
-        // and crop/scale in RealtimeVideoRenderer to the 4K 16:9 (or portrait 9:16)
-        // encoder surface. Do not offer this fallback for smaller sensors.
-        if (preset == VideoResolutionPreset.UHD_2160P) {
-            return outputSizes
-                .filter(::isEightMpFourThreeSource)
-                .maxByOrNull { it.width.toLong() * it.height.toLong() }
-        }
         return null
-    }
-
-    private fun isEightMpFourThreeSource(size: Size): Boolean {
-        if (size.width <= 0 || size.height <= 0) return false
-        val pixels = size.width.toLong() * size.height.toLong()
-        val aspect = getPortraitAspectRatio(size)
-        return pixels >= 7_500_000L &&
-            pixels < 12_000_000L &&
-            abs(aspect - (3f / 4f)) <= 0.04f
     }
 
     private fun findFixedPreviewOutputSize(
@@ -288,19 +267,21 @@ object VideoCapabilitiesResolver {
     private fun resolveAvailableFps(
         characteristics: CameraCharacteristics,
         cameraInputSize: Size,
-        previewSize: Size
+        previewSize: Size,
+        enhancedStabilizationInputSize: Size?
     ): List<VideoFpsPreset> {
-        val outputRanges = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            .orEmpty()
-        val minFrameDurationNs = resolveMinFrameDurationNs(characteristics, cameraInputSize, previewSize)
-        val maxFpsByDuration = if (minFrameDurationNs > 0) {
-            (1_000_000_000.0 / minFrameDurationNs.toDouble()).toInt()
-        } else {
-            Int.MAX_VALUE
-        }
+        val outputRanges = characteristics.readMetadataOrNull(
+            CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES
+        ).orEmpty()
+        val minFrameDurationNs = resolveMinFrameDurationNs(
+            characteristics = characteristics,
+            cameraInputSize = cameraInputSize,
+            previewSize = previewSize,
+            enhancedStabilizationInputSize = enhancedStabilizationInputSize
+        )
 
         // 120 fps is exposed only through Camera2 constrained-high-speed sessions.
-        // The regular AE range and regular stream-duration checks are not sufficient.
+        // A range that merely overlaps 120 is not proof of fixed 120 fps operation.
         val highSpeed120Supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
             cameraInputSize == previewSize &&
             maxOf(cameraInputSize.width, cameraInputSize.height) == VideoResolutionPreset.FHD_1080P.longEdge &&
@@ -310,28 +291,16 @@ object VideoCapabilitiesResolver {
                     ?: return@runCatching false
                 val highSpeedSize = map.highSpeedVideoSizes?.any { it == cameraInputSize } == true
                 highSpeedSize && map.getHighSpeedVideoFpsRangesFor(cameraInputSize).any { range ->
-                    range.lower <= 120 && range.upper >= 120
+                    range.lower == 120 && range.upper == 120
                 }
             }.getOrDefault(false)
 
         val standardPresets = VideoFpsPreset.entries.filter { it != VideoFpsPreset.FPS_120 }
-        val strictAvailableFps = standardPresets.filter { preset ->
-            preset.fps <= maxFpsByDuration && outputRanges.any { range ->
-                supportsFps(range, preset.fps)
-            }
-        }
-
-        val standardAvailableFps = if (strictAvailableFps.isNotEmpty()) {
-            val advertisedMaxFps = strictAvailableFps.maxOf { it.fps }
-            if (advertisedMaxFps >= 50) {
-                strictAvailableFps
-            } else {
-                val optimisticFps = standardPresets.filter { it.fps > advertisedMaxFps }
-                (strictAvailableFps + optimisticFps).distinctBy { it.fps }
-            }
-        } else {
-            listOf(VideoFpsPreset.FPS_30)
-        }
+        val standardAvailableFps = resolveStrictAvailableFpsPresets(
+            presets = standardPresets,
+            advertisedRanges = outputRanges.map { it.lower to it.upper },
+            minFrameDurationNs = minFrameDurationNs
+        )
 
         return if (highSpeed120Supported) {
             (standardAvailableFps + VideoFpsPreset.FPS_120).distinctBy { it.fps }.sortedBy { it.fps }
@@ -340,29 +309,14 @@ object VideoCapabilitiesResolver {
         }
     }
 
-    private fun supportsFps(range: Range<Int>, fps: Int): Boolean {
-        return range.upper >= fps && range.lower <= fps
-    }
-
-    private fun resolveRecordingOutputSizes(characteristics: CameraCharacteristics): List<Size> {
-        val streamConfigMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        return try {
-            streamConfigMap?.getOutputSizes(MediaRecorder::class.java)?.toList().orEmpty()
-        } catch (e: Exception) {
-            PLog.w(TAG, "Failed to query MediaRecorder output sizes: ${e.message}")
-            emptyList()
-        }.ifEmpty {
-            streamConfigMap?.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
-        }
-    }
-
     private fun resolveMinFrameDurationNs(
         characteristics: CameraCharacteristics,
         cameraInputSize: Size,
-        previewSize: Size
+        previewSize: Size,
+        enhancedStabilizationInputSize: Size?
     ): Long {
         val streamConfigMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        if (streamConfigMap == null) return 0L
+            ?: return 0L
 
         val cameraInputDurationNs = queryMinFrameDurationNs(
             streamConfigMap = streamConfigMap,
@@ -376,7 +330,30 @@ object VideoCapabilitiesResolver {
             outputSize = previewSize,
             label = "preview SurfaceTexture"
         )
-        return maxOf(cameraInputDurationNs, previewDurationNs)
+        if (cameraInputDurationNs <= 0L || previewDurationNs <= 0L) return 0L
+
+        var requiredFrameDurationNs = maxOf(cameraInputDurationNs, previewDurationNs)
+        enhancedStabilizationInputSize?.let { yuvSize ->
+            val yuvMinFrameDurationNs = runCatching {
+                streamConfigMap.getOutputMinFrameDuration(ImageFormat.YUV_420_888, yuvSize)
+            }.getOrElse {
+                PLog.w(TAG, "Failed to query EIS+ YUV min frame duration for $yuvSize: ${it.message}")
+                0L
+            }
+            val yuvStallDurationNs = runCatching {
+                streamConfigMap.getOutputStallDuration(ImageFormat.YUV_420_888, yuvSize)
+            }.getOrElse {
+                PLog.w(TAG, "Failed to query EIS+ YUV stall duration for $yuvSize: ${it.message}")
+                0L
+            }
+            if (yuvMinFrameDurationNs <= 0L) return 0L
+            requiredFrameDurationNs = maxOf(
+                requiredFrameDurationNs,
+                yuvMinFrameDurationNs,
+                yuvStallDurationNs
+            )
+        }
+        return requiredFrameDurationNs
     }
 
     private fun <T> queryMinFrameDurationNs(
@@ -397,5 +374,27 @@ object VideoCapabilitiesResolver {
         val width = minOf(size.width, size.height).coerceAtLeast(1)
         val height = maxOf(size.width, size.height).coerceAtLeast(1)
         return width.toFloat() / height.toFloat()
+    }
+}
+
+/**
+ * Returns only rates that the HAL explicitly advertises as fixed-rate ranges and
+ * whose slowest configured output stream can sustain the requested frame period.
+ *
+ * A variable AE range such as 15..30 is deliberately not treated as fixed 30 fps.
+ * An unknown (zero) minimum frame duration is also not treated as proof of support.
+ */
+internal fun resolveStrictAvailableFpsPresets(
+    presets: List<VideoFpsPreset>,
+    advertisedRanges: List<Pair<Int, Int>>,
+    minFrameDurationNs: Long
+): List<VideoFpsPreset> {
+    if (minFrameDurationNs <= 0L) return emptyList()
+    return presets.filter { preset ->
+        val hasExactFixedRange = advertisedRanges.any { (lower, upper) ->
+            lower == preset.fps && upper == preset.fps
+        }
+        val maximumFramePeriodNs = ceil(1_000_000_000.0 / preset.fps.toDouble()).toLong()
+        hasExactFixedRange && minFrameDurationNs <= maximumFramePeriodNs
     }
 }
