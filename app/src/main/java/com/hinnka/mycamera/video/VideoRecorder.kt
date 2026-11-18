@@ -19,6 +19,7 @@ import android.os.SystemClock
 import android.util.Size
 import android.view.Surface
 import androidx.core.app.ActivityCompat
+import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.lut.RealtimeVideoRenderer
 import com.hinnka.mycamera.video.DualCaptureLayout
 import com.hinnka.mycamera.lut.VideoColorEffectLayer
@@ -91,6 +92,7 @@ class VideoRecorder(
     )
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val captureDiagnostics = VideoCaptureDiagnostics()
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val renderDispatcher: ExecutorCoroutineDispatcher =
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
@@ -324,6 +326,7 @@ class VideoRecorder(
             }
         }
         isRecording = true
+        captureDiagnostics.begin(fps)
         PLog.d(
             TAG,
             "Video recording prepared: encoder=${requestedSize.width}x${requestedSize.height}, " +
@@ -515,6 +518,18 @@ class VideoRecorder(
 
     fun isRecording(): Boolean = isRecording && !stopRequested
 
+    fun recordSensorTimestamp(timestampNs: Long) {
+        captureDiagnostics.onSensorTimestamp(timestampNs)
+    }
+
+    fun recordCaptureFailure() {
+        captureDiagnostics.onCaptureFailed()
+    }
+
+    fun recordCaptureBufferLost() {
+        captureDiagnostics.onCaptureBufferLost()
+    }
+
     fun setPreferredAudioInputId(audioInputId: String) {
         preferredAudioInputId = audioInputId.ifBlank { VIDEO_AUDIO_INPUT_AUTO }
     }
@@ -639,6 +654,8 @@ class VideoRecorder(
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 setInteger(MediaFormat.KEY_BIT_RATE, videoBitrate)
                 setInteger(MediaFormat.KEY_FRAME_RATE, requestedFps)
+                // Tell the codec the sustained processing rate expected from the GL input.
+                setFloat(MediaFormat.KEY_OPERATING_RATE, requestedFps.toFloat())
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
                 setInteger(MediaFormat.KEY_PRIORITY, 0)
                 setInteger(MediaFormat.KEY_BITRATE_MODE, bitrateMode)
@@ -1253,6 +1270,9 @@ class VideoRecorder(
                     return false
                 }
                 if (outputBuffer != null && bufferInfo.size > 0) {
+                    if (isVideo) {
+                        captureDiagnostics.onEncoderPresentationTime(bufferInfo.presentationTimeUs)
+                    }
                     writeSample(
                         isVideo = isVideo,
                         buffer = outputBuffer,
@@ -1590,6 +1610,7 @@ class VideoRecorder(
 
     private suspend fun cleanup() {
         releaseCaptureResources()
+        captureDiagnostics.finish()
 
         resetMuxerState()
         finishCallback = null
