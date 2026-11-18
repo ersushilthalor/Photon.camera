@@ -55,9 +55,11 @@ fun PhotonCameraTheme(
     }
     val accentArgb by accentFlow.collectAsState(initial = AppAppearance.DEFAULT_ACCENT_COLOR)
     val uiStyle by uiStyleFlow.collectAsState(initial = "ORIGINAL")
-    val accent = when (uiStyle) {
-        "OPPO" -> Color(0xFFFF8A00)
-        "ONE_UI" -> Color(0xFFFFFFFF)
+    val hasCustomAccent = accentArgb != AppAppearance.DEFAULT_ACCENT_COLOR
+    val accent = when {
+        hasCustomAccent -> Color(accentArgb)
+        uiStyle == "OPPO" -> Color(0xFFFF8A00)
+        uiStyle == "ONE_UI" -> Color(0xFFFFFFFF)
         else -> Color(accentArgb)
     }
     val baseColorScheme = when {
