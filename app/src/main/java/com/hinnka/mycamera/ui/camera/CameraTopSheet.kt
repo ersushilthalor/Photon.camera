@@ -670,7 +670,7 @@ fun CameraTopSheet(
                             .clickable(onClick = onMoreSettingsClick)
                             .padding(
                                 horizontal = 14.dp,
-                                vertical = if (captureMode == CaptureMode.VIDEO) 7.dp else 6.dp
+                                vertical = if (captureMode == CaptureMode.VIDEO) 4.5.dp else 6.dp
                             ),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
