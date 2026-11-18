@@ -8195,13 +8195,11 @@ class Camera2Controller(private val context: Context) {
             PLog.i(TAG, "Special Video unavailable: no selected camera")
             return null
         }
-        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK ||
-            (current.lensType != LensType.BACK_MAIN && abs(current.intrinsicZoomRatio - 1f) > 0.15f)
-        ) {
+        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK) {
             PLog.i(
                 TAG,
-                "Special Video unavailable: select the rear 1x main camera first " +
-                    "(camera=${current.cameraId}, lens=${current.lensType}, zoom=${current.intrinsicZoomRatio})"
+                "Special Video unavailable: select a rear camera first " +
+                    "(camera=${current.cameraId}, facing=${current.lensFacing})"
             )
             return null
         }
@@ -8251,24 +8249,35 @@ class Camera2Controller(private val context: Context) {
                 continue
             }
 
+            // A logical camera's focal metadata normally describes its primary/main sensor.
+            // Use that as the reference first; the app's intrinsicZoomRatio may have been
+            // calculated against an ultra-wide sensor when Android enumerates it first.
+            val logicalMainFocalLength = runCatching {
+                val focalLengths = logical.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                val sensorSize = logical.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                val focal = focalLengths?.firstOrNull()?.takeIf { it > 0f }
+                val diagonal = sensorSize?.let {
+                    kotlin.math.sqrt((it.width * it.width + it.height * it.height).toDouble()).toFloat()
+                }?.takeIf { it > 0f }
+                if (focal != null && diagonal != null) focal * 43.2666f / diagonal else null
+            }.getOrNull()
             val discoveredMain = state.availableCameras
                 .filter {
                     it.cameraId in physicalIds && it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
-                        !it.isVirtualIszLens && !it.isCustomLensId
+                        it.lensType == LensType.BACK_MAIN && !it.isVirtualIszLens && !it.isCustomLensId
                 }
-                .minByOrNull {
-                    val penalty = if (it.logicalCameraId == logicalId) 0f else 0.05f
-                    abs(it.intrinsicZoomRatio - 1f) + penalty
-                }
+                .firstOrNull()
                 ?.cameraId
-            val mainId = when {
-                current.cameraId in physicalIds -> current.cameraId
-                discoveredMain != null -> discoveredMain
-                else -> physicalLenses.minByOrNull {
-                    abs(it.focalLength35mmEquivalent - current.focalLength35mmEquivalent)
-                }?.cameraId
+            val selectedMain = current.cameraId.takeIf { it in physicalIds && current.lensType == LensType.BACK_MAIN }
+            val mainLens = when {
+                logicalMainFocalLength != null -> physicalLenses.minByOrNull {
+                    abs(it.focalLength35mmEquivalent - logicalMainFocalLength)
+                }
+                selectedMain != null -> physicalLenses.firstOrNull { it.cameraId == selectedMain }
+                discoveredMain != null -> physicalLenses.firstOrNull { it.cameraId == discoveredMain }
+                else -> physicalLenses.sortedBy { it.focalLength35mmEquivalent }
+                    .getOrNull(physicalLenses.size / 2)
             } ?: continue
-            val mainLens = physicalLenses.firstOrNull { it.cameraId == mainId } ?: continue
             val ultraWide = physicalLenses
                 .filter { it.cameraId != mainId }
                 .map { lens -> lens to (lens.focalLength35mmEquivalent / mainLens.focalLength35mmEquivalent) }
@@ -8285,9 +8294,11 @@ class Camera2Controller(private val context: Context) {
             PLog.i(
                 TAG,
                 "Special Video Camera2 pair resolved: logical=${pair.logicalCameraId}, " +
+                    "logicalMainFocal=${logicalMainFocalLength}mmEq, " +
                     "main=${pair.mainPhysicalCameraId}@${mainLens.focalLength35mmEquivalent}mmEq, " +
                     "ultraWide=${pair.ultraWidePhysicalCameraId}@${ultraWide.first.focalLength35mmEquivalent}mmEq, " +
                     "relative=${pair.ultraWideRelativeFocalLength}, " +
+                    "allRearPhysicalLenses=${physicalLenses.joinToString { "${it.cameraId}@${it.focalLength35mmEquivalent}mmEq" }}, " +
                     "availablePhysicalIds=$physicalIds"
             )
             return pair
