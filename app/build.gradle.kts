@@ -73,6 +73,11 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            // Run the same R8 code shrinking and resource shrinking in CI's
+            // debug APK so the artifact published by GitHub Actions is minified.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
