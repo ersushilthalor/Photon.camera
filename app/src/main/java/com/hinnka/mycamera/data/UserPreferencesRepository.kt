@@ -282,7 +282,7 @@ data class UserPreferences(
     val iszLensConfigs: List<IszLensConfig> = emptyList(), // 用户新增的 ISZ 虚拟镜头
     val preferredMainCameraId: String? = null, // 用户选择的主摄 ID
     val preferredMacroCameraId: String? = null, // 用户选择的微距镜头 ID
-    val enableLogicalMultiCameraDiscovery: Boolean = false, // 是否自动探测逻辑多摄物理镜头绑定
+    val enableLogicalMultiCameraDiscovery: Boolean = true, // Discover logical physical-camera bindings by default for multi-lens capture features
     val logicalCameraBindingWhitelist: List<String> = emptyList(), // 强制启用的逻辑/物理镜头绑定，格式 logical/physical
     val hiddenFocalLengths: List<Float> = emptyList(), // 隐藏的焦段 (35mm等效)
     val referencePhotoUrl: String? = null,
