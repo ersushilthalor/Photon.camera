@@ -873,8 +873,17 @@ class CameraDiscovery(private val context: Context) {
         return try {
             runBlocking {
                 val preferences = userPreferencesRepository.userPreferences.firstOrNull()
+                if (preferences?.enableLogicalMultiCameraDiscovery == false) {
+                    PLog.i(
+                        TAG,
+                        "Logical discovery is disabled in saved preferences; enabling physical bindings " +
+                            "because Special Video requires a logical 1x/0.5x camera pair"
+                    )
+                }
                 LogicalCameraDiscoveryConfig(
-                    autoDiscoveryEnabled = preferences?.enableLogicalMultiCameraDiscovery ?: true,
+                    // Physical-camera binding is a prerequisite for Special Video, so an older
+                    // persisted false value must not silently hide the pair from camera discovery.
+                    autoDiscoveryEnabled = true,
                     forcedBindings = parseLogicalCameraBindingRequests(
                         preferences?.logicalCameraBindingWhitelist ?: emptyList()
                     )
@@ -1427,7 +1436,10 @@ class CameraDiscovery(private val context: Context) {
 
         val existingHasPhysicalBinding = existing.physicalCameras.isNotEmpty()
         val candidateHasPhysicalBinding = candidate.physicalCameras.isNotEmpty()
-        return existingHasPhysicalBinding && !candidateHasPhysicalBinding
+        // When two entries describe the same physical focal length, keep the one that
+        // knows its parent logical CameraDevice. The previous condition was inverted
+        // and consistently preferred the unbound entry, breaking Special Video's pair lookup.
+        return !existingHasPhysicalBinding && candidateHasPhysicalBinding
     }
 
     private fun isSameFocalLength(firstZoomRatio: Float, secondZoomRatio: Float): Boolean {
