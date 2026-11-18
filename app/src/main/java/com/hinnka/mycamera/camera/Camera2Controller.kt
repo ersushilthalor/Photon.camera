@@ -66,6 +66,8 @@ import com.hinnka.mycamera.video.VideoLogLutMode
 import com.hinnka.mycamera.video.DualCaptureLayout
 import com.hinnka.mycamera.video.VideoRecorder
 import com.hinnka.mycamera.video.SpatialVideoStore
+import com.hinnka.mycamera.video.SpatialVideoPhysicalCameraCandidate
+import com.hinnka.mycamera.video.resolveSpatialVideoPhysicalCameraPair
 import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoRecordingState
@@ -8162,9 +8164,9 @@ class Camera2Controller(private val context: Context) {
 
         val state = _state.value
         val current = state.getCurrentCameraInfo() ?: return null
-        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK ||
-            abs(current.intrinsicZoomRatio - 1f) > 0.15f
-        ) {
+        // Special Video resolves both sensors from the logical rear camera.
+        // The selected physical lens may be 0.5x; it must not constrain the pair.
+        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK) {
             return null
         }
 
@@ -8198,9 +8200,26 @@ class Camera2Controller(private val context: Context) {
             return focalLength * 43.2666f / diagonal
         }
 
-        val referenceFocalLength = equivalentFocalLength(logicalCharacteristics)
-            ?: current.focalLength35mmEquivalent.takeIf { it > 0f }
         val discoveredById = state.availableCameras.associateBy { it.cameraId }
+        // Prefer the discovered 1x lens as the focal-length reference. Never use the
+        // selected lens unconditionally: an ultra-wide selection would normalize itself to 1x.
+        val discoveredMainReferenceFocalLength = state.availableCameras
+            .asSequence()
+            .filter {
+                it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                    it.logicalCameraId == logicalId &&
+                    !it.isVirtualIszLens && !it.isCustomLensId &&
+                    it.focalLength35mmEquivalent > 0f &&
+                    it.intrinsicZoomRatio.isFinite() && it.intrinsicZoomRatio > 0f
+            }
+            .minByOrNull { abs(it.intrinsicZoomRatio - 1f) }
+            ?.takeIf { abs(it.intrinsicZoomRatio - 1f) <= 0.15f }
+            ?.focalLength35mmEquivalent
+        val referenceFocalLength = discoveredMainReferenceFocalLength
+            ?: equivalentFocalLength(logicalCharacteristics)
+            ?: current.focalLength35mmEquivalent.takeIf {
+                abs(current.intrinsicZoomRatio - 1f) <= 0.15f && it > 0f
+            }
 
         val physicalCandidates = physicalIds.mapNotNull { physicalId ->
             val characteristics = runCatching {
@@ -8222,16 +8241,26 @@ class Camera2Controller(private val context: Context) {
             } ?: return@mapNotNull null
 
             if (!zoomRatio.isFinite() || zoomRatio <= 0f) return@mapNotNull null
-            physicalId to zoomRatio
+            SpatialVideoPhysicalCameraCandidate(
+                cameraId = physicalId,
+                isBackFacing = facing == CameraCharacteristics.LENS_FACING_BACK,
+                intrinsicZoomRatio = zoomRatio,
+            )
         }
 
-        val main = physicalCandidates.minByOrNull { abs(it.second - 1f) }
-            ?.takeIf { abs(it.second - 1f) <= 0.15f } ?: return null
-        val ultraWide = physicalCandidates.filter { it.second in 0.2f..0.85f }
-            .minByOrNull { it.second } ?: return null
+        val pair = resolveSpatialVideoPhysicalCameraPair(
+            selectedCameraIsBackFacing = true,
+            candidates = physicalCandidates,
+        ) ?: return null
 
-        if (main.first == ultraWide.first) return null
-        return Triple(logicalId, main.first, ultraWide.first)
+        PLog.i(
+            TAG,
+            "Special Video rear pair resolved from selected=${current.cameraId} " +
+                "(selectedZoom=${current.intrinsicZoomRatio}): logical=$logicalId, " +
+                "main1x=${pair.mainCameraId}, ultraWide=${pair.ultraWideCameraId}, " +
+                "referenceFocalLength35mm=$referenceFocalLength"
+        )
+        return Triple(logicalId, pair.mainCameraId, pair.ultraWideCameraId)
     }
 
     fun isSpatialVideoSupported(): Boolean = resolveSpatialVideoCameraPair() != null
