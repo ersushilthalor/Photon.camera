@@ -3489,6 +3489,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun isDualCaptureSupported(): Boolean = cameraController.isDualCaptureSupported()
 
+    fun isSpatialVideoSupported(): Boolean = cameraController.isSpatialVideoSupported()
+
+    fun setSpatialVideoEnabled(enabled: Boolean) = cameraController.setSpatialVideoEnabled(enabled)
+
     fun setDualCaptureEnabled(enabled: Boolean) {
         cameraController.setDualCaptureEnabled(enabled)
     }

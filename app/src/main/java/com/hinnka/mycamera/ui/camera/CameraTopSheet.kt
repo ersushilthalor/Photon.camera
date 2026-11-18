@@ -100,6 +100,9 @@ fun CameraTopSheet(
     videoActionModeAvailable: Boolean,
     onVideoStabilizationModeChange: (VideoStabilizationMode) -> Unit,
     onVideoDualCaptureClick: () -> Unit,
+    specialVideoEnabled: Boolean = false,
+    specialVideoAvailable: Boolean = false,
+    onSpecialVideoToggle: () -> Unit = {},
     videoCodec: VideoCodec,
     onVideoCodecChange: (VideoCodec) -> Unit,
     videoAudioInputId: String,
@@ -226,7 +229,7 @@ fun CameraTopSheet(
                     Spacer(modifier = Modifier.height(5.dp))
 
                     QuickSettingGrid(
-                        columns = 4,
+                        columns = 5,
                         itemHeight = 52.dp,
                         horizontalSpacing = 5.dp,
                         verticalSpacing = 4.dp
@@ -601,6 +604,16 @@ fun CameraTopSheet(
                                 Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
                             },
                             onClick = onVideoDualCaptureClick,
+                            modifier = itemModifier
+                        )
+                        VideoMenuToggleTile(
+                            title = "SPECIAL VIDEO",
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
+                            checked = specialVideoEnabled,
+                            enabled = specialVideoAvailable,
+                            onClick = onSpecialVideoToggle,
                             modifier = itemModifier
                         )
                     }

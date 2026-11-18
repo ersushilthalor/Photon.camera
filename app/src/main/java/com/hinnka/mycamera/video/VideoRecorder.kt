@@ -2,6 +2,7 @@ package com.hinnka.mycamera.video
 
 import android.Manifest
 import android.content.Context
+import java.io.File
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.media.AudioFormat
@@ -151,6 +152,7 @@ class VideoRecorder(
     private var requestedFps = 30
     private var outputDateTakenMs: Long = 0L
     private var pendingVideoOutput: VideoMediaStoreWriter.PendingVideo? = null
+    private var privateOutputFile: File? = null
     private var muxer: MediaMuxer? = null
     private var videoTrackIndex = -1
     private var audioTrackIndex = -1
@@ -193,6 +195,9 @@ class VideoRecorder(
             isRecording && !stopRequested
         }
 
+    val pendingOutputUri: Uri?
+        get() = pendingVideoOutput?.uri
+
     val dualCaptureInputSurface: Surface?
         get() = renderer?.dualCaptureInputSurface.takeIf {
             isRecording && !stopRequested
@@ -216,6 +221,9 @@ class VideoRecorder(
         enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
         recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
         recordingTreeUri: String? = null,
+        privateOutputFile: File? = null,
+        recordAudio: Boolean = true,
+        sharedTimelineOriginUs: Long? = null,
         dualCaptureInputSize: Size? = null,
         dualCaptureSensorOrientationDegrees: Int = 0,
         dualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE,
@@ -268,6 +276,11 @@ class VideoRecorder(
         this.errorCallback = onError
         this.finishCallback = onFinished
         resetMuxerState()
+        this.privateOutputFile = privateOutputFile
+        this.audioEnabled = recordAudio
+        if (sharedTimelineOriginUs != null) {
+            synchronized(timelineLock) { timelineOriginUs = sharedTimelineOriginUs }
+        }
         isPaused = false
         statsWindowStartMs = 0L
         statsIncomingFrames = 0
@@ -286,7 +299,7 @@ class VideoRecorder(
             }
             rendererInitialized = true
             createMuxer()
-            audioEnabled = initAudioEncoder(startLoop = false)
+            audioEnabled = recordAudio && initAudioEncoder(startLoop = false)
             startDrains()
         } catch (e: Exception) {
             val retryAs8BitHlg = !rendererInitialized &&
@@ -314,7 +327,7 @@ class VideoRecorder(
                     initializeRealtimeRenderer()
                 }
                 createMuxer()
-                audioEnabled = initAudioEncoder(startLoop = false)
+                audioEnabled = recordAudio && initAudioEncoder(startLoop = false)
                 startDrains()
             } catch (fallbackError: Exception) {
                 PLog.e(TAG, "Failed to prepare 8-bit HLG fallback recording", fallbackError)
@@ -832,6 +845,18 @@ class VideoRecorder(
     }
 
     private fun createMuxer() {
+        val privateFile = privateOutputFile
+        if (privateFile != null) {
+            privateFile.parentFile?.mkdirs()
+            if (privateFile.exists() && !privateFile.delete()) {
+                throw IllegalStateException("Cannot replace private spatial video output")
+            }
+            muxer = MediaMuxer(privateFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4).apply {
+                setOrientationHint(requestedOrientationHintDegrees)
+                colorMetadataTrackIndex = VideoColorMetadata.addTrack(this)
+            }
+            return
+        }
         val output = VideoMediaStoreWriter.createPendingVideo(
             context = context,
             dateTakenMs = outputDateTakenMs,
@@ -1501,7 +1526,9 @@ class VideoRecorder(
     }
 
     private suspend fun finalizeOutput(): Uri? {
-        val output = pendingVideoOutput ?: return null
+        val output = pendingVideoOutput
+        val privateFile = privateOutputFile
+        if (output == null && privateFile == null) return null
         var muxerStopSucceeded = false
         synchronized(muxerLock) {
             if (!muxerStarted && videoFormat != null) {
@@ -1536,21 +1563,29 @@ class VideoRecorder(
         }
 
         try {
-            output.descriptor.close()
+            output?.descriptor?.close()
         } catch (_: Exception) {
         }
 
         if (!muxerStopSucceeded) {
-            VideoMediaStoreWriter.discardPendingVideo(context, output)
+            output?.let { VideoMediaStoreWriter.discardPendingVideo(context, it) }
+            privateFile?.delete()
             pendingVideoOutput = null
+            privateOutputFile = null
             return null
         }
 
-        val uri = VideoMediaStoreWriter.publishPendingVideo(context, output)
+        val uri = if (privateFile != null) {
+            if (privateFile.isFile && privateFile.length() > 0L) Uri.fromFile(privateFile) else null
+        } else {
+            output?.let { VideoMediaStoreWriter.publishPendingVideo(context, it) }
+        }
         if (uri == null) {
-            VideoMediaStoreWriter.discardPendingVideo(context, output)
+            output?.let { VideoMediaStoreWriter.discardPendingVideo(context, it) }
+            privateFile?.delete()
         }
         pendingVideoOutput = null
+        privateOutputFile = null
         return uri
     }
 
@@ -1622,6 +1657,8 @@ class VideoRecorder(
             VideoMediaStoreWriter.discardPendingVideo(context, output)
         }
         pendingVideoOutput = null
+        privateOutputFile?.delete()
+        privateOutputFile = null
         isRecording = false
         stopRequested = false
     }
@@ -1680,6 +1717,8 @@ class VideoRecorder(
         }
         videoEncoder = null
         preparedEncoderColorConfig = null
+        privateOutputFile?.delete()
+        privateOutputFile = null
         try {
             audioRecord?.stop()
         } catch (_: Exception) {
