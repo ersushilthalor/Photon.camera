@@ -409,7 +409,9 @@ fun CameraTopSheet(
                         verticalSpacing = 5.dp
                     ) { itemModifier ->
                         VideoSettingTile(
-                            icon = Icons.Default.GraphicEq,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.BarChart, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
                             title = stringResource(R.string.video_log_chip),
                             summary = videoLogProfileLabel(videoLogProfile),
                             expanded = expandedVideoPanel == VideoSettingPanel.LOG_PROFILE,
@@ -423,7 +425,9 @@ fun CameraTopSheet(
                             modifier = itemModifier
                         )
                         VideoSettingTile(
-                            icon = AppIcons.Layers,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Layers, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
                             title = stringResource(R.string.video_bitrate_chip),
                             summary = "${videoBitrate.bitrateMbps}M",
                             expanded = expandedVideoPanel == VideoSettingPanel.BITRATE,
@@ -437,7 +441,9 @@ fun CameraTopSheet(
                             modifier = itemModifier
                         )
                         VideoSettingTile(
-                            icon = Icons.Default.Movie,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
                             title = stringResource(R.string.video_codec_chip),
                             summary = videoCodec.displayName,
                             expanded = expandedVideoPanel == VideoSettingPanel.CODEC,
@@ -451,7 +457,7 @@ fun CameraTopSheet(
                             modifier = itemModifier
                         )
                         VideoSettingTile(
-                            icon = Icons.Default.Mic,
+                            leadingIcon = { tint -> VideoMicrophoneMenuGlyph(tint) },
                             title = stringResource(R.string.video_microphone_title),
                             summary = selectedVideoAudioInputLabel(
                                 selectedAudioInputId = videoAudioInputId,
@@ -479,21 +485,25 @@ fun CameraTopSheet(
                     ) { itemModifier ->
                         VideoMenuToggleTile(
                             title = "FLASH",
-                            icon = AppIcons.FlashOn,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.FlashOn, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
                             checked = videoTorchEnabled,
                             onClick = onVideoTorchToggle,
                             modifier = itemModifier
                         )
                         VideoMenuToggleTile(
                             title = "HDR",
-                            icon = Icons.Default.HdrOn,
+                            leadingIcon = { tint -> VideoHdrMenuGlyph(tint) },
                             checked = videoHdrEnabled,
                             onClick = onVideoHdrToggle,
                             modifier = itemModifier
                         )
                         VideoMenuToggleTile(
                             title = "ACTION",
-                            icon = AppIcons.DirectionsWalk,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.DirectionsWalk, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
                             checked = videoStabilizationMode == VideoStabilizationMode.ENHANCED,
                             enabled = videoActionModeAvailable,
                             onClick = {
@@ -510,7 +520,9 @@ fun CameraTopSheet(
                         VideoMenuActionTile(
                             title = "DUAL CAPTURE",
                             value = "Open",
-                            icon = AppIcons.Videocam,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+                            },
                             onClick = onVideoDualCaptureClick,
                             modifier = itemModifier
                         )
@@ -1191,7 +1203,7 @@ private fun VideoAspectRatioGlyph(tint: Color) {
 
 @Composable
 private fun VideoSettingTile(
-    icon: ImageVector,
+    leadingIcon: @Composable (Color) -> Unit,
     title: String,
     summary: String,
     expanded: Boolean,
@@ -1220,12 +1232,7 @@ private fun VideoSettingTile(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (expanded) VideoMenuInk else VideoMenuOrange,
-                modifier = Modifier.size(21.dp)
-            )
+            leadingIcon(if (expanded) VideoMenuInk else VideoMenuOrange)
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(1.dp)
@@ -1246,7 +1253,7 @@ private fun VideoSettingTile(
                 )
             }
             Icon(
-                imageVector = if (expanded) AppIcons.ExpandLess else Icons.Default.NorthEast,
+                imageVector = if (expanded) AppIcons.ExpandLess else AppIcons.OpenInFull,
                 contentDescription = null,
                 tint = if (expanded) VideoMenuInk else VideoMenuOrange,
                 modifier = Modifier.size(17.dp)
@@ -1258,7 +1265,7 @@ private fun VideoSettingTile(
 @Composable
 private fun VideoMenuToggleTile(
     title: String,
-    icon: ImageVector,
+    leadingIcon: @Composable (Color) -> Unit,
     checked: Boolean,
     enabled: Boolean = true,
     onClick: () -> Unit,
@@ -1279,12 +1286,7 @@ private fun VideoMenuToggleTile(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = VideoMenuOrange.copy(alpha = alpha),
-            modifier = Modifier.size(21.dp)
-        )
+        leadingIcon(VideoMenuOrange.copy(alpha = alpha))
         Text(
             text = title,
             color = Color.White.copy(alpha = alpha),
@@ -1312,7 +1314,7 @@ private fun VideoMenuToggleTile(
 private fun VideoMenuActionTile(
     title: String,
     value: String,
-    icon: ImageVector,
+    leadingIcon: @Composable (Color) -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1330,12 +1332,7 @@ private fun VideoMenuActionTile(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = VideoMenuOrange,
-            modifier = Modifier.size(22.dp)
-        )
+        leadingIcon(VideoMenuOrange)
         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
                 text = title,
@@ -1402,6 +1399,64 @@ private fun VideoContentManagementTile(
                 modifier = Modifier.size(18.dp)
             )
         }
+    }
+}
+
+@Composable
+private fun VideoMicrophoneMenuGlyph(tint: Color) {
+    Canvas(modifier = Modifier.size(22.dp)) {
+        val stroke = 1.9.dp.toPx()
+        val centerX = size.width / 2f
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(size.width * 0.38f, size.height * 0.05f),
+            size = Size(size.width * 0.24f, size.height * 0.55f),
+            cornerRadius = CornerRadius(size.width * 0.12f),
+            style = Stroke(width = stroke)
+        )
+        drawArc(
+            color = tint,
+            startAngle = 0f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(size.width * 0.22f, size.height * 0.24f),
+            size = Size(size.width * 0.56f, size.height * 0.55f),
+            style = Stroke(width = stroke)
+        )
+        drawLine(
+            tint,
+            Offset(centerX, size.height * 0.79f),
+            Offset(centerX, size.height * 0.93f),
+            stroke,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            tint,
+            Offset(size.width * 0.34f, size.height * 0.93f),
+            Offset(size.width * 0.66f, size.height * 0.93f),
+            stroke,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
+private fun VideoHdrMenuGlyph(tint: Color) {
+    Box(
+        modifier = Modifier
+            .size(width = 25.dp, height = 17.dp)
+            .border(1.5.dp, tint, RoundedCornerShape(3.dp))
+            .padding(1.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "HDR",
+            color = tint,
+            fontSize = 8.sp,
+            lineHeight = 9.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
     }
 }
 
