@@ -233,8 +233,17 @@ fun CameraScreen(
     val isPhotoVideoModeTransition = previousPreviewCaptureMode != state.captureMode
     var dualCaptureEnabled by remember { mutableStateOf(false) }
     var specialVideoEnabled by remember { mutableStateOf(false) }
+    var previousSpecialVideoCameraId by remember { mutableStateOf(state.currentCameraId) }
     val spatialVideoAvailable = remember(state.currentCameraId, state.availableCameras, state.captureMode) {
         viewModel.isSpatialVideoSupported()
+    }
+
+    LaunchedEffect(state.currentCameraId) {
+        if (previousSpecialVideoCameraId != state.currentCameraId && specialVideoEnabled) {
+            specialVideoEnabled = false
+            viewModel.setSpatialVideoEnabled(false)
+        }
+        previousSpecialVideoCameraId = state.currentCameraId
     }
 
     LaunchedEffect(state.captureMode) {
