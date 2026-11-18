@@ -7,6 +7,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -23,6 +24,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -177,15 +179,13 @@ fun CameraTopSheet(
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
-                .background(Color.Black)
+                .background(CameraMenuBackground)
                 .padding(top = contentTopPadding)
                 .autoRotate(matchParentSize = true)
                 .padding(horizontal = 24.dp)
         ) {
             Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
+                modifier = Modifier.weight(1f)
             ) {
                 if (captureMode == CaptureMode.PHOTO) {
                     val isProfessionalMode = useRaw && isRawSupported
@@ -200,9 +200,11 @@ fun CameraTopSheet(
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .heightIn(min = 40.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) AccentColor else Color.Black)
+                                    .heightIn(min = 34.dp)
+                                    .then(
+                                        if (isSelected) Modifier.clip(RoundedCornerShape(8.dp)).background(AccentColor)
+                                        else Modifier.menuCardSurface(shape = RoundedCornerShape(8.dp), elevation = 2.dp)
+                                    )
                                     .clickable { onAspectRatioChange(ratio) }
                                     .padding(vertical = 8.dp),
                                 contentAlignment = Alignment.Center
@@ -217,9 +219,9 @@ fun CameraTopSheet(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                    QuickSettingGrid { itemModifier ->
+                    QuickSettingGrid(columns = 3, itemHeight = 36.dp) { itemModifier ->
                         if (isProfessionalMode) {
                             QuickSettingButton2(
                                 title = stringResource(R.string.settings_raw_color_engine),
@@ -355,9 +357,11 @@ fun CameraTopSheet(
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .heightIn(min = 40.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) AccentColor else Color.Black)
+                                    .heightIn(min = 34.dp)
+                                    .then(
+                                        if (isSelected) Modifier.clip(RoundedCornerShape(8.dp)).background(AccentColor)
+                                        else Modifier.menuCardSurface(shape = RoundedCornerShape(8.dp), elevation = 2.dp)
+                                    )
                                     .clickable { onVideoAspectRatioChange(ratio) }
                                     .padding(vertical = 8.dp),
                                 contentAlignment = Alignment.Center
@@ -372,9 +376,9 @@ fun CameraTopSheet(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                    QuickSettingGrid(columns = 2, itemHeight = 40.dp) { itemModifier ->
+                    QuickSettingGrid(columns = 2, itemHeight = 34.dp) { itemModifier ->
                         VideoSettingTile(
                             title = stringResource(R.string.video_log_chip),
                             summary = videoLogProfileLabel(videoLogProfile),
@@ -432,7 +436,7 @@ fun CameraTopSheet(
                         )
                     }
 
-                    QuickSettingGrid(columns = 2, itemHeight = 48.dp) { itemModifier ->
+                    QuickSettingGrid(columns = 2, itemHeight = 34.dp) { itemModifier ->
                         QuickSettingToggle(
                             title = "FLASH",
                             checked = videoTorchEnabled,
@@ -564,10 +568,10 @@ fun CameraTopSheet(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     ContentManagementQuickSetting(
                         onClick = { showContentManagementOptions = !showContentManagementOptions },
-                        modifier = Modifier.fillMaxWidth().height(40.dp)
+                        modifier = Modifier.fillMaxWidth().height(34.dp)
                     )
                     ContentManagementOptionsPanel(
                         visible = showContentManagementOptions,
@@ -584,23 +588,22 @@ fun CameraTopSheet(
                 }
 
                 Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color.Black)
+                            .menuCardSurface()
                             .clickable(onClick = onMoreSettingsClick)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(28.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(Color.Black),
+                                .background(CameraMenuRaisedCard),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -1130,11 +1133,13 @@ private fun VideoSettingTile(
 ) {
     Column(
         modifier = modifier
-            .height(40.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (expanded) AccentColor else Color.Black)
+            .fillMaxHeight()
+            .then(
+                if (expanded) Modifier.clip(RoundedCornerShape(9.dp)).background(AccentColor)
+                else Modifier.menuCardSurface()
+            )
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically)
     ) {
         Text(
@@ -1173,9 +1178,12 @@ private fun VideoSettingExpandedPanel(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color.Black)
-            .padding(14.dp),
+            .menuCardSurface(
+                shape = RoundedCornerShape(14.dp),
+                background = CameraMenuRaisedCard,
+                elevation = 5.dp
+            )
+            .padding(12.dp),
         content = content
     )
 }
@@ -1189,9 +1197,11 @@ private fun VideoOptionChip(
 ) {
     Box(
         modifier = Modifier
-            .heightIn(min = 36.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (selected) AccentColor else Color.Black)
+            .heightIn(min = 32.dp)
+            .then(
+                if (selected) Modifier.clip(RoundedCornerShape(8.dp)).background(AccentColor)
+                else Modifier.menuCardSurface(shape = RoundedCornerShape(8.dp), elevation = 2.dp)
+            )
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
@@ -1271,7 +1281,7 @@ private fun SectionLabel(title: String) {
         color = Color.White.copy(alpha = 0.6f),
         fontSize = 12.sp,
         fontWeight = FontWeight.Medium,
-        modifier = Modifier.padding(bottom = 12.dp)
+        modifier = Modifier.padding(bottom = 8.dp)
     )
 }
 
@@ -1331,18 +1341,34 @@ private fun ContentManagementQuickSetting(
     )
 }
 
+private val CameraMenuBackground = Color(0xFF111418)
+private val CameraMenuCard = Color(0xFF20242A)
+private val CameraMenuRaisedCard = Color(0xFF282D35)
+
+private fun Modifier.menuCardSurface(
+    shape: RoundedCornerShape = RoundedCornerShape(9.dp),
+    background: Color = CameraMenuCard,
+    elevation: Dp = 3.dp
+): Modifier = this
+    .shadow(elevation = elevation, shape = shape, clip = false)
+    .clip(shape)
+    .background(background)
+    .border(0.75.dp, Color.White.copy(alpha = 0.075f), shape)
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun QuickSettingGrid(
     columns: Int = 3,
-    itemHeight: Dp = 48.dp,
+    itemHeight: Dp = 36.dp,
+    horizontalSpacing: Dp = 8.dp,
+    verticalSpacing: Dp = 6.dp,
     content: @Composable (Modifier) -> Unit
 ) {
     // Keep a consistent column count as the available photo controls change.
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(horizontalSpacing),
+        verticalArrangement = Arrangement.spacedBy(verticalSpacing),
         maxItemsInEachRow = columns
     ) {
         content(Modifier.weight(1f).height(itemHeight))
@@ -1418,11 +1444,10 @@ fun QuickSettingValue(
 ) {
     Box(
         modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.Black)
+            .fillMaxHeight()
+            .menuCardSurface(shape = RoundedCornerShape(9.dp))
             .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         contentAlignment = Alignment.CenterStart
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1452,11 +1477,10 @@ fun QuickSettingButton(
 ) {
     Box(
         modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.Black)
+            .fillMaxHeight()
+            .menuCardSurface(shape = RoundedCornerShape(9.dp))
             .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         contentAlignment = Alignment.CenterStart
     ) {
         Row(
@@ -1491,13 +1515,13 @@ fun QuickSettingButton2(
 ) {
     Box(
         modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (checked) AccentColor else Color.Black
+            .fillMaxHeight()
+            .then(
+                if (checked) Modifier.clip(RoundedCornerShape(9.dp)).background(AccentColor)
+                else Modifier.menuCardSurface(shape = RoundedCornerShape(9.dp))
             )
             .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         contentAlignment = Alignment.CenterStart
     ) {
         Row(
@@ -1532,13 +1556,13 @@ fun QuickSettingToggle(
     val contentAlpha = if (enabled) 1f else 0.38f
     Box(
         modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (checked) AccentColor.copy(alpha = contentAlpha) else Color.Black
+            .fillMaxHeight()
+            .then(
+                if (checked) Modifier.clip(RoundedCornerShape(9.dp)).background(AccentColor.copy(alpha = contentAlpha))
+                else Modifier.menuCardSurface(shape = RoundedCornerShape(9.dp))
             )
             .clickable(enabled = enabled) { onCheckedChange(!checked) }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         contentAlignment = Alignment.CenterStart
     ) {
         Row(
