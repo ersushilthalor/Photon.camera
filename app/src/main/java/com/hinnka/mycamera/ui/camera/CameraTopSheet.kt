@@ -2063,6 +2063,7 @@ private val VideoMenuCard = Color(0xFF242429)
 private val VideoMenuRaisedCard = Color(0xFF303036)
 private val VideoMenuOrange = Color(0xFFFF6900)
 private val VideoMenuInk = Color(0xFF1A100B)
+private val PhotoMenuInk = VideoMenuInk
 
 private fun Modifier.menuCardSurface(
     shape: RoundedCornerShape = RoundedCornerShape(9.dp),
