@@ -2783,8 +2783,13 @@ class Camera2Controller(private val context: Context) {
         }
 
         activeOpenCameraId = openCameraId
-        logicalMultiCameraAutoSwitchActive = shouldUseLogicalMultiCameraZoom(_state.value, selectedCamera)
-        val requestedPhysicalCameraId = resolveRequestedPhysicalCameraId(_state.value, selectedCamera)
+        logicalMultiCameraAutoSwitchActive = !spatialVideoEnabled &&
+            shouldUseLogicalMultiCameraZoom(_state.value, selectedCamera)
+        val requestedPhysicalCameraId = if (spatialVideoEnabled) {
+            spatialVideoMainPhysicalCameraId ?: resolveRequestedPhysicalCameraId(_state.value, selectedCamera)
+        } else {
+            resolveRequestedPhysicalCameraId(_state.value, selectedCamera)
+        }
         var outputPhysicalCameraId = if (logicalMultiCameraAutoSwitchActive) null else requestedPhysicalCameraId
         activeOutputPhysicalCameraId = outputPhysicalCameraId
         lastLogicalMultiCameraStabilizationPhysicalId = null
@@ -8168,6 +8173,7 @@ class Camera2Controller(private val context: Context) {
 
     private data class SpatialVideoPhysicalLens(
         val cameraId: String,
+        val focalLength: Float,
         val focalLength35mmEquivalent: Float
     )
 
@@ -8175,7 +8181,11 @@ class Camera2Controller(private val context: Context) {
         val logicalCameraId: String,
         val mainPhysicalCameraId: String,
         val ultraWidePhysicalCameraId: String,
-        val ultraWideRelativeFocalLength: Float
+        val ultraWideRelativeFocalLength: Float,
+        val mainFocalLength: Float,
+        val mainFocalLength35mmEquivalent: Float,
+        val physicalCameraInfo: List<CameraPhysicalInfo>,
+        val physicalCameraIds: List<String>
     )
 
     /**
@@ -8240,6 +8250,7 @@ class Camera2Controller(private val context: Context) {
                     }?.takeIf { it > 0f } ?: return@runCatching null
                     SpatialVideoPhysicalLens(
                         cameraId = physicalId,
+                        focalLength = focal,
                         focalLength35mmEquivalent = focal * 43.2666f / diagonal
                     )
                 }.getOrNull()
@@ -8285,11 +8296,24 @@ class Camera2Controller(private val context: Context) {
                 .minByOrNull { (_, ratio) -> ratio }
                 ?: continue
 
+            val physicalCameraInfo = physicalLenses.map { lens ->
+                CameraPhysicalInfo(
+                    cameraId = lens.cameraId,
+                    intrinsicZoomRatio = lens.focalLength35mmEquivalent /
+                        mainLens.focalLength35mmEquivalent,
+                    focalLength35mmEquivalent = lens.focalLength35mmEquivalent,
+                    focalLength = lens.focalLength
+                )
+            }
             val pair = SpatialVideoCameraPair(
                 logicalCameraId = logicalId,
                 mainPhysicalCameraId = mainId,
                 ultraWidePhysicalCameraId = ultraWide.first.cameraId,
-                ultraWideRelativeFocalLength = ultraWide.second
+                ultraWideRelativeFocalLength = ultraWide.second,
+                mainFocalLength = mainLens.focalLength,
+                mainFocalLength35mmEquivalent = mainLens.focalLength35mmEquivalent,
+                physicalCameraInfo = physicalCameraInfo,
+                physicalCameraIds = physicalCameraInfo.map { it.cameraId }
             )
             PLog.i(
                 TAG,
@@ -8341,16 +8365,49 @@ class Camera2Controller(private val context: Context) {
                 )
                 return
             }
+            val current = _state.value.getCurrentCameraInfo() ?: return
+            val previousOpenCameraId = runCatching { current.getOpenCameraId() }.getOrDefault(current.cameraId)
+            val reboundCurrentCamera = current.copy(
+                logicalCameraId = pair.logicalCameraId,
+                outputPhysicalCameraId = pair.mainPhysicalCameraId,
+                physicalCameras = pair.physicalCameraInfo,
+                physicalCameraIds = pair.physicalCameraIds,
+                lensType = LensType.BACK_MAIN,
+                focalLength = pair.mainFocalLength,
+                focalLength35mmEquivalent = pair.mainFocalLength35mmEquivalent,
+                intrinsicZoomRatio = 1f,
+                displayIntrinsicZoomRatio = 1f
+            )
+            _state.update { state ->
+                state.copy(
+                    availableCameras = state.availableCameras.map { camera ->
+                        if (camera.cameraId == current.cameraId) reboundCurrentCamera else camera
+                    },
+                    currentLensType = LensType.BACK_MAIN,
+                    zoomRatio = 1f
+                )
+            }
             spatialVideoLogicalCameraId = pair.logicalCameraId
             spatialVideoMainPhysicalCameraId = pair.mainPhysicalCameraId
             spatialVideoUltraWidePhysicalCameraId = pair.ultraWidePhysicalCameraId
             spatialVideoEnabled = true
             dualCaptureEnabled = false
-            activeOutputPhysicalCameraId = spatialVideoMainPhysicalCameraId
+            activeOutputPhysicalCameraId = pair.mainPhysicalCameraId
             logicalMultiCameraAutoSwitchActive = false
-            _state.value = _state.value.copy(zoomRatio = 1f)
-            PLog.i(TAG, "Special Video enabled: main=$spatialVideoMainPhysicalCameraId, ultraWide=$spatialVideoUltraWidePhysicalCameraId")
-            previewSurfaceTexture?.let { createPreviewSession(openGeneration = cameraOpenGeneration) }
+            PLog.i(
+                TAG,
+                "Special Video enabled: parentLogical=${pair.logicalCameraId}, " +
+                    "main=${pair.mainPhysicalCameraId}, ultraWide=${pair.ultraWidePhysicalCameraId}, " +
+                    "previousOpenCamera=$previousOpenCameraId"
+            )
+            previewSurfaceTexture?.let { surfaceTexture ->
+                if (previousOpenCameraId != pair.logicalCameraId) {
+                    PLog.i(TAG, "Reopening camera through logical parent for simultaneous physical outputs")
+                    openCamera(surfaceTexture)
+                } else {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
         } else {
             spatialVideoEnabled = false
             spatialVideoRecorder.forceStop()
