@@ -2940,6 +2940,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 打开相机（Camera2 接口）
      */
     fun openCamera(surfaceTexture: SurfaceTexture) {
+        StartupTrace.mark("CameraViewModel.openCamera requested")
         PLog.d(TAG, "openCamera")
         if (currentSurfaceTexture === surfaceTexture && (state.value.isPreviewActive || cameraOpenInFlight)) {
             PLog.d(
@@ -2970,7 +2971,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     suspend fun prepareCamera(): Boolean {
-        if (!cameraController.prepareCameras()) return false
+        StartupTrace.mark("CameraViewModel.prepareCamera start")
+        if (!cameraController.prepareCameras()) {
+            StartupTrace.mark("CameraViewModel.prepareCameras failed")
+            return false
+        }
+        StartupTrace.mark("CameraViewModel.prepareCameras complete")
         if (!hasAppliedDefaultFocalLength) {
             val defaultFocalLength = userPreferencesRepository.userPreferences
                 .firstOrNull()
@@ -2981,7 +2987,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             hasAppliedDefaultFocalLength = true
         }
-        return cameraController.preparePreviewSize()
+        val previewReady = cameraController.preparePreviewSize()
+        StartupTrace.mark("CameraViewModel.prepareCamera complete", "previewReady=$previewReady")
+        return previewReady
     }
 
     /**
