@@ -73,6 +73,11 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            // Keep the CI-installed debug APK on the same R8 + resource-shrinking
+            // path as release so feature regressions are caught before publishing.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
