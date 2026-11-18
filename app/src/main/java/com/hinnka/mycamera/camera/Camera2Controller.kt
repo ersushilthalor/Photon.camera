@@ -8381,7 +8381,32 @@ class Camera2Controller(private val context: Context) {
             _state.update { state ->
                 state.copy(
                     availableCameras = state.availableCameras.map { camera ->
-                        if (camera.cameraId == current.cameraId) reboundCurrentCamera else camera
+                        val physicalInfo = pair.physicalCameraInfo.firstOrNull {
+                            it.cameraId == camera.cameraId
+                        }
+                        when {
+                            camera.cameraId == current.cameraId -> reboundCurrentCamera
+                            physicalInfo != null && camera.lensFacing == CameraCharacteristics.LENS_FACING_BACK -> {
+                                val lensType = when {
+                                    camera.lensType == LensType.BACK_MACRO -> LensType.BACK_MACRO
+                                    physicalInfo.intrinsicZoomRatio < 0.85f -> LensType.BACK_ULTRA_WIDE
+                                    physicalInfo.intrinsicZoomRatio > 1.15f -> LensType.BACK_TELEPHOTO
+                                    else -> LensType.BACK_MAIN
+                                }
+                                camera.copy(
+                                    logicalCameraId = pair.logicalCameraId,
+                                    outputPhysicalCameraId = camera.cameraId,
+                                    physicalCameras = pair.physicalCameraInfo,
+                                    physicalCameraIds = pair.physicalCameraIds,
+                                    lensType = lensType,
+                                    focalLength = physicalInfo.focalLength,
+                                    focalLength35mmEquivalent = physicalInfo.focalLength35mmEquivalent,
+                                    intrinsicZoomRatio = physicalInfo.intrinsicZoomRatio,
+                                    displayIntrinsicZoomRatio = physicalInfo.intrinsicZoomRatio
+                                )
+                            }
+                            else -> camera
+                        }
                     },
                     currentLensType = LensType.BACK_MAIN,
                     zoomRatio = 1f
