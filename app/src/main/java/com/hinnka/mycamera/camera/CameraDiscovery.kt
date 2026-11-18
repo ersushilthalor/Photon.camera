@@ -109,7 +109,8 @@ class CameraDiscovery(private val context: Context) {
             PLog.d(
                 TAG,
                 "  - ${cam.cameraId}: ${cam.lensType}, intrinsicZoom=${cam.intrinsicZoomRatio}, " +
-                        "displayZoom=${cam.displayIntrinsicZoomRatio}"
+                        "displayZoom=${cam.displayIntrinsicZoomRatio}, logical=${cam.logicalCameraId}, " +
+                        "boundPhysical=${cam.physicalCameras.map { it.cameraId }}"
             )
         }
 
@@ -1434,12 +1435,10 @@ class CameraDiscovery(private val context: Context) {
         if (!existing.isCustomLensId && candidate.isCustomLensId) return true
         if (existing.isCustomLensId != candidate.isCustomLensId) return false
 
-        val existingHasPhysicalBinding = existing.physicalCameras.isNotEmpty()
-        val candidateHasPhysicalBinding = candidate.physicalCameras.isNotEmpty()
-        // When two entries describe the same physical focal length, keep the one that
-        // knows its parent logical CameraDevice. The previous condition was inverted
-        // and consistently preferred the unbound entry, breaking Special Video's pair lookup.
-        return !existingHasPhysicalBinding && candidateHasPhysicalBinding
+        return preferPhysicalCameraBindingForSameFocalLength(
+            existingHasPhysicalBinding = existing.physicalCameras.isNotEmpty(),
+            candidateHasPhysicalBinding = candidate.physicalCameras.isNotEmpty()
+        )
     }
 
     private fun isSameFocalLength(firstZoomRatio: Float, secondZoomRatio: Float): Boolean {
@@ -1639,4 +1638,15 @@ class CameraDiscovery(private val context: Context) {
             return (zoomRatios.maxOrNull() ?: 1f) - (zoomRatios.minOrNull() ?: 1f)
         }
     }
+}
+
+/**
+ * Prefer a physical camera entry that is bound to its parent logical CameraDevice.
+ * Without that binding, Camera2 cannot route the second physical output for Special Video.
+ */
+internal fun preferPhysicalCameraBindingForSameFocalLength(
+    existingHasPhysicalBinding: Boolean,
+    candidateHasPhysicalBinding: Boolean
+): Boolean {
+    return !existingHasPhysicalBinding && candidateHasPhysicalBinding
 }
