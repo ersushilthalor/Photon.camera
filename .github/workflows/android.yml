@@ -52,7 +52,7 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
-      - name: Build Debug APK
+      - name: Build Minified Debug APK (R8 + Resource Shrinking)
         run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
 
       - name: Verify APK output
