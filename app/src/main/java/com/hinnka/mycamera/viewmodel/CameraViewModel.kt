@@ -3080,7 +3080,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         startupPrewarmAttempted = true
         startupPrewarmJob = viewModelScope.launch {
             delay(FIRST_PREVIEW_PREWARM_GRACE_MS)
-            val appContext = getApplication<Application>().applicationContext
+            val application = getApplication<MyCameraApplication>()
+            val appContext = application.applicationContext
             val currentState = state.value
             if (
                 !currentState.isPreviewActive ||
@@ -3093,10 +3094,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         "mode=${currentState.captureMode} " +
                         "capturing=${currentState.isCapturing}",
                 )
+                application.startDeferredPostPreviewWork()
                 return@launch
             }
-            if (!isStartupCapturePrewarmAllowed(appContext)) return@launch
+            if (!isStartupCapturePrewarmAllowed(appContext)) {
+                application.startDeferredPostPreviewWork()
+                return@launch
+            }
             prewarmCapturePipeline()
+            application.startDeferredPostPreviewWork()
         }
     }
 
