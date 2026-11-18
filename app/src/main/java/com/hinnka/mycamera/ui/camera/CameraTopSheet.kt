@@ -190,7 +190,6 @@ fun CameraTopSheet(
                 if (captureMode == CaptureMode.PHOTO) {
                     val isProfessionalMode = useRaw && isRawSupported
 
-                    SectionLabel(title = stringResource(R.string.aspect_ratio))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -347,7 +346,6 @@ fun CameraTopSheet(
                         }
                     )
                 } else {
-                    SectionLabel(title = stringResource(R.string.video_aspect_chip))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
