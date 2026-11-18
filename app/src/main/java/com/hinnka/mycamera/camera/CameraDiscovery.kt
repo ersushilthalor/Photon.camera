@@ -874,7 +874,7 @@ class CameraDiscovery(private val context: Context) {
             runBlocking {
                 val preferences = userPreferencesRepository.userPreferences.firstOrNull()
                 LogicalCameraDiscoveryConfig(
-                    autoDiscoveryEnabled = preferences?.enableLogicalMultiCameraDiscovery ?: false,
+                    autoDiscoveryEnabled = preferences?.enableLogicalMultiCameraDiscovery ?: true,
                     forcedBindings = parseLogicalCameraBindingRequests(
                         preferences?.logicalCameraBindingWhitelist ?: emptyList()
                     )
@@ -1607,7 +1607,7 @@ class CameraDiscovery(private val context: Context) {
     )
 
     private data class LogicalCameraDiscoveryConfig(
-        val autoDiscoveryEnabled: Boolean = false,
+        val autoDiscoveryEnabled: Boolean = true,
         val forcedBindings: List<LogicalCameraBindingRequest> = emptyList()
     )
 
