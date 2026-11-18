@@ -177,16 +177,13 @@ fun CameraTopSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(if (captureMode == CaptureMode.VIDEO) 0.975f else 1.035f)
                 .clip(RoundedCornerShape(30.dp))
                 .background(VideoMenuBackground)
                 .padding(top = if (captureMode == CaptureMode.VIDEO) 24.dp else 26.dp)
-                .autoRotate(matchParentSize = true)
+                .autoRotate()
                 .padding(horizontal = if (captureMode == CaptureMode.VIDEO) 20.dp else 24.dp)
         ) {
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
+            Column {
                 if (captureMode == CaptureMode.PHOTO) {
                     val isProfessionalMode = useRaw && isRawSupported
 
@@ -730,7 +727,7 @@ fun CameraTopSheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 4.dp, bottom = if (captureMode == CaptureMode.VIDEO) 0.dp else 10.dp),
+                        .padding(top = 4.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(
