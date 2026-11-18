@@ -227,7 +227,7 @@ fun CameraTopSheet(
 
                     QuickSettingGrid(
                         columns = 4,
-                        itemHeight = 44.dp,
+                        itemHeight = 52.dp,
                         horizontalSpacing = 5.dp,
                         verticalSpacing = 4.dp
                     ) { itemModifier ->
@@ -1328,6 +1328,7 @@ private fun PhotoMenuQuickTile(
                     color = if (selected) OnAccentColor else if (accentTitle) AccentColor else foreground,
                     fontWeight = FontWeight.SemiBold,
                     maxFontSize = 9.sp,
+                    maxLines = 1,
                     modifier = Modifier.fillMaxWidth()
                 )
                 QuickSettingLabel(
@@ -1335,6 +1336,7 @@ private fun PhotoMenuQuickTile(
                     color = foreground,
                     fontWeight = FontWeight.Bold,
                     maxFontSize = 9.sp,
+                    maxLines = 1,
                     modifier = Modifier.fillMaxWidth()
                 )
             } else {
@@ -1343,6 +1345,7 @@ private fun PhotoMenuQuickTile(
                     color = foreground,
                     fontWeight = FontWeight.Bold,
                     maxFontSize = 9.5.sp,
+                    maxLines = 1,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
