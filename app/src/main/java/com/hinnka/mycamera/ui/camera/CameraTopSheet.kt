@@ -180,7 +180,7 @@ fun CameraTopSheet(
                 .aspectRatio(if (captureMode == CaptureMode.VIDEO) 0.975f else 1.035f)
                 .clip(RoundedCornerShape(30.dp))
                 .background(VideoMenuBackground)
-                .padding(top = 35.dp)
+                .padding(top = if (captureMode == CaptureMode.VIDEO) 24.dp else 26.dp)
                 .autoRotate(matchParentSize = true)
                 .padding(horizontal = if (captureMode == CaptureMode.VIDEO) 20.dp else 24.dp)
         ) {
@@ -200,7 +200,7 @@ fun CameraTopSheet(
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .height(46.dp)
+                                    .height(42.dp)
                                     .then(
                                         if (isSelected) {
                                             Modifier.clip(shape).background(VideoMenuOrange)
@@ -226,13 +226,13 @@ fun CameraTopSheet(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(5.dp))
 
                     QuickSettingGrid(
                         columns = 3,
-                        itemHeight = 39.dp,
+                        itemHeight = 36.dp,
                         horizontalSpacing = 7.dp,
-                        verticalSpacing = 5.dp
+                        verticalSpacing = 4.dp
                     ) { itemModifier ->
                         if (isProfessionalMode) {
                             PhotoMenuQuickTile(
@@ -410,7 +410,7 @@ fun CameraTopSheet(
                         }
                     )
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -421,7 +421,7 @@ fun CameraTopSheet(
                             trailingIcon = AppIcons.AutoAwesome,
                             trailingTint = Color.White.copy(alpha = 0.75f),
                             onClick = onPhotoFilterClick,
-                            modifier = Modifier.weight(1f).height(38.dp)
+                            modifier = Modifier.weight(1f).height(35.dp)
                         )
                         PhotoMenuWideActionTile(
                             title = "DEPTH",
@@ -444,7 +444,7 @@ fun CameraTopSheet(
                             Box(
                                 modifier = Modifier
                                     .weight(if (ratio == VideoAspectRatio.OPEN_GATE) 1.1f else 1f)
-                                    .height(50.dp)
+                                    .height(44.dp)
                                     .then(
                                         if (isSelected) {
                                             Modifier.clip(shape).background(VideoMenuOrange)
@@ -480,15 +480,13 @@ fun CameraTopSheet(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Spacer(modifier = Modifier.height(9.dp))
+                    Spacer(modifier = Modifier.height(7.dp))
 
                     QuickSettingGrid(
                         columns = 2,
-                        itemHeight = 43.dp,
+                        itemHeight = 38.dp,
                         horizontalSpacing = 7.dp,
-                        verticalSpacing = 5.dp
+                        verticalSpacing = 4.dp
                     ) { itemModifier ->
                         VideoSettingTile(
                             leadingIcon = { tint ->
@@ -557,7 +555,7 @@ fun CameraTopSheet(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(5.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
 
                     QuickSettingGrid(
                         columns = 2,
@@ -710,10 +708,10 @@ fun CameraTopSheet(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     VideoContentManagementTile(
                         onClick = { showContentManagementOptions = !showContentManagementOptions },
-                        modifier = Modifier.fillMaxWidth().height(38.dp)
+                        modifier = Modifier.fillMaxWidth().height(34.dp)
                     )
                     ContentManagementOptionsPanel(
                         visible = showContentManagementOptions,
@@ -732,7 +730,7 @@ fun CameraTopSheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp, bottom = if (captureMode == CaptureMode.VIDEO) 0.dp else 24.dp),
+                        .padding(top = 4.dp, bottom = if (captureMode == CaptureMode.VIDEO) 0.dp else 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(
@@ -744,12 +742,12 @@ fun CameraTopSheet(
                                 elevation = 4.dp
                             )
                             .clickable(onClick = onMoreSettingsClick)
-                            .padding(horizontal = 14.dp, vertical = if (captureMode == CaptureMode.VIDEO) 4.5.dp else 4.dp),
+                            .padding(horizontal = 12.dp, vertical = 3.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(30.dp)
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(VideoMenuRaisedCard),
                             contentAlignment = Alignment.Center
@@ -765,7 +763,7 @@ fun CameraTopSheet(
                         Text(
                             text = stringResource(R.string.settings_title),
                             color = Color.White,
-                            fontSize = 18.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.weight(1f)
                         )
@@ -1604,7 +1602,7 @@ private fun VideoSettingTile(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
+                .padding(horizontal = 12.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1624,7 +1622,7 @@ private fun VideoSettingTile(
                 QuickSettingLabel(
                     text = summary,
                     color = if (expanded) VideoMenuInk else Color.White,
-                    maxFontSize = 14.sp,
+                    maxFontSize = 13.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -1658,7 +1656,7 @@ private fun VideoMenuToggleTile(
                 elevation = 3.dp
             )
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 4.dp),
+            .padding(horizontal = 14.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
