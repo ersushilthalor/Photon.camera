@@ -8290,7 +8290,7 @@ class Camera2Controller(private val context: Context) {
                     .getOrNull(physicalLenses.size / 2)
             } ?: continue
             val ultraWide = physicalLenses
-                .filter { it.cameraId != mainId }
+                .filter { it.cameraId != mainLens.cameraId }
                 .map { lens -> lens to (lens.focalLength35mmEquivalent / mainLens.focalLength35mmEquivalent) }
                 .filter { (_, ratio) -> ratio.isFinite() && ratio in 0.2f..0.85f }
                 .minByOrNull { (_, ratio) -> ratio }
@@ -8307,7 +8307,7 @@ class Camera2Controller(private val context: Context) {
             }
             val pair = SpatialVideoCameraPair(
                 logicalCameraId = logicalId,
-                mainPhysicalCameraId = mainId,
+                mainPhysicalCameraId = mainLens.cameraId,
                 ultraWidePhysicalCameraId = ultraWide.first.cameraId,
                 ultraWideRelativeFocalLength = ultraWide.second,
                 mainFocalLength = mainLens.focalLength,
