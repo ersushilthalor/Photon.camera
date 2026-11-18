@@ -2087,7 +2087,7 @@ fun CameraScreen(
                 }
             },
             specialVideoEnabled = specialVideoEnabled,
-            specialVideoAvailable = spatialVideoAvailable &&
+            specialVideoAvailable =
                 !state.videoRecordingState.isRecording && !state.videoRecordingState.isProcessing,
             onSpecialVideoToggle = {
                 if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
