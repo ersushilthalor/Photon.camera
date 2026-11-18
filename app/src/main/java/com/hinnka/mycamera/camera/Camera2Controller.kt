@@ -304,7 +304,6 @@ class Camera2Controller(private val context: Context) {
     private var spatialVideoEnabled = false
     private var spatialVideoMainPhysicalCameraId: String? = null
     private var spatialVideoUltraWidePhysicalCameraId: String? = null
-    private var spatialVideoRecordSurface: Surface? = null
     @Volatile private var spatialPrimaryFinishedUri: Uri? = null
     @Volatile private var spatialUltraWideFinishedFile: File? = null
     private var dualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE
@@ -2375,6 +2374,7 @@ class Camera2Controller(private val context: Context) {
     ) {
         cameraOpenGeneration++
         videoRecorder.forceStop()
+        spatialVideoRecorder.forceStop()
         stopVideoRecordingTicker()
         clearCameraSessionState(reason)
         closeCameraDeviceAndAwait(camera, reason)
@@ -2421,6 +2421,7 @@ class Camera2Controller(private val context: Context) {
         }
         if (videoRecorder.isRecording()) {
             videoRecorder.forceStop()
+            spatialVideoRecorder.forceStop()
             stopVideoRecordingTicker()
         }
         val device = cameraDevice
@@ -3855,6 +3856,7 @@ class Camera2Controller(private val context: Context) {
                 )
                 if (_state.value.videoRecordingState.isRecording) {
                     videoRecorder.forceStop()
+                    spatialVideoRecorder.forceStop()
                 } else if (cameraDevice != null && previewSurface != null) {
                     createPreviewSession(openGeneration = cameraOpenGeneration)
                 }
@@ -7008,7 +7010,7 @@ class Camera2Controller(private val context: Context) {
             }
             return
         }
-        val requestedRatio = sanitizeZoomRatio(ratio)
+        val requestedRatio = if (spatialVideoEnabled) 1f else sanitizeZoomRatio(ratio)
         _state.value = _state.value.copy(
             zoomRatio = requestedRatio,
             zoomPanX = if (requestedRatio <= 1.001f) 0f else _state.value.zoomPanX,
@@ -8154,7 +8156,7 @@ class Camera2Controller(private val context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
         val state = _state.value
         val current = state.getCurrentCameraInfo() ?: return false
-        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK) return false
+        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK || abs(current.intrinsicZoomRatio - 1f) > 0.15f) return false
         val logicalId = current.logicalCameraId ?: return false
         val candidates = state.availableCameras.filter {
             it.lensFacing == CameraCharacteristics.LENS_FACING_BACK && it.logicalCameraId == logicalId &&
@@ -8209,7 +8211,6 @@ class Camera2Controller(private val context: Context) {
             previewSurfaceTexture?.let { createPreviewSession(openGeneration = cameraOpenGeneration) }
         } else {
             spatialVideoEnabled = false
-            spatialVideoRecordSurface = null
             spatialVideoRecorder.forceStop()
             spatialVideoMainPhysicalCameraId = null
             spatialVideoUltraWidePhysicalCameraId = null
@@ -8592,6 +8593,7 @@ class Camera2Controller(private val context: Context) {
         if (dualCaptureRecordSurface == null) {
             onCameraError?.invoke(-1, "Dual Capture encoder input could not be created.", false)
             videoRecorder.forceStop()
+            spatialVideoRecorder.forceStop()
             return
         }
         createDualCaptureSession()
@@ -10511,6 +10513,7 @@ class Camera2Controller(private val context: Context) {
                 stopVideoRecording()
             } else if (!keepVideoRecording && !_state.value.videoRecordingState.isProcessing) {
                 videoRecorder.forceStop()
+                spatialVideoRecorder.forceStop()
                 stopVideoRecordingTicker()
                 _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
             }
@@ -10801,6 +10804,7 @@ class Camera2Controller(private val context: Context) {
         }
         burstGyroRecorder.release()
         videoRecorder.release()
+        spatialVideoRecorder.release()
         stopBackgroundThread()
         cameraDiscovery.clearCache()
     }
