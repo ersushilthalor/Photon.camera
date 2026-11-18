@@ -1387,58 +1387,42 @@ private fun PhotoMenuContentManagementTile(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    Box(
         modifier = modifier
             .fillMaxHeight()
             .menuCardSurface(
-                shape = RoundedCornerShape(13.dp),
+                shape = RoundedCornerShape(10.dp),
                 background = VideoMenuCard,
-                elevation = 3.dp
+                elevation = 2.dp
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 9.dp, vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp)
+            .padding(horizontal = 3.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = AppIcons.Tune,
-            contentDescription = null,
-            tint = AccentColor,
-            modifier = Modifier.size(21.dp)
-        )
         Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(0.dp)
-        ) {
-            Text(
-                text = "Content",
-                color = AccentColor,
-                fontSize = 10.5.sp,
-                lineHeight = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1
-            )
-            Text(
-                text = "Management",
-                color = Color.White,
-                fontSize = 11.5.sp,
-                lineHeight = 13.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1
-            )
-        }
-        Box(
-            modifier = Modifier
-                .size(23.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(VideoMenuRaisedCard),
-            contentAlignment = Alignment.Center
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(1.dp)
         ) {
             Icon(
                 imageVector = AppIcons.Tune,
                 contentDescription = null,
                 tint = AccentColor,
-                modifier = Modifier.size(15.dp)
+                modifier = Modifier.size(18.dp)
+            )
+            QuickSettingLabel(
+                text = "Content",
+                color = AccentColor,
+                fontWeight = FontWeight.SemiBold,
+                maxFontSize = 9.sp,
+                modifier = Modifier.fillMaxWidth()
+            )
+            QuickSettingLabel(
+                text = "Management",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                maxFontSize = 9.sp,
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }
