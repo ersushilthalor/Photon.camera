@@ -177,12 +177,18 @@ fun CameraTopSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
-                .background(CameraMenuBackground)
-                .padding(top = contentTopPadding)
+                .aspectRatio(if (captureMode == CaptureMode.VIDEO) 0.975f else 1f)
+                .clip(
+                    if (captureMode == CaptureMode.VIDEO) RoundedCornerShape(30.dp)
+                    else RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp)
+                )
+                .background(
+                    if (captureMode == CaptureMode.VIDEO) VideoMenuBackground
+                    else CameraMenuBackground
+                )
+                .padding(top = if (captureMode == CaptureMode.VIDEO) 35.dp else contentTopPadding)
                 .autoRotate(matchParentSize = true)
-                .padding(horizontal = 24.dp)
+                .padding(horizontal = if (captureMode == CaptureMode.VIDEO) 20.dp else 24.dp)
         ) {
             Column(
                 modifier = Modifier.weight(1f)
@@ -348,36 +354,62 @@ fun CameraTopSheet(
                 } else {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
                     ) {
                         VideoAspectRatio.entries.forEach { ratio ->
                             val isSelected = videoAspectRatio == ratio
+                            val shape = RoundedCornerShape(15.dp)
                             Box(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .heightIn(min = 34.dp)
+                                    .weight(if (ratio == VideoAspectRatio.OPEN_GATE) 1.1f else 1f)
+                                    .height(50.dp)
                                     .then(
-                                        if (isSelected) Modifier.clip(RoundedCornerShape(8.dp)).background(AccentColor)
-                                        else Modifier.menuCardSurface(shape = RoundedCornerShape(8.dp), elevation = 2.dp)
+                                        if (isSelected) {
+                                            Modifier.clip(shape).background(VideoMenuOrange)
+                                        } else {
+                                            Modifier.menuCardSurface(
+                                                shape = shape,
+                                                background = VideoMenuCard,
+                                                elevation = 3.dp
+                                            )
+                                        }
                                     )
                                     .clickable { onVideoAspectRatioChange(ratio) }
-                                    .padding(vertical = 8.dp),
+                                    .padding(horizontal = 8.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = videoAspectRatioLabel(ratio),
-                                    color = if (isSelected) OnAccentColor else Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    VideoAspectRatioMenuIcon(
+                                        ratio = ratio,
+                                        tint = if (isSelected) VideoMenuInk else VideoMenuOrange
+                                    )
+                                    Text(
+                                        text = videoAspectRatioLabel(ratio),
+                                        color = if (isSelected) VideoMenuInk else Color.White,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                }
                             }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    QuickSettingGrid(columns = 2, itemHeight = 34.dp) { itemModifier ->
+                    Spacer(modifier = Modifier.height(9.dp))
+
+                    QuickSettingGrid(
+                        columns = 2,
+                        itemHeight = 43.dp,
+                        horizontalSpacing = 7.dp,
+                        verticalSpacing = 5.dp
+                    ) { itemModifier ->
                         VideoSettingTile(
+                            icon = Icons.Default.GraphicEq,
                             title = stringResource(R.string.video_log_chip),
                             summary = videoLogProfileLabel(videoLogProfile),
                             expanded = expandedVideoPanel == VideoSettingPanel.LOG_PROFILE,
@@ -391,6 +423,7 @@ fun CameraTopSheet(
                             modifier = itemModifier
                         )
                         VideoSettingTile(
+                            icon = AppIcons.Layers,
                             title = stringResource(R.string.video_bitrate_chip),
                             summary = "${videoBitrate.bitrateMbps}M",
                             expanded = expandedVideoPanel == VideoSettingPanel.BITRATE,
@@ -404,6 +437,7 @@ fun CameraTopSheet(
                             modifier = itemModifier
                         )
                         VideoSettingTile(
+                            icon = Icons.Default.Movie,
                             title = stringResource(R.string.video_codec_chip),
                             summary = videoCodec.displayName,
                             expanded = expandedVideoPanel == VideoSettingPanel.CODEC,
@@ -417,6 +451,7 @@ fun CameraTopSheet(
                             modifier = itemModifier
                         )
                         VideoSettingTile(
+                            icon = Icons.Default.Mic,
                             title = stringResource(R.string.video_microphone_title),
                             summary = selectedVideoAudioInputLabel(
                                 selectedAudioInputId = videoAudioInputId,
@@ -434,33 +469,48 @@ fun CameraTopSheet(
                         )
                     }
 
-                    QuickSettingGrid(columns = 2, itemHeight = 34.dp) { itemModifier ->
-                        QuickSettingToggle(
+                    Spacer(modifier = Modifier.height(5.dp))
+
+                    QuickSettingGrid(
+                        columns = 2,
+                        itemHeight = 43.dp,
+                        horizontalSpacing = 7.dp,
+                        verticalSpacing = 5.dp
+                    ) { itemModifier ->
+                        VideoMenuToggleTile(
                             title = "FLASH",
+                            icon = AppIcons.FlashOn,
                             checked = videoTorchEnabled,
-                            onCheckedChange = { onVideoTorchToggle() },
+                            onClick = onVideoTorchToggle,
                             modifier = itemModifier
                         )
-                        QuickSettingToggle(
+                        VideoMenuToggleTile(
                             title = "HDR",
+                            icon = Icons.Default.HdrOn,
                             checked = videoHdrEnabled,
-                            onCheckedChange = { onVideoHdrToggle() },
+                            onClick = onVideoHdrToggle,
                             modifier = itemModifier
                         )
-                        QuickSettingToggle(
+                        VideoMenuToggleTile(
                             title = "ACTION",
+                            icon = AppIcons.DirectionsWalk,
                             checked = videoStabilizationMode == VideoStabilizationMode.ENHANCED,
                             enabled = videoActionModeAvailable,
-                            onCheckedChange = { enabled ->
+                            onClick = {
                                 onVideoStabilizationModeChange(
-                                    if (enabled) VideoStabilizationMode.ENHANCED else VideoStabilizationMode.OFF
+                                    if (videoStabilizationMode == VideoStabilizationMode.ENHANCED) {
+                                        VideoStabilizationMode.OFF
+                                    } else {
+                                        VideoStabilizationMode.ENHANCED
+                                    }
                                 )
                             },
                             modifier = itemModifier
                         )
-                        QuickSettingValue(
+                        VideoMenuActionTile(
                             title = "DUAL CAPTURE",
                             value = "Open",
+                            icon = AppIcons.Videocam,
                             onClick = onVideoDualCaptureClick,
                             modifier = itemModifier
                         )
@@ -567,9 +617,9 @@ fun CameraTopSheet(
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
-                    ContentManagementQuickSetting(
+                    VideoContentManagementTile(
                         onClick = { showContentManagementOptions = !showContentManagementOptions },
-                        modifier = Modifier.fillMaxWidth().height(34.dp)
+                        modifier = Modifier.fillMaxWidth().height(38.dp)
                     )
                     ContentManagementOptionsPanel(
                         visible = showContentManagementOptions,
@@ -586,43 +636,61 @@ fun CameraTopSheet(
                 }
 
                 Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp, bottom = if (captureMode == CaptureMode.VIDEO) 0.dp else 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuCardSurface()
+                            .then(
+                                if (captureMode == CaptureMode.VIDEO) {
+                                    Modifier.menuCardSurface(
+                                        shape = RoundedCornerShape(16.dp),
+                                        background = VideoMenuCard,
+                                        elevation = 4.dp
+                                    )
+                                } else {
+                                    Modifier.menuCardSurface()
+                                }
+                            )
                             .clickable(onClick = onMoreSettingsClick)
-                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                            .padding(
+                                horizontal = 14.dp,
+                                vertical = if (captureMode == CaptureMode.VIDEO) 7.dp else 6.dp
+                            ),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(28.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(CameraMenuRaisedCard),
+                                .size(if (captureMode == CaptureMode.VIDEO) 34.dp else 28.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (captureMode == CaptureMode.VIDEO) VideoMenuRaisedCard
+                                    else CameraMenuRaisedCard
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Settings,
                                 contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
+                                tint = if (captureMode == CaptureMode.VIDEO) VideoMenuOrange else Color.White,
+                                modifier = Modifier.size(if (captureMode == CaptureMode.VIDEO) 22.dp else 18.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = stringResource(R.string.settings_title),
                             color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium,
+                            fontSize = if (captureMode == CaptureMode.VIDEO) 18.sp else 15.sp,
+                            fontWeight = if (captureMode == CaptureMode.VIDEO) FontWeight.Bold else FontWeight.Medium,
                             modifier = Modifier.weight(1f)
                         )
                         Icon(
                             imageVector = AppIcons.ChevronRight,
                             contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.3f),
+                            tint = if (captureMode == CaptureMode.VIDEO) VideoMenuOrange else Color.White.copy(alpha = 0.3f),
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -1123,48 +1191,264 @@ private fun VideoAspectRatioGlyph(tint: Color) {
 
 @Composable
 private fun VideoSettingTile(
+    icon: ImageVector,
     title: String,
     summary: String,
     expanded: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
+    val shape = RoundedCornerShape(14.dp)
+    Box(
         modifier = modifier
             .fillMaxHeight()
             .then(
-                if (expanded) Modifier.clip(RoundedCornerShape(9.dp)).background(AccentColor)
-                else Modifier.menuCardSurface()
+                if (expanded) Modifier.clip(shape).background(VideoMenuOrange)
+                else Modifier.menuCardSurface(
+                    shape = shape,
+                    background = VideoMenuCard,
+                    elevation = 3.dp
+                )
             )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 3.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.CenterStart
     ) {
-        Text(
-            text = title,
-            color = if (expanded) OnAccentColor.copy(alpha = 0.75f) else Color.White.copy(alpha = 0.72f),
-            fontSize = 9.sp,
-            lineHeight = 12.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1
-        )
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            QuickSettingLabel(
-                text = summary,
-                color = if (expanded) OnAccentColor else Color.White,
-                maxFontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
-            )
             Icon(
-                imageVector = if (expanded) AppIcons.ExpandLess else AppIcons.OpenInFull,
+                imageVector = icon,
                 contentDescription = null,
-                tint = if (expanded) OnAccentColor else Color.White.copy(alpha = 0.8f),
-                modifier = Modifier.size(12.dp)
+                tint = if (expanded) VideoMenuInk else VideoMenuOrange,
+                modifier = Modifier.size(21.dp)
             )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(1.dp)
+            ) {
+                Text(
+                    text = title,
+                    color = if (expanded) VideoMenuInk.copy(alpha = 0.78f) else VideoMenuOrange,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+                QuickSettingLabel(
+                    text = summary,
+                    color = if (expanded) VideoMenuInk else Color.White,
+                    maxFontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Icon(
+                imageVector = if (expanded) AppIcons.ExpandLess else Icons.Default.NorthEast,
+                contentDescription = null,
+                tint = if (expanded) VideoMenuInk else VideoMenuOrange,
+                modifier = Modifier.size(17.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoMenuToggleTile(
+    title: String,
+    icon: ImageVector,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val shape = RoundedCornerShape(14.dp)
+    val alpha = if (enabled) 1f else 0.42f
+    Row(
+        modifier = modifier
+            .fillMaxHeight()
+            .menuCardSurface(
+                shape = shape,
+                background = VideoMenuCard,
+                elevation = 3.dp
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = VideoMenuOrange.copy(alpha = alpha),
+            modifier = Modifier.size(21.dp)
+        )
+        Text(
+            text = title,
+            color = Color.White.copy(alpha = alpha),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            modifier = Modifier.weight(1f)
+        )
+        Box(
+            modifier = Modifier
+                .size(12.dp)
+                .clip(CircleShape)
+                .background(
+                    when {
+                        !enabled -> Color.White.copy(alpha = 0.14f)
+                        checked -> VideoMenuOrange
+                        else -> Color(0xFF77777D)
+                    }
+                )
+        )
+    }
+}
+
+@Composable
+private fun VideoMenuActionTile(
+    title: String,
+    value: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        modifier = modifier
+            .fillMaxHeight()
+            .menuCardSurface(
+                shape = shape,
+                background = VideoMenuCard,
+                elevation = 3.dp
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = VideoMenuOrange,
+            modifier = Modifier.size(22.dp)
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                text = title,
+                color = VideoMenuOrange,
+                fontSize = 10.sp,
+                lineHeight = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+            Text(
+                text = value,
+                color = Color.White,
+                fontSize = 14.sp,
+                lineHeight = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoContentManagementTile(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .menuCardSurface(
+                shape = RoundedCornerShape(15.dp),
+                background = VideoMenuCard,
+                elevation = 3.dp
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = AppIcons.Image,
+            contentDescription = null,
+            tint = VideoMenuOrange,
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(modifier = Modifier.width(14.dp))
+        Text(
+            text = stringResource(R.string.settings_section_management),
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+            maxLines = 1
+        )
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(VideoMenuRaisedCard),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = AppIcons.Tune,
+                contentDescription = null,
+                tint = VideoMenuOrange,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoAspectRatioMenuIcon(
+    ratio: VideoAspectRatio,
+    tint: Color
+) {
+    Canvas(modifier = Modifier.size(22.dp)) {
+        val stroke = 2.dp.toPx()
+        when (ratio) {
+            VideoAspectRatio.RATIO_16_9 -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(size.width * 0.08f, size.height * 0.23f),
+                    size = Size(size.width * 0.84f, size.height * 0.54f),
+                    cornerRadius = CornerRadius(2.dp.toPx()),
+                    style = Stroke(width = stroke)
+                )
+            }
+            VideoAspectRatio.RATIO_21_9 -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(size.width * 0.06f, size.height * 0.30f),
+                    size = Size(size.width * 0.88f, size.height * 0.40f),
+                    cornerRadius = CornerRadius(2.dp.toPx()),
+                    style = Stroke(width = stroke)
+                )
+            }
+            VideoAspectRatio.OPEN_GATE -> {
+                val radius = size.minDimension * 0.34f
+                repeat(6) { index ->
+                    drawArc(
+                        color = tint,
+                        startAngle = index * 60f + 5f,
+                        sweepAngle = 42f,
+                        useCenter = false,
+                        topLeft = Offset(
+                            size.width / 2f - radius,
+                            size.height / 2f - radius
+                        ),
+                        size = Size(radius * 2f, radius * 2f),
+                        style = Stroke(width = stroke * 2f)
+                    )
+                }
+                drawCircle(tint, radius = 2.2.dp.toPx())
+            }
         }
     }
 }
@@ -1342,6 +1626,12 @@ private fun ContentManagementQuickSetting(
 private val CameraMenuBackground = Color(0xFF111418)
 private val CameraMenuCard = Color(0xFF20242A)
 private val CameraMenuRaisedCard = Color(0xFF282D35)
+
+private val VideoMenuBackground = Color(0xFF0F0F13)
+private val VideoMenuCard = Color(0xFF242429)
+private val VideoMenuRaisedCard = Color(0xFF303036)
+private val VideoMenuOrange = Color(0xFFFF6900)
+private val VideoMenuInk = Color(0xFF1A100B)
 
 private fun Modifier.menuCardSurface(
     shape: RoundedCornerShape = RoundedCornerShape(9.dp),
