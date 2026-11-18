@@ -732,7 +732,7 @@ fun CameraTopSheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp, bottom = if (captureMode == CaptureMode.VIDEO) 0.dp else 16.dp),
+                        .padding(top = 8.dp, bottom = if (captureMode == CaptureMode.VIDEO) 0.dp else 24.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(
@@ -744,7 +744,7 @@ fun CameraTopSheet(
                                 elevation = 4.dp
                             )
                             .clickable(onClick = onMoreSettingsClick)
-                            .padding(horizontal = 14.dp, vertical = if (captureMode == CaptureMode.VIDEO) 4.5.dp else 7.dp),
+                            .padding(horizontal = 14.dp, vertical = if (captureMode == CaptureMode.VIDEO) 4.5.dp else 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
@@ -1366,7 +1366,7 @@ private fun PhotoMenuQuickTile(
                 Icon(
                     imageVector = trailingIcon,
                     contentDescription = null,
-                    tint = if (selected) PhotoMenuInk else VideoMenuOrange,
+                    tint = foreground,
                     modifier = Modifier.size(16.dp)
                 )
             }
