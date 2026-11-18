@@ -8166,82 +8166,144 @@ class Camera2Controller(private val context: Context) {
     }
 
 
+    private data class SpatialVideoPhysicalLens(
+        val cameraId: String,
+        val focalLength35mmEquivalent: Float
+    )
+
+    private data class SpatialVideoCameraPair(
+        val logicalCameraId: String,
+        val mainPhysicalCameraId: String,
+        val ultraWidePhysicalCameraId: String,
+        val ultraWideRelativeFocalLength: Float
+    )
+
     /**
-     * Special Video records the rear main and ultra-wide physical outputs from one
-     * logical Camera2 device. The UI must not confuse front/rear concurrent-camera
-     * support with this physical-output capability.
+     * CameraDiscovery's displayed zoom ratios are based on its first enumerated rear camera.
+     * That is not guaranteed to be the 1x main sensor. Resolve the parent logical camera
+     * directly from Camera2 and compare physical focal lengths against the selected 1x sensor.
+     * This also works when a public physical camera entry was not given a discovery binding.
      */
-    fun isSpatialVideoSupported(): Boolean {
+    private fun resolveSpatialVideoCameraPair(): SpatialVideoCameraPair? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
             PLog.i(TAG, "Special Video unavailable: Android API 28 or newer is required")
-            return false
+            return null
         }
 
         val state = _state.value
-        val current = state.getCurrentCameraInfo()
-        if (current == null) {
+        val current = state.getCurrentCameraInfo() ?: run {
             PLog.i(TAG, "Special Video unavailable: no selected camera")
-            return false
+            return null
         }
         if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK ||
-            abs(current.intrinsicZoomRatio - 1f) > 0.15f
+            (current.lensType != LensType.BACK_MAIN && abs(current.intrinsicZoomRatio - 1f) > 0.15f)
         ) {
             PLog.i(
                 TAG,
-                "Special Video unavailable: select the rear 1x camera first " +
-                    "(camera=${current.cameraId}, facing=${current.lensFacing}, zoom=${current.intrinsicZoomRatio})"
+                "Special Video unavailable: select the rear 1x main camera first " +
+                    "(camera=${current.cameraId}, lens=${current.lensType}, zoom=${current.intrinsicZoomRatio})"
             )
-            return false
+            return null
         }
 
-        val logicalId = current.logicalCameraId?.takeIf { it.isNotBlank() }
-        if (logicalId == null) {
-            val discovered = state.availableCameras.joinToString { camera ->
-                "${camera.cameraId}(logical=${camera.logicalCameraId}, zoom=${camera.intrinsicZoomRatio})"
+        val logicalIdsToInspect = linkedSetOf<String>().apply {
+            current.logicalCameraId?.takeIf { it.isNotBlank() }?.let(::add)
+            runCatching { current.getOpenCameraId() }.getOrNull()?.takeIf { it.isNotBlank() }?.let(::add)
+            current.cameraId.takeIf { it.isNotBlank() }?.let(::add)
+            runCatching { cameraManager.cameraIdList.toList() }.getOrDefault(emptyList()).forEach(::add)
+        }
+        val currentOpenId = runCatching { current.getOpenCameraId() }.getOrDefault(current.cameraId)
+
+        for (logicalId in logicalIdsToInspect) {
+            val logical = runCatching { cameraManager.getCameraCharacteristics(logicalId) }.getOrNull() ?: continue
+            val logicalFacing = logical.get(CameraCharacteristics.LENS_FACING)
+            val capabilities = logical.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+            if (logicalFacing != CameraCharacteristics.LENS_FACING_BACK ||
+                capabilities?.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) != true
+            ) continue
+
+            val physicalIds = logical.physicalCameraIds
+            if (physicalIds.size < 2) continue
+            val belongsToSelectedCamera = logicalId == current.logicalCameraId ||
+                logicalId == currentOpenId || logicalId == current.cameraId ||
+                physicalIds.contains(current.cameraId)
+            if (!belongsToSelectedCamera) continue
+
+            val physicalLenses = physicalIds.mapNotNull { physicalId ->
+                runCatching {
+                    val characteristics = cameraManager.getCameraCharacteristics(physicalId)
+                    val facing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: logicalFacing
+                    if (facing != CameraCharacteristics.LENS_FACING_BACK) return@runCatching null
+                    val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                    val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                    val focal = focalLengths?.firstOrNull()?.takeIf { it > 0f } ?: return@runCatching null
+                    val diagonal = sensorSize?.let {
+                        kotlin.math.sqrt((it.width * it.width + it.height * it.height).toDouble()).toFloat()
+                    }?.takeIf { it > 0f } ?: return@runCatching null
+                    SpatialVideoPhysicalLens(
+                        cameraId = physicalId,
+                        focalLength35mmEquivalent = focal * 43.2666f / diagonal
+                    )
+                }.getOrNull()
             }
-            PLog.w(
-                TAG,
-                "Special Video unavailable: selected camera has no logical physical-camera binding. " +
-                    "Logical discovery may be disabled. Available cameras: $discovered"
+            if (physicalLenses.size < 2) {
+                PLog.i(TAG, "Special Video logical=$logicalId exposes ${physicalLenses.size} readable rear physical lenses; ids=$physicalIds")
+                continue
+            }
+
+            val discoveredMain = state.availableCameras
+                .filter {
+                    it.cameraId in physicalIds && it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                        !it.isVirtualIszLens && !it.isCustomLensId
+                }
+                .minByOrNull {
+                    val penalty = if (it.logicalCameraId == logicalId) 0f else 0.05f
+                    abs(it.intrinsicZoomRatio - 1f) + penalty
+                }
+                ?.cameraId
+            val mainId = when {
+                current.cameraId in physicalIds -> current.cameraId
+                discoveredMain != null -> discoveredMain
+                else -> physicalLenses.minByOrNull {
+                    abs(it.focalLength35mmEquivalent - current.focalLength35mmEquivalent)
+                }?.cameraId
+            } ?: continue
+            val mainLens = physicalLenses.firstOrNull { it.cameraId == mainId } ?: continue
+            val ultraWide = physicalLenses
+                .filter { it.cameraId != mainId }
+                .map { lens -> lens to (lens.focalLength35mmEquivalent / mainLens.focalLength35mmEquivalent) }
+                .filter { (_, ratio) -> ratio.isFinite() && ratio in 0.2f..0.85f }
+                .minByOrNull { (_, ratio) -> ratio }
+                ?: continue
+
+            val pair = SpatialVideoCameraPair(
+                logicalCameraId = logicalId,
+                mainPhysicalCameraId = mainId,
+                ultraWidePhysicalCameraId = ultraWide.first.cameraId,
+                ultraWideRelativeFocalLength = ultraWide.second
             )
-            return false
+            PLog.i(
+                TAG,
+                "Special Video Camera2 pair resolved: logical=${pair.logicalCameraId}, " +
+                    "main=${pair.mainPhysicalCameraId}@${mainLens.focalLength35mmEquivalent}mmEq, " +
+                    "ultraWide=${pair.ultraWidePhysicalCameraId}@${ultraWide.first.focalLength35mmEquivalent}mmEq, " +
+                    "relative=${pair.ultraWideRelativeFocalLength}, " +
+                    "availablePhysicalIds=$physicalIds"
+            )
+            return pair
         }
 
-        val logicalCharacteristics = runCatching {
-            cameraManager.getCameraCharacteristics(logicalId)
-        }.getOrElse { error ->
-            PLog.w(TAG, "Special Video unavailable: cannot read logical camera $logicalId", error)
-            return false
-        }
-        val capabilities = logicalCharacteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-        if (capabilities?.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) != true) {
-            PLog.i(TAG, "Special Video unavailable: camera $logicalId does not advertise LOGICAL_MULTI_CAMERA")
-            return false
-        }
-
-        val physicalIds = logicalCharacteristics.physicalCameraIds
-        val candidates = state.availableCameras.filter {
-            it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
-                it.logicalCameraId == logicalId &&
-                physicalIds.contains(it.cameraId) &&
-                !it.isVirtualIszLens &&
-                !it.isCustomLensId
-        }
-        val main = candidates.minByOrNull { abs(it.intrinsicZoomRatio - 1f) }
-            ?.takeIf { abs(it.intrinsicZoomRatio - 1f) <= 0.15f }
-        val ultraWide = candidates.filter { it.intrinsicZoomRatio in 0.2f..0.85f }
-            .minByOrNull { it.intrinsicZoomRatio }
-
-        val supported = main != null && ultraWide != null && main.cameraId != ultraWide.cameraId
-        PLog.i(
+        PLog.w(
             TAG,
-            "Special Video capability: supported=$supported, logical=$logicalId, " +
-                "main=${main?.cameraId}@${main?.intrinsicZoomRatio}, " +
-                "ultraWide=${ultraWide?.cameraId}@${ultraWide?.intrinsicZoomRatio}, " +
-                "physicalIds=$physicalIds, discoveredCandidates=${candidates.size}"
+            "Special Video unavailable: no logical rear camera containing selected camera " +
+                "${current.cameraId} (open=${currentOpenId}, logical=${current.logicalCameraId}) exposed a " +
+                "distinct rear physical lens with 0.2x-0.85x focal length relative to the selected 1x sensor. " +
+                "Camera2 ids=${runCatching { cameraManager.cameraIdList.contentToString() }.getOrDefault("unavailable")}"
         )
-        return supported
+        return null
     }
+
+    fun isSpatialVideoSupported(): Boolean = resolveSpatialVideoCameraPair() != null
 
     fun setSpatialVideoEnabled(enabled: Boolean) {
         val handler = cameraHandler
@@ -8255,24 +8317,22 @@ class Camera2Controller(private val context: Context) {
             return
         }
         if (enabled) {
-            if (_state.value.captureMode != CaptureMode.VIDEO || !isSpatialVideoSupported()) {
-                onCameraError?.invoke(-1, "Special Video requires a logical rear camera with simultaneous 1x and 0.5x physical outputs.", false)
+            if (_state.value.captureMode != CaptureMode.VIDEO) {
+                onCameraError?.invoke(-1, "Switch to Video mode before enabling Special Video.", false)
                 return
             }
-            val current = _state.value.getCurrentCameraInfo() ?: return
-            val logicalId = current.logicalCameraId ?: return
-            val candidates = _state.value.availableCameras.filter {
-                it.lensFacing == CameraCharacteristics.LENS_FACING_BACK && it.logicalCameraId == logicalId &&
-                    !it.isVirtualIszLens && !it.isCustomLensId
-            }
-            spatialVideoLogicalCameraId = logicalId
-            spatialVideoMainPhysicalCameraId = candidates.minByOrNull { abs(it.intrinsicZoomRatio - 1f) }?.cameraId
-            spatialVideoUltraWidePhysicalCameraId = candidates.filter { it.intrinsicZoomRatio in 0.2f..0.85f }
-                .minByOrNull { it.intrinsicZoomRatio }?.cameraId
-            if (spatialVideoMainPhysicalCameraId == null || spatialVideoUltraWidePhysicalCameraId == null) {
-                onCameraError?.invoke(-1, "Special Video camera pair could not be resolved.", false)
+            val pair = resolveSpatialVideoCameraPair()
+            if (pair == null) {
+                onCameraError?.invoke(
+                    -1,
+                    "Special Video camera pair was not exposed by this device's Camera2 logical-camera metadata. See Camera2/SpecialVideo Logcat diagnostics.",
+                    false
+                )
                 return
             }
+            spatialVideoLogicalCameraId = pair.logicalCameraId
+            spatialVideoMainPhysicalCameraId = pair.mainPhysicalCameraId
+            spatialVideoUltraWidePhysicalCameraId = pair.ultraWidePhysicalCameraId
             spatialVideoEnabled = true
             dualCaptureEnabled = false
             activeOutputPhysicalCameraId = spatialVideoMainPhysicalCameraId
