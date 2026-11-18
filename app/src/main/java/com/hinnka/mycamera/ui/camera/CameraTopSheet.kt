@@ -177,18 +177,12 @@ fun CameraTopSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(if (captureMode == CaptureMode.VIDEO) 0.975f else 1f)
-                .clip(
-                    if (captureMode == CaptureMode.VIDEO) RoundedCornerShape(30.dp)
-                    else RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp)
-                )
-                .background(
-                    if (captureMode == CaptureMode.VIDEO) VideoMenuBackground
-                    else CameraMenuBackground
-                )
-                .padding(top = if (captureMode == CaptureMode.VIDEO) 35.dp else contentTopPadding)
+                .aspectRatio(if (captureMode == CaptureMode.VIDEO) 0.975f else 1.035f)
+                .clip(RoundedCornerShape(30.dp))
+                .background(VideoMenuBackground)
+                .padding(top = 35.dp)
                 .autoRotate(matchParentSize = true)
-                .padding(horizontal = if (captureMode == CaptureMode.VIDEO) 20.dp else 24.dp)
+                .padding(horizontal = 24.dp)
         ) {
             Column(
                 modifier = Modifier.weight(1f)
@@ -198,27 +192,35 @@ fun CameraTopSheet(
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
                     ) {
                         AspectRatio.sanitizeTopSheetRatios(topSheetAspectRatios).forEach { ratio ->
                             val isSelected = aspectRatio == ratio
+                            val shape = RoundedCornerShape(14.dp)
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .heightIn(min = 34.dp)
+                                    .height(46.dp)
                                     .then(
-                                        if (isSelected) Modifier.clip(RoundedCornerShape(8.dp)).background(AccentColor)
-                                        else Modifier.menuCardSurface(shape = RoundedCornerShape(8.dp), elevation = 2.dp)
+                                        if (isSelected) {
+                                            Modifier.clip(shape).background(VideoMenuOrange)
+                                        } else {
+                                            Modifier.menuCardSurface(
+                                                shape = shape,
+                                                background = VideoMenuCard,
+                                                elevation = 3.dp
+                                            )
+                                        }
                                     )
-                                    .clickable { onAspectRatioChange(ratio) }
-                                    .padding(vertical = 8.dp),
+                                    .clickable { onAspectRatioChange(ratio) },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = ratio.getDisplayName(),
-                                    color = if (isSelected) OnAccentColor else Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    color = if (isSelected) PhotoMenuInk else Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
                                 )
                             }
                         }
@@ -226,73 +228,130 @@ fun CameraTopSheet(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    QuickSettingGrid(columns = 3, itemHeight = 36.dp) { itemModifier ->
+                    QuickSettingGrid(
+                        columns = 3,
+                        itemHeight = 39.dp,
+                        horizontalSpacing = 7.dp,
+                        verticalSpacing = 5.dp
+                    ) { itemModifier ->
                         if (isProfessionalMode) {
-                            QuickSettingButton2(
+                            PhotoMenuQuickTile(
                                 title = stringResource(R.string.settings_raw_color_engine),
-                                checked = true,
+                                leadingIcon = { tint ->
+                                    Icon(AppIcons.Layers, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                                },
+                                selected = true,
                                 onClick = { showRenderingEngineSheet = true },
                                 modifier = itemModifier
                             )
                         } else {
-                            QuickSettingToggle(
-                                title = stringResource(R.string.settings_use_jpg_max),
+                            PhotoMenuQuickTile(
+                                label = stringResource(R.string.settings_use_jpg_max),
+                                leadingIcon = { tint ->
+                                    Icon(AppIcons.Layers, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                                },
+                                selected = useJpgMax,
                                 checked = useJpgMax,
-                                onCheckedChange = onJpgMaxToggle,
+                                showStatusDot = true,
+                                onClick = { onJpgMaxToggle(!useJpgMax) },
                                 modifier = itemModifier
                             )
-                            QuickSettingToggle(
-                                title = stringResource(R.string.settings_use_multiple_exposure),
+                            PhotoMenuQuickTile(
+                                label = stringResource(R.string.settings_use_multiple_exposure),
+                                leadingIcon = { tint ->
+                                    Icon(AppIcons.Layers, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                                },
+                                selected = useMultipleExposure,
                                 checked = useMultipleExposure,
-                                onCheckedChange = onMultipleExposureToggle,
+                                showStatusDot = true,
+                                onClick = { onMultipleExposureToggle(!useMultipleExposure) },
                                 modifier = itemModifier
                             )
                         }
 
-                        QuickSettingToggle(
+                        PhotoMenuQuickTile(
                             title = stringResource(R.string.settings_ultra_hdr_gain_map),
+                            accentTitle = false,
+                            leadingIcon = { tint -> PhotoMenuHdrGlyph(tint) },
+                            selected = ultraHdrEnabled,
                             checked = ultraHdrEnabled,
-                            onCheckedChange = onUltraHdrToggle,
+                            showStatusDot = true,
+                            onClick = { onUltraHdrToggle(!ultraHdrEnabled) },
                             modifier = itemModifier
                         )
-                        QuickSettingToggle(
-                            title = stringResource(R.string.camera_preview_stabilization),
+                        PhotoMenuQuickTile(
+                            label = stringResource(R.string.camera_preview_stabilization),
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Stabilization, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
+                            selected = photoPreviewStabilizationEnabled,
                             checked = photoPreviewStabilizationEnabled,
-                            onCheckedChange = onPhotoPreviewStabilizationChange,
                             enabled = photoPreviewStabilizationAvailable,
+                            showStatusDot = true,
+                            onClick = { onPhotoPreviewStabilizationChange(!photoPreviewStabilizationEnabled) },
                             modifier = itemModifier
                         )
-                        MeteringModeQuickSetting(
-                            meteringMode = meteringMode,
-                            onMeteringModeChange = onMeteringModeChange,
+                        PhotoMenuQuickTile(
+                            title = stringResource(R.string.metering_mode),
+                            subtitle = photoMeteringModeLabel(meteringMode),
+                            leadingIcon = { tint -> PhotoMenuApertureGlyph(tint) },
+                            accentTitle = true,
+                            onClick = {
+                                val next = when (meteringMode) {
+                                    MeteringMode.SPOT -> MeteringMode.SYSTEM_DEFAULT
+                                    MeteringMode.SYSTEM_DEFAULT -> MeteringMode.CENTER_WEIGHTED
+                                    MeteringMode.CENTER_WEIGHTED -> MeteringMode.AVERAGE
+                                    MeteringMode.AVERAGE -> MeteringMode.HIGHLIGHT_PRIORITY
+                                    MeteringMode.HIGHLIGHT_PRIORITY -> MeteringMode.SPOT
+                                }
+                                onMeteringModeChange(next)
+                            },
                             modifier = itemModifier
                         )
-                        ToolboxQuickSetting(
-                            onToolboxClick = onToolboxClick,
+                        PhotoMenuQuickTile(
+                            title = stringResource(R.string.toolbox_title),
+                            accentTitle = false,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Palette, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
+                            onClick = onToolboxClick,
                             modifier = itemModifier
                         )
-                        ContentManagementQuickSetting(
+                        PhotoMenuContentManagementTile(
                             onClick = { showContentManagementOptions = !showContentManagementOptions },
                             modifier = itemModifier
                         )
-
-                        QuickSettingToggle(
-                            title = "LIVE PHOTO",
+                        PhotoMenuQuickTile(
+                            title = "LIVE",
+                            subtitle = "PHOTO",
+                            accentTitle = false,
+                            leadingIcon = { tint -> PhotoMenuLivePhotoGlyph(tint) },
+                            selected = useLivePhoto,
                             checked = useLivePhoto,
-                            onCheckedChange = { onLivePhotoToggle() },
+                            showStatusDot = true,
+                            onClick = onLivePhotoToggle,
                             modifier = itemModifier
                         )
-                        QuickSettingValue(
+                        PhotoMenuQuickTile(
                             title = "TIMER",
-                            value = if (timerSeconds > 0) "${timerSeconds}s" else "Off",
+                            subtitle = if (timerSeconds > 0) "${timerSeconds}s" else "Off",
+                            accentTitle = true,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Timer, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+                            },
                             onClick = onTimerToggle,
                             modifier = itemModifier
                         )
-                        QuickSettingToggle(
+                        PhotoMenuQuickTile(
                             title = "REFOCUS",
+                            accentTitle = false,
+                            leadingIcon = { tint -> PhotoMenuRefocusGlyph(tint) },
+                            selected = oppoPhotoSettings.refocusEnabled,
                             checked = oppoPhotoSettings.refocusEnabled,
                             enabled = refocusAvailable && !isProfessionalMode,
-                            onCheckedChange = { enabled ->
+                            showStatusDot = true,
+                            onClick = {
+                                val enabled = !oppoPhotoSettings.refocusEnabled
                                 onOppoPhotoSettingsChange(
                                     oppoPhotoSettings.copy(
                                         refocusEnabled = enabled,
@@ -302,20 +361,31 @@ fun CameraTopSheet(
                             },
                             modifier = itemModifier
                         )
-                        QuickSettingToggle(
+                        PhotoMenuQuickTile(
                             title = "BURST",
+                            accentTitle = false,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.BurstMode, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+                            },
+                            selected = oppoPhotoSettings.fastShutterEnabled,
                             checked = oppoPhotoSettings.fastShutterEnabled,
                             enabled = !isProfessionalMode,
-                            onCheckedChange = { enabled ->
+                            showStatusDot = true,
+                            onClick = {
                                 onOppoPhotoSettingsChange(
-                                    oppoPhotoSettings.copy(fastShutterEnabled = enabled)
+                                    oppoPhotoSettings.copy(fastShutterEnabled = !oppoPhotoSettings.fastShutterEnabled)
                                 )
                             },
                             modifier = itemModifier
                         )
-                        QuickSettingButton2(
+                        PhotoMenuQuickTile(
                             title = "STYLES",
-                            checked = isProfessionalMode || oppoPhotoSettings.customPipelineEnabled,
+                            accentTitle = false,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.AutoAwesome, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+                            },
+                            selected = isProfessionalMode || oppoPhotoSettings.customPipelineEnabled,
+                            trailingIcon = AppIcons.ChevronRight,
                             onClick = {
                                 if (isProfessionalMode) {
                                     showRenderingEngineSheet = true
@@ -323,18 +393,6 @@ fun CameraTopSheet(
                                     showOppoPipelineSheet = true
                                 }
                             },
-                            modifier = itemModifier
-                        )
-                        QuickSettingButton(
-                            title = "FILTER",
-                            icon = AppIcons.AutoAwesome,
-                            onClick = onPhotoFilterClick,
-                            modifier = itemModifier
-                        )
-                        QuickSettingButton(
-                            title = "DEPTH",
-                            icon = AppIcons.Tune,
-                            onClick = onPhotoDepthClick,
                             modifier = itemModifier
                         )
                     }
@@ -351,6 +409,30 @@ fun CameraTopSheet(
                             handleContentManagementAction(onPresetManageClick)
                         }
                     )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PhotoMenuWideActionTile(
+                            title = "FILTER",
+                            leadingIcon = { tint -> PhotoMenuFilterGlyph(tint) },
+                            trailingIcon = AppIcons.AutoAwesome,
+                            trailingTint = Color.White.copy(alpha = 0.75f),
+                            onClick = onPhotoFilterClick,
+                            modifier = Modifier.weight(1f).height(38.dp)
+                        )
+                        PhotoMenuWideActionTile(
+                            title = "DEPTH",
+                            leadingIcon = { tint -> PhotoMenuDepthGlyph(tint) },
+                            trailingIcon = AppIcons.Tune,
+                            trailingTint = VideoMenuOrange,
+                            onClick = onPhotoDepthClick,
+                            modifier = Modifier.weight(1f).height(38.dp)
+                        )
+                    }
+
                 } else {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -650,60 +732,48 @@ fun CameraTopSheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp, bottom = if (captureMode == CaptureMode.VIDEO) 0.dp else 8.dp),
+                        .padding(top = 8.dp, bottom = if (captureMode == CaptureMode.VIDEO) 0.dp else 16.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .then(
-                                if (captureMode == CaptureMode.VIDEO) {
-                                    Modifier.menuCardSurface(
-                                        shape = RoundedCornerShape(16.dp),
-                                        background = VideoMenuCard,
-                                        elevation = 4.dp
-                                    )
-                                } else {
-                                    Modifier.menuCardSurface()
-                                }
+                            .menuCardSurface(
+                                shape = RoundedCornerShape(16.dp),
+                                background = VideoMenuCard,
+                                elevation = 4.dp
                             )
                             .clickable(onClick = onMoreSettingsClick)
-                            .padding(
-                                horizontal = 14.dp,
-                                vertical = if (captureMode == CaptureMode.VIDEO) 4.5.dp else 6.dp
-                            ),
+                            .padding(horizontal = 14.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(if (captureMode == CaptureMode.VIDEO) 34.dp else 28.dp)
+                                .size(34.dp)
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(
-                                    if (captureMode == CaptureMode.VIDEO) VideoMenuRaisedCard
-                                    else CameraMenuRaisedCard
-                                ),
+                                .background(VideoMenuRaisedCard),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Settings,
                                 contentDescription = null,
-                                tint = if (captureMode == CaptureMode.VIDEO) VideoMenuOrange else Color.White,
-                                modifier = Modifier.size(if (captureMode == CaptureMode.VIDEO) 22.dp else 18.dp)
+                                tint = VideoMenuOrange,
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = stringResource(R.string.settings_title),
                             color = Color.White,
-                            fontSize = if (captureMode == CaptureMode.VIDEO) 18.sp else 15.sp,
-                            fontWeight = if (captureMode == CaptureMode.VIDEO) FontWeight.Bold else FontWeight.Medium,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
                             modifier = Modifier.weight(1f)
                         )
                         Icon(
                             imageVector = AppIcons.ChevronRight,
                             contentDescription = null,
-                            tint = if (captureMode == CaptureMode.VIDEO) VideoMenuOrange else Color.White.copy(alpha = 0.3f),
-                            modifier = Modifier.size(20.dp)
+                            tint = VideoMenuOrange,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
@@ -1200,6 +1270,312 @@ private fun VideoAspectRatioGlyph(tint: Color) {
     }
 }
 
+
+@Composable
+private fun photoMeteringModeLabel(mode: MeteringMode): String {
+    return when (mode) {
+        MeteringMode.SPOT -> stringResource(R.string.metering_spot)
+        MeteringMode.CENTER_WEIGHTED -> stringResource(R.string.metering_center_weighted)
+        MeteringMode.SYSTEM_DEFAULT -> stringResource(R.string.metering_system_default)
+        MeteringMode.AVERAGE -> stringResource(R.string.metering_average)
+        MeteringMode.HIGHLIGHT_PRIORITY -> stringResource(R.string.metering_highlight_priority)
+    }
+}
+
+@Composable
+private fun PhotoMenuQuickTile(
+    title: String,
+    subtitle: String? = null,
+    label: String? = null,
+    leadingIcon: @Composable (Color) -> Unit,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    checked: Boolean = false,
+    enabled: Boolean = true,
+    showStatusDot: Boolean = false,
+    accentTitle: Boolean = subtitle != null,
+    trailingIcon: ImageVector? = null
+) {
+    val shape = RoundedCornerShape(13.dp)
+    val contentAlpha = if (enabled) 1f else 0.42f
+    val foreground = if (selected) PhotoMenuInk else Color.White.copy(alpha = contentAlpha)
+    val iconTint = if (selected) PhotoMenuInk else VideoMenuOrange.copy(alpha = contentAlpha)
+    val displayedTitle = label?.substringBefore(' ') ?: title
+    val displayedSubtitle = label?.substringAfter(' ', "")?.takeIf { it.isNotBlank() } ?: subtitle
+
+    Row(
+        modifier = modifier
+            .fillMaxHeight()
+            .then(
+                if (selected) Modifier.clip(shape).background(VideoMenuOrange)
+                else Modifier.menuCardSurface(
+                    shape = shape,
+                    background = VideoMenuCard,
+                    elevation = 3.dp
+                )
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        leadingIcon(iconTint)
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(0.dp)
+        ) {
+            if (displayedSubtitle != null) {
+                QuickSettingLabel(
+                    text = displayedTitle,
+                    color = if (selected) PhotoMenuInk else if (accentTitle) VideoMenuOrange else foreground,
+                    fontWeight = FontWeight.SemiBold,
+                    maxFontSize = 10.5.sp
+                )
+                QuickSettingLabel(
+                    text = displayedSubtitle,
+                    color = foreground,
+                    fontWeight = FontWeight.Bold,
+                    maxFontSize = 11.5.sp
+                )
+            } else {
+                QuickSettingLabel(
+                    text = displayedTitle,
+                    color = if (selected) PhotoMenuInk else foreground,
+                    fontWeight = FontWeight.Bold,
+                    maxFontSize = 12.sp
+                )
+            }
+        }
+        when {
+            showStatusDot -> {
+                Box(
+                    modifier = Modifier
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when {
+                                selected -> PhotoMenuInk
+                                checked -> VideoMenuOrange
+                                else -> Color(0xFF77777D)
+                            }.copy(alpha = contentAlpha)
+                        )
+                )
+            }
+            trailingIcon != null -> {
+                Icon(
+                    imageVector = trailingIcon,
+                    contentDescription = null,
+                    tint = if (selected) PhotoMenuInk else VideoMenuOrange,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoMenuContentManagementTile(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxHeight()
+            .menuCardSurface(
+                shape = RoundedCornerShape(13.dp),
+                background = VideoMenuCard,
+                elevation = 3.dp
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Icon(
+            imageVector = AppIcons.Tune,
+            contentDescription = null,
+            tint = VideoMenuOrange,
+            modifier = Modifier.size(21.dp)
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(0.dp)
+        ) {
+            Text(
+                text = "Content",
+                color = VideoMenuOrange,
+                fontSize = 10.5.sp,
+                lineHeight = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+            Text(
+                text = "Management",
+                color = Color.White,
+                fontSize = 11.5.sp,
+                lineHeight = 13.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(23.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(VideoMenuRaisedCard),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = AppIcons.Tune,
+                contentDescription = null,
+                tint = VideoMenuOrange,
+                modifier = Modifier.size(15.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun PhotoMenuWideActionTile(
+    title: String,
+    leadingIcon: @Composable (Color) -> Unit,
+    trailingIcon: ImageVector,
+    trailingTint: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .menuCardSurface(
+                shape = RoundedCornerShape(14.dp),
+                background = VideoMenuCard,
+                elevation = 3.dp
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        leadingIcon(VideoMenuOrange)
+        Text(
+            text = title,
+            color = Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+            maxLines = 1
+        )
+        Icon(
+            imageVector = trailingIcon,
+            contentDescription = null,
+            tint = trailingTint,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+@Composable
+private fun PhotoMenuHdrGlyph(tint: Color) {
+    Box(
+        modifier = Modifier
+            .size(width = 25.dp, height = 17.dp)
+            .border(1.5.dp, tint, RoundedCornerShape(3.dp))
+            .padding(1.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "HDR",
+            color = tint,
+            fontSize = 8.sp,
+            lineHeight = 9.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun PhotoMenuApertureGlyph(tint: Color) {
+    Canvas(modifier = Modifier.size(22.dp)) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val radius = size.minDimension * 0.36f
+        val stroke = 1.8.dp.toPx()
+        drawCircle(tint, radius = radius, center = center, style = Stroke(width = stroke))
+        repeat(6) { index ->
+            val angle = Math.toRadians(index * 60.0)
+            val start = Offset(
+                center.x + kotlin.math.cos(angle).toFloat() * radius * 0.22f,
+                center.y + kotlin.math.sin(angle).toFloat() * radius * 0.22f
+            )
+            val end = Offset(
+                center.x + kotlin.math.cos(angle + Math.PI / 3.0).toFloat() * radius,
+                center.y + kotlin.math.sin(angle + Math.PI / 3.0).toFloat() * radius
+            )
+            drawLine(tint, start, end, stroke, cap = StrokeCap.Round)
+        }
+    }
+}
+
+@Composable
+private fun PhotoMenuLivePhotoGlyph(tint: Color) {
+    Canvas(modifier = Modifier.size(22.dp)) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        drawCircle(tint, radius = size.minDimension * 0.34f, center = center, style = Stroke(width = 1.8.dp.toPx()))
+        drawCircle(tint, radius = size.minDimension * 0.10f, center = center)
+    }
+}
+
+@Composable
+private fun PhotoMenuRefocusGlyph(tint: Color) {
+    Canvas(modifier = Modifier.size(22.dp)) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val stroke = 1.8.dp.toPx()
+        val radius = size.minDimension * 0.31f
+        drawCircle(tint, radius = radius, center = center, style = Stroke(width = stroke))
+        drawLine(tint, Offset(center.x, 0f), Offset(center.x, size.height * 0.22f), stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(center.x, size.height * 0.78f), Offset(center.x, size.height), stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(0f, center.y), Offset(size.width * 0.22f, center.y), stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(size.width * 0.78f, center.y), Offset(size.width, center.y), stroke, cap = StrokeCap.Round)
+        drawCircle(tint, radius = 2.dp.toPx(), center = center)
+    }
+}
+
+@Composable
+private fun PhotoMenuFilterGlyph(tint: Color) {
+    Canvas(modifier = Modifier.size(22.dp)) {
+        val radius = size.minDimension * 0.18f
+        val centers = listOf(
+            Offset(size.width * 0.36f, size.height * 0.36f),
+            Offset(size.width * 0.64f, size.height * 0.36f),
+            Offset(size.width * 0.50f, size.height * 0.64f)
+        )
+        centers.forEach { center ->
+            drawCircle(tint, radius = radius, center = center, style = Stroke(width = 1.7.dp.toPx()))
+        }
+    }
+}
+
+@Composable
+private fun PhotoMenuDepthGlyph(tint: Color) {
+    Canvas(modifier = Modifier.size(22.dp)) {
+        val leg = size.minDimension * 0.22f
+        val inset = size.minDimension * 0.18f
+        val stroke = 2.dp.toPx()
+        val left = inset
+        val top = inset
+        val right = size.width - inset
+        val bottom = size.height - inset
+        drawLine(tint, Offset(left, top + leg), Offset(left, top), stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(left, top), Offset(left + leg, top), stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(right - leg, top), Offset(right, top), stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(right, top), Offset(right, top + leg), stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(left, bottom - leg), Offset(left, bottom), stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(left, bottom), Offset(left + leg, bottom), stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(right - leg, bottom), Offset(right, bottom), stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(right, bottom), Offset(right, bottom - leg), stroke, cap = StrokeCap.Round)
+    }
+}
 
 @Composable
 private fun VideoSettingTile(
