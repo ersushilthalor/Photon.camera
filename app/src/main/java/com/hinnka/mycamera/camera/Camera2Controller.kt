@@ -302,6 +302,7 @@ class Camera2Controller(private val context: Context) {
     private var previewSurfaceTexture: SurfaceTexture? = null
     private var dualCaptureEnabled = false
     private var spatialVideoEnabled = false
+    private var spatialVideoLogicalCameraId: String? = null
     private var spatialVideoMainPhysicalCameraId: String? = null
     private var spatialVideoUltraWidePhysicalCameraId: String? = null
     @Volatile private var spatialPrimaryFinishedUri: Uri? = null
@@ -2748,6 +2749,24 @@ class Camera2Controller(private val context: Context) {
         val cameraId = _state.value.currentCameraId
         val selectedCamera = _state.value.getCurrentCameraInfo()
         val openCameraId = selectedCamera?.getOpenCameraId() ?: cameraId
+        if (spatialVideoEnabled && spatialVideoLogicalCameraId != null &&
+            openCameraId != spatialVideoLogicalCameraId
+        ) {
+            PLog.w(
+                TAG,
+                "Disabling Special Video before camera handoff: " +
+                    "expectedLogical=$spatialVideoLogicalCameraId, requestedOpenCamera=$openCameraId"
+            )
+            spatialVideoEnabled = false
+            if (spatialVideoRecorder.isRecording()) {
+                spatialVideoRecorder.stopRecording()
+            } else {
+                spatialVideoRecorder.forceStop()
+            }
+            spatialVideoLogicalCameraId = null
+            spatialVideoMainPhysicalCameraId = null
+            spatialVideoUltraWidePhysicalCameraId = null
+        }
         val targetZoomRatioByMain = getTargetZoomRatioByMain(_state.value, selectedCamera)
         val captureMode = _state.value.captureMode
         if (captureMode != CaptureMode.VIDEO && dualCaptureCameraDevice != null) {
@@ -8148,29 +8167,80 @@ class Camera2Controller(private val context: Context) {
 
 
     /**
-     * Dual Capture uses Android's concurrent-camera contract instead of trying to open
-     * a second camera optimistically. A back-facing primary camera and a front camera
-     * must be advertised in the same concurrent set by the device.
+     * Special Video records the rear main and ultra-wide physical outputs from one
+     * logical Camera2 device. The UI must not confuse front/rear concurrent-camera
+     * support with this physical-output capability.
      */
     fun isSpatialVideoSupported(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            PLog.i(TAG, "Special Video unavailable: Android API 28 or newer is required")
+            return false
+        }
+
         val state = _state.value
-        val current = state.getCurrentCameraInfo() ?: return false
-        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK || abs(current.intrinsicZoomRatio - 1f) > 0.15f) return false
-        val logicalId = current.logicalCameraId ?: return false
+        val current = state.getCurrentCameraInfo()
+        if (current == null) {
+            PLog.i(TAG, "Special Video unavailable: no selected camera")
+            return false
+        }
+        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK ||
+            abs(current.intrinsicZoomRatio - 1f) > 0.15f
+        ) {
+            PLog.i(
+                TAG,
+                "Special Video unavailable: select the rear 1x camera first " +
+                    "(camera=${current.cameraId}, facing=${current.lensFacing}, zoom=${current.intrinsicZoomRatio})"
+            )
+            return false
+        }
+
+        val logicalId = current.logicalCameraId?.takeIf { it.isNotBlank() }
+        if (logicalId == null) {
+            val discovered = state.availableCameras.joinToString { camera ->
+                "${camera.cameraId}(logical=${camera.logicalCameraId}, zoom=${camera.intrinsicZoomRatio})"
+            }
+            PLog.w(
+                TAG,
+                "Special Video unavailable: selected camera has no logical physical-camera binding. " +
+                    "Logical discovery may be disabled. Available cameras: $discovered"
+            )
+            return false
+        }
+
+        val logicalCharacteristics = runCatching {
+            cameraManager.getCameraCharacteristics(logicalId)
+        }.getOrElse { error ->
+            PLog.w(TAG, "Special Video unavailable: cannot read logical camera $logicalId", error)
+            return false
+        }
+        val capabilities = logicalCharacteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+        if (capabilities?.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) != true) {
+            PLog.i(TAG, "Special Video unavailable: camera $logicalId does not advertise LOGICAL_MULTI_CAMERA")
+            return false
+        }
+
+        val physicalIds = logicalCharacteristics.physicalCameraIds
         val candidates = state.availableCameras.filter {
-            it.lensFacing == CameraCharacteristics.LENS_FACING_BACK && it.logicalCameraId == logicalId &&
-                !it.isVirtualIszLens && !it.isCustomLensId
+            it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                it.logicalCameraId == logicalId &&
+                physicalIds.contains(it.cameraId) &&
+                !it.isVirtualIszLens &&
+                !it.isCustomLensId
         }
         val main = candidates.minByOrNull { abs(it.intrinsicZoomRatio - 1f) }
-            ?.takeIf { abs(it.intrinsicZoomRatio - 1f) <= 0.15f } ?: return false
+            ?.takeIf { abs(it.intrinsicZoomRatio - 1f) <= 0.15f }
         val ultraWide = candidates.filter { it.intrinsicZoomRatio in 0.2f..0.85f }
-            .minByOrNull { it.intrinsicZoomRatio } ?: return false
-        return main.cameraId != ultraWide.cameraId && runCatching {
-            val logical = cameraManager.getCameraCharacteristics(logicalId)
-            logical.physicalCameraIds.contains(main.cameraId) &&
-                logical.physicalCameraIds.contains(ultraWide.cameraId)
-        }.getOrDefault(false)
+            .minByOrNull { it.intrinsicZoomRatio }
+
+        val supported = main != null && ultraWide != null && main.cameraId != ultraWide.cameraId
+        PLog.i(
+            TAG,
+            "Special Video capability: supported=$supported, logical=$logicalId, " +
+                "main=${main?.cameraId}@${main?.intrinsicZoomRatio}, " +
+                "ultraWide=${ultraWide?.cameraId}@${ultraWide?.intrinsicZoomRatio}, " +
+                "physicalIds=$physicalIds, discoveredCandidates=${candidates.size}"
+        )
+        return supported
     }
 
     fun setSpatialVideoEnabled(enabled: Boolean) {
@@ -8195,6 +8265,7 @@ class Camera2Controller(private val context: Context) {
                 it.lensFacing == CameraCharacteristics.LENS_FACING_BACK && it.logicalCameraId == logicalId &&
                     !it.isVirtualIszLens && !it.isCustomLensId
             }
+            spatialVideoLogicalCameraId = logicalId
             spatialVideoMainPhysicalCameraId = candidates.minByOrNull { abs(it.intrinsicZoomRatio - 1f) }?.cameraId
             spatialVideoUltraWidePhysicalCameraId = candidates.filter { it.intrinsicZoomRatio in 0.2f..0.85f }
                 .minByOrNull { it.intrinsicZoomRatio }?.cameraId
@@ -8212,6 +8283,7 @@ class Camera2Controller(private val context: Context) {
         } else {
             spatialVideoEnabled = false
             spatialVideoRecorder.forceStop()
+            spatialVideoLogicalCameraId = null
             spatialVideoMainPhysicalCameraId = null
             spatialVideoUltraWidePhysicalCameraId = null
             activeOutputPhysicalCameraId = resolveRequestedPhysicalCameraId(
