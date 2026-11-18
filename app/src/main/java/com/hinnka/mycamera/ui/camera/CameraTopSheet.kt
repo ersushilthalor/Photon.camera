@@ -182,7 +182,7 @@ fun CameraTopSheet(
                 .background(VideoMenuBackground)
                 .padding(top = 35.dp)
                 .autoRotate(matchParentSize = true)
-                .padding(horizontal = 24.dp)
+                .padding(horizontal = if (captureMode == CaptureMode.VIDEO) 20.dp else 24.dp)
         ) {
             Column(
                 modifier = Modifier.weight(1f)
@@ -744,7 +744,7 @@ fun CameraTopSheet(
                                 elevation = 4.dp
                             )
                             .clickable(onClick = onMoreSettingsClick)
-                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                            .padding(horizontal = 14.dp, vertical = if (captureMode == CaptureMode.VIDEO) 4.5.dp else 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
@@ -1284,7 +1284,7 @@ private fun photoMeteringModeLabel(mode: MeteringMode): String {
 
 @Composable
 private fun PhotoMenuQuickTile(
-    title: String,
+    title: String = "",
     subtitle: String? = null,
     label: String? = null,
     leadingIcon: @Composable (Color) -> Unit,
@@ -1294,7 +1294,7 @@ private fun PhotoMenuQuickTile(
     checked: Boolean = false,
     enabled: Boolean = true,
     showStatusDot: Boolean = false,
-    accentTitle: Boolean = subtitle != null,
+    accentTitle: Boolean = subtitle != null || label != null,
     trailingIcon: ImageVector? = null
 ) {
     val shape = RoundedCornerShape(13.dp)
