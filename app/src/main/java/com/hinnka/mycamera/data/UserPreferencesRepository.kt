@@ -952,7 +952,7 @@ class UserPreferencesRepository(private val context: Context) {
                 iszLensConfigs = IszLensConfig.deserializeList(preferences[ISZ_LENS_CONFIGS]),
                 preferredMainCameraId = preferences[PREFERRED_MAIN_CAMERA_ID]?.takeIf { it.isNotBlank() },
                 preferredMacroCameraId = preferences[PREFERRED_MACRO_CAMERA_ID]?.takeIf { it.isNotBlank() },
-                enableLogicalMultiCameraDiscovery = preferences[ENABLE_LOGICAL_MULTI_CAMERA_DISCOVERY] ?: false,
+                enableLogicalMultiCameraDiscovery = preferences[ENABLE_LOGICAL_MULTI_CAMERA_DISCOVERY] ?: true,
                 logicalCameraBindingWhitelist = parseLogicalCameraBindingWhitelist(
                     preferences[LOGICAL_CAMERA_BINDING_WHITELIST]
                 ),
