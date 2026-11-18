@@ -2304,7 +2304,18 @@ private fun VideoDetailPlayer(
     val ultraWideFile = remember(photo.id, mediaUri) {
         SpatialVideoStore.ultraWideFile(context, mediaUri)
     }
-    val hasSpatialUltraWide = remember(photo.id, mediaUri) { ultraWideFile.isFile && ultraWideFile.length() > 0L }
+    var hasSpatialUltraWide by remember(photo.id, mediaUri) {
+        mutableStateOf(ultraWideFile.isFile && ultraWideFile.length() > 0L)
+    }
+    LaunchedEffect(photo.id, mediaUri) {
+        repeat(20) {
+            if (ultraWideFile.isFile && ultraWideFile.length() > 0L) {
+                hasSpatialUltraWide = true
+                return@LaunchedEffect
+            }
+            delay(500)
+        }
+    }
     var isUltraWideSelected by rememberSaveable(photo.id) { mutableStateOf(false) }
 
     PLog.d("VideoDetailPlayer", "VideoDetailPlayer recomposing/initializing. photoId: ${photo.id}, isActive: $isActive, mediaUri: $mediaUri")
@@ -2389,6 +2400,7 @@ private fun VideoDetailPlayer(
     LaunchedEffect(exoPlayer, isActive, lifecycle) {
         PLog.d("VideoDetailPlayer", "VideoDetailPlayer isActive changed: $isActive, player: $exoPlayer")
         if (exoPlayer != null && isActive) {
+            isUltraWideSelected = false
             delay(150) // Wait for transitions to complete and EGL surface to be fully ready
             PLog.d("VideoDetailPlayer", "Preparing and starting ExoPlayer.")
             exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri))

@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - perf/camera-startup-4k30
+      - feature/spatial-video-dual-lens
   pull_request:
     branches:
       - main
