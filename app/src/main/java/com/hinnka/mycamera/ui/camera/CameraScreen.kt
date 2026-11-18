@@ -1330,8 +1330,10 @@ fun CameraScreen(
                         state.useRaw &&
                         state.isRawSupported
 
-                    // 相机准备完成后再创建 Surface，首次只打开最终选中的镜头。
-                    if (isCameraPrepared) {
+                    // Create the GL surface as soon as persisted camera settings are ready.
+                    // Camera discovery and capability preparation then run in parallel with EGL setup.
+                    // openCamera still waits for both this SurfaceTexture and camera preparation.
+                    if (isCameraInitialized) {
                         CameraPreviewGL(
                             aspectRatio = previewAspectRatio,
                             previewSize = previewSize,
