@@ -158,6 +158,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setPreviewOrientationOffset(offset: Int) {
+        queueEvent {
+            renderer.setPreviewOrientationOffset(offset)
+        }
+    }
+
     fun setCalibrationOffset(offset: Int) {
         queueEvent {
             renderer.setCalibrationOffset(offset)

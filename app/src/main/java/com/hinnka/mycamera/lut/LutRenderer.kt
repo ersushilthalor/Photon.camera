@@ -488,6 +488,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var stabilizationInputWidth: Int = 1920
     private var stabilizationInputHeight: Int = 1080
     private var sensorOrientation: Int = 0
+    private var previewOrientationOffset: Int = 0
     private var calibrationOffset: Int = 0
     private var deviceRotation: Int = 0
     private var lensFacing: Int = 1 // CameraCharacteristics.LENS_FACING_BACK
@@ -2561,6 +2562,18 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     /**
+     * Align the front-camera preview with the rear-camera sensor reference.
+     * This correction is preview-only; capture and video orientation metadata stay unchanged.
+     */
+    fun setPreviewOrientationOffset(offset: Int) {
+        val normalizedOffset = Math.floorMod(offset, 360)
+        if (previewOrientationOffset != normalizedOffset) {
+            previewOrientationOffset = normalizedOffset
+            updateMVPMatrix()
+        }
+    }
+
+    /**
      * 设置校正偏移 (用户设置)
      */
     fun setCalibrationOffset(offset: Int) {
@@ -2665,7 +2678,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             return matrix
         }
 
-        val isSwapped = (sensorOrientation + calibrationOffset) % 180 != 0
+        val totalPreviewCorrection = Math.floorMod(calibrationOffset + previewOrientationOffset, 360)
+        val isSwapped = (sensorOrientation + totalPreviewCorrection) % 180 != 0
         val cropWidth = (cropRect[2] - cropRect[0]).coerceAtLeast(0.05f)
         val cropHeight = (cropRect[3] - cropRect[1]).coerceAtLeast(0.05f)
         val previewAspect = if (isSwapped) {
@@ -2675,8 +2689,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         val viewAspect = targetWidth.toFloat() / targetHeight.toFloat()
 
-        if (calibrationOffset != 0) {
-            Matrix.rotateM(matrix, 0, (-calibrationOffset).toFloat(), 0f, 0f, 1f)
+        if (totalPreviewCorrection != 0) {
+            Matrix.rotateM(matrix, 0, (-totalPreviewCorrection).toFloat(), 0f, 0f, 1f)
         }
 
         if (previewAspect != viewAspect) {

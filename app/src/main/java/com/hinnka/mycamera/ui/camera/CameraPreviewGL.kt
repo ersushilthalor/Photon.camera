@@ -50,6 +50,7 @@ fun CameraPreviewGL(
     captureMode: CaptureMode,
     sensorOrientation: Int,
     lensFacing: Int,
+    previewOrientationOffset: Int = 0,
     calibrationOffset: Int,
     baselineLut: LutConfig?,
     currentLut: LutConfig?,
@@ -228,6 +229,7 @@ fun CameraPreviewGL(
                         viewHeight = glSurfaceView.height
                         glSurfaceView.setSensorOrientation(sensorOrientation)
                         glSurfaceView.setLensFacing(lensFacing)
+                        glSurfaceView.setPreviewOrientationOffset(previewOrientationOffset)
                         glSurfaceView.setDeviceRotation(rotationDegrees.toInt())
                         glSurfaceView.setCalibrationOffset(calibrationOffset)
                         glSurfaceView.setCaptureAspectRatio(aspectRatio)
