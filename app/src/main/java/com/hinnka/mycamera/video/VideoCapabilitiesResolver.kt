@@ -69,15 +69,19 @@ object VideoCapabilitiesResolver {
             maxOf(it.width, it.height) >= VideoResolutionPreset.UHD_2160P.longEdge
         }
         val hasEightMpFourThreeSource = previewOutputSizes.any(::isEightMpFourThreeSource)
-        // Open Gate keeps the largest full-sensor SurfaceTexture as its camera input,
-        // but the encoder canvas must be a size supported by the selected codec.
-        // Normalize candidate canvases to portrait orientation and retain the sensor's
-        // full-frame aspect when choosing the largest compatible output.
+        // Open Gate keeps the largest full-sensor SurfaceTexture as its camera input.
+        // Check both supported video codecs for a matching encoder canvas: the currently
+        // selected codec may expose a smaller maximum size even when the other hardware
+        // encoder can encode the full sensor stream. VideoRecorder selects the matching
+        // codec explicitly and falls back only if configuration fails on this device.
+        val openGateEncoderMimeTypes = VideoCodec.entries.map { it.mimeType }
         val openGateEncoderOutputSizes = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
             previewOutputSizes
                 .map { Size(minOf(it.width, it.height), maxOf(it.width, it.height)) }
                 .distinct()
-                .filter { supportsEncoderOutputSize(requestedConfig.codec.mimeType, it) }
+                .filter { size ->
+                    openGateEncoderMimeTypes.any { mime -> supportsEncoderOutputSize(mime, size) }
+                }
         } else {
             emptyList()
         }
@@ -126,6 +130,21 @@ object VideoCapabilitiesResolver {
             requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
         )
         val cameraInputSize = cameraInputSizesByResolution[resolvedResolution] ?: fallbackPreviewSize
+        if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
+            val sourceCandidates = previewOutputSizes
+                .sortedByDescending { it.width.toLong() * it.height.toLong() }
+                .take(8)
+            val encoderCandidates = openGateEncoderOutputSizes
+                .sortedByDescending { it.width.toLong() * it.height.toLong() }
+                .take(8)
+            PLog.i(
+                TAG,
+                "Open Gate stream selection: activeArray=$activeArray, sensorOrientation=$sensorOrientation, " +
+                    "aspect=$openGateAspect, cameraInput=${cameraInputSize.width}x${cameraInputSize.height}, " +
+                    "encoderCanvas=${recordingSize.width}x${recordingSize.height}, " +
+                    "sourceCandidates=$sourceCandidates, encoderCandidates=$encoderCandidates"
+            )
+        }
         // Keep the live video viewfinder on the same selected-resolution camera stream.
         // The 1080p-sized preview is only a fallback when no matching input stream is available.
         val previewSize = cameraInputSize
