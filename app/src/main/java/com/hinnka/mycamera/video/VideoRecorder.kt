@@ -651,7 +651,7 @@ class VideoRecorder(
 
     private fun prepareVideoEncoder() {
         if (videoEncoder != null && inputSurface != null) return
-        val videoBitrate = (requestedBitrateMbps * 1_000_000).coerceIn(2_000_000, 300_000_000)
+        val requestedVideoBitrate = (requestedBitrateMbps * 1_000_000).coerceIn(2_000_000, 300_000_000)
         val preferredMime = requestedCodecMime
         val sizeCandidates = (listOf(requestedOutputSize) + requestedFallbackOutputSizes)
             .filter { it.width > 0 && it.height > 0 }
@@ -690,8 +690,8 @@ class VideoRecorder(
                     }
                 }
             }.sortedWith(
-                compareByDescending<VideoEncoderCandidate> { it.codecInfo.isHardwareAccelerated }
-                    .thenBy { it.mimePriority }
+                compareBy<VideoEncoderCandidate> { it.mimePriority }
+                    .thenByDescending { it.codecInfo.isHardwareAccelerated }
                     .thenBy { it.codecInfo.name }
             )
 
@@ -713,6 +713,7 @@ class VideoRecorder(
                 try {
                     codec = MediaCodec.createByCodecName(candidate.codecInfo.name)
                     val capabilities = candidate.codecInfo.getCapabilitiesForType(candidate.mimeType)
+                    val videoBitrate = capabilities.videoCapabilities.bitrateRange.clamp(requestedVideoBitrate)
                     val isCbrSupported = capabilities.encoderCapabilities?.isBitrateModeSupported(
                         MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
                     ) == true
