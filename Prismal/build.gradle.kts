@@ -11,15 +11,15 @@ android {
     defaultConfig {
         minSdk = 25
         consumerProguardFiles(
-            file("../third_party/PrismalAGSL/Prismal/consumer-rules.pro")
+            file("../external/PrismalAGSL/Prismal/consumer-rules.pro")
         )
     }
 
     sourceSets {
         getByName("main") {
-            manifest.srcFile("../third_party/PrismalAGSL/Prismal/src/main/AndroidManifest.xml")
-            java.srcDir("../third_party/PrismalAGSL/Prismal/src/main/java")
-            assets.srcDir("../third_party/PrismalAGSL/Prismal/src/main/assets")
+            manifest.srcFile("../external/PrismalAGSL/Prismal/src/main/AndroidManifest.xml")
+            java.srcDir("../external/PrismalAGSL/Prismal/src/main/java")
+            assets.srcDir("../external/PrismalAGSL/Prismal/src/main/assets")
         }
     }
 
