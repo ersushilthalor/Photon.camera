@@ -46,7 +46,7 @@ dependencies {
     api(libs.androidx.compose.foundation)
     api(libs.androidx.ui)
     api(libs.androidx.ui.graphics)
-    api(libs.androidx.runtime)
+    api(libs.androidx.compose.runtime)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.startup.runtime)

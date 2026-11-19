@@ -794,6 +794,8 @@ fun CameraTopSheet(
         }
     }
 
+    }
+
     if (showOppoPipelineSheet) {
         OppoPhotoPipelineSheet(
             settings = oppoPhotoSettings,
