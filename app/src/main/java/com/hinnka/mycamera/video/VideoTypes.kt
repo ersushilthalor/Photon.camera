@@ -234,3 +234,9 @@ enum class DualCaptureLayout {
     TOP_BOTTOM,
     SIDE_BY_SIDE
 }
+
+/** Camera feed shown as the secondary Dual Capture window. */
+enum class DualCaptureSource {
+    FRONT,
+    ULTRA_WIDE
+}

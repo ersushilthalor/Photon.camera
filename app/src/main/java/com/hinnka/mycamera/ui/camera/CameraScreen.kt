@@ -89,6 +89,7 @@ import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.DualCaptureLayout
+import com.hinnka.mycamera.video.DualCaptureSource
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
@@ -278,11 +279,11 @@ fun CameraScreen(
     val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
     var dualCaptureLayout by remember { mutableStateOf(DualCaptureLayout.PICTURE_IN_PICTURE) }
     var dualCaptureLayoutMenuExpanded by remember { mutableStateOf(false) }
+    var dualCaptureSourceMenuExpanded by remember { mutableStateOf(false) }
     var dualCaptureDragOffset by remember { mutableStateOf(Offset.Zero) }
     val dualCaptureStreamSize by viewModel.dualCaptureStreamSize.collectAsState()
-    val dualCaptureSensorOrientationDegrees = state.availableCameras.firstOrNull {
-        it.lensFacing == CameraCharacteristics.LENS_FACING_FRONT
-    }?.sensorOrientation ?: 0
+    val dualCaptureSource by viewModel.dualCaptureSource.collectAsState()
+    val dualCaptureSensorOrientationDegrees by viewModel.dualCaptureSensorOrientationDegrees.collectAsState()
     val latestDualCaptureStreamSize = rememberUpdatedState(dualCaptureStreamSize)
     val latestDualCaptureSensorOrientation = rememberUpdatedState(dualCaptureSensorOrientationDegrees)
     val rawDcpId by viewModel.rawDcpId.collectAsState()
@@ -1562,6 +1563,47 @@ fun CameraScreen(
                                         )
                                     },
                                 )
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(7.dp)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(Color.Black.copy(alpha = 0.78f))
+                                        .clickable { dualCaptureSourceMenuExpanded = true }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                ) {
+                                    Text(
+                                        text = if (dualCaptureSource == DualCaptureSource.FRONT) "Front" else "UW 0.5×",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    DropdownMenu(
+                                        expanded = dualCaptureSourceMenuExpanded,
+                                        onDismissRequest = { dualCaptureSourceMenuExpanded = false },
+                                    ) {
+                                        if (viewModel.isDualCaptureSourceSupported(DualCaptureSource.FRONT)) {
+                                            DropdownMenuItem(
+                                                text = { Text("Front camera + rear main") },
+                                                onClick = {
+                                                    dualCaptureSourceMenuExpanded = false
+                                                    dualCaptureDragOffset = Offset.Zero
+                                                    viewModel.setDualCaptureSource(DualCaptureSource.FRONT)
+                                                },
+                                            )
+                                        }
+                                        if (viewModel.isDualCaptureSourceSupported(DualCaptureSource.ULTRA_WIDE)) {
+                                            DropdownMenuItem(
+                                                text = { Text("Rear 1× + ultra-wide 0.5×") },
+                                                onClick = {
+                                                    dualCaptureSourceMenuExpanded = false
+                                                    dualCaptureDragOffset = Offset.Zero
+                                                    viewModel.setDualCaptureSource(DualCaptureSource.ULTRA_WIDE)
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

@@ -114,6 +114,7 @@ import com.hinnka.mycamera.ui.camera.ZoomDisplayMode
 import com.hinnka.mycamera.utils.*
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.DualCaptureLayout
+import com.hinnka.mycamera.video.DualCaptureSource
 import com.hinnka.mycamera.video.VideoAudioInputManager
 import com.hinnka.mycamera.video.VideoAudioInputOption
 import com.hinnka.mycamera.video.VideoAspectRatio
@@ -3471,8 +3472,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
 
     val dualCaptureStreamSize = cameraController.dualCaptureStreamSize
+    val dualCaptureSource = cameraController.dualCaptureSource
+    val dualCaptureSensorOrientationDegrees = cameraController.dualCaptureSensorOrientationDegrees
 
     fun isDualCaptureSupported(): Boolean = cameraController.isDualCaptureSupported()
+    fun isDualCaptureSourceSupported(source: DualCaptureSource): Boolean =
+        cameraController.isDualCaptureSourceSupported(source)
+    fun setDualCaptureSource(source: DualCaptureSource) {
+        cameraController.setDualCaptureSource(source)
+    }
 
     fun setDualCaptureEnabled(enabled: Boolean) {
         cameraController.setDualCaptureEnabled(enabled)

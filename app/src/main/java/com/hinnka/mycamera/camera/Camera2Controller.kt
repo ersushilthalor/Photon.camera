@@ -62,6 +62,7 @@ import com.hinnka.mycamera.video.OppoNaturalVideoEngine
 import com.hinnka.mycamera.video.OppoHlg10AutoExposureEngine
 import com.hinnka.mycamera.video.VideoLogLutMode
 import com.hinnka.mycamera.video.DualCaptureLayout
+import com.hinnka.mycamera.video.DualCaptureSource
 import com.hinnka.mycamera.video.VideoRecorder
 import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
@@ -299,6 +300,10 @@ class Camera2Controller(private val context: Context) {
     private var previewSurfaceTexture: SurfaceTexture? = null
     private var dualCaptureEnabled = false
     private var dualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE
+    private val _dualCaptureSource = MutableStateFlow(DualCaptureSource.FRONT)
+    val dualCaptureSource: StateFlow<DualCaptureSource> = _dualCaptureSource.asStateFlow()
+    private val _dualCaptureSensorOrientationDegrees = MutableStateFlow(0)
+    val dualCaptureSensorOrientationDegrees: StateFlow<Int> = _dualCaptureSensorOrientationDegrees.asStateFlow()
     private var dualCapturePositionX = 0.66f
     private var dualCapturePositionY = 0.05f
     private var dualCapturePreviewSurfaceTexture: SurfaceTexture? = null
@@ -307,8 +312,19 @@ class Camera2Controller(private val context: Context) {
     private var dualCaptureCameraDevice: CameraDevice? = null
     private var dualCaptureSession: CameraCaptureSession? = null
     private var dualCaptureCameraId: String? = null
+    private var dualCapturePhysicalCameraId: String? = null
+    private var dualCaptureMainPhysicalCameraId: String? = null
+    private var dualCaptureSavedPrimaryCameraState: DualCapturePrimaryCameraState? = null
     private var dualCaptureInputSize: Size? = null
     private var dualCaptureSessionGeneration = 0L
+    private data class DualCapturePrimaryCameraState(
+        val physicalCameraId: String?,
+        val logicalAutoSwitchActive: Boolean,
+        val zoomRatio: Float,
+        val zoomPanX: Float,
+        val zoomPanY: Float,
+        val zoomPanEnabled: Boolean,
+    )
     private val _dualCaptureStreamSize = MutableStateFlow<Size?>(null)
     val dualCaptureStreamSize: StateFlow<Size?> = _dualCaptureStreamSize.asStateFlow()
     private var imageReader: ImageReader? = null
@@ -3400,6 +3416,12 @@ class Camera2Controller(private val context: Context) {
         } else {
             null
         }
+        val usesUltraWideDualCapture = captureMode == CaptureMode.VIDEO &&
+            dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE &&
+            dualCapturePhysicalCameraId != null
+        val ultraWidePreviewSurface = if (usesUltraWideDualCapture) dualCapturePreviewSurface else null
+        val ultraWideRecordSurface = if (usesUltraWideDualCapture) dualCaptureRecordSurface else null
+        val ultraWidePhysicalCameraId = dualCapturePhysicalCameraId
         val sessionGeneration = ++previewSessionGeneration
         pendingVendorSessionParameterRestart = false
         val templateType = if (
@@ -3429,6 +3451,8 @@ class Camera2Controller(private val context: Context) {
                 addTarget(surface)
                 stabilizationReader?.surface?.let(::addTarget)
                 videoSurface?.let(::addTarget)
+                ultraWidePreviewSurface?.let(::addTarget)
+                ultraWideRecordSurface?.let(::addTarget)
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦）
                 applyBaseCameraSettings(this, isCapture = false)
@@ -3442,6 +3466,8 @@ class Camera2Controller(private val context: Context) {
             val surfaces = mutableListOf(surface)
             stabilizationReader?.surface?.let(surfaces::add)
             videoSurface?.let(surfaces::add)
+            ultraWidePreviewSurface?.let(surfaces::add)
+            ultraWideRecordSurface?.let(surfaces::add)
             if (captureMode == CaptureMode.PHOTO) {
                 val captureReader = reader ?: return
                 surfaces += captureReader.surface
@@ -3501,6 +3527,16 @@ class Camera2Controller(private val context: Context) {
                                 encoderSurface,
                                 useHlg10 = videoCameraHlg10InputActive
                             ))
+                        }
+                        if (ultraWidePreviewSurface != null || ultraWideRecordSurface != null) {
+                            val wideId = ultraWidePhysicalCameraId
+                                ?: throw IllegalStateException("Ultra-wide Dual Capture physical camera is unavailable")
+                            ultraWidePreviewSurface?.let { widePreview ->
+                                add(createOutputConfiguration(widePreview, physicalCameraId = wideId))
+                            }
+                            ultraWideRecordSurface?.let { wideEncoder ->
+                                add(createOutputConfiguration(wideEncoder, physicalCameraId = wideId))
+                            }
                         }
                     },
                     Executor { handler.post(it) },
@@ -3932,14 +3968,15 @@ class Camera2Controller(private val context: Context) {
 
     private fun createOutputConfiguration(
         surface: Surface,
-        useHlg10: Boolean = false
+        useHlg10: Boolean = false,
+        physicalCameraId: String? = activeOutputPhysicalCameraId,
     ): OutputConfiguration {
         return OutputConfiguration(surface).apply {
             if (useHlg10) {
                 check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                 setDynamicRangeProfile(DynamicRangeProfiles.HLG10)
             }
-            activeOutputPhysicalCameraId?.let { physicalCameraId ->
+            physicalCameraId?.let { physicalCameraId ->
                 setPhysicalCameraId(physicalCameraId)
                 PLog.i(
                     TAG,
@@ -6946,7 +6983,9 @@ class Camera2Controller(private val context: Context) {
             }
             return
         }
-        val requestedRatio = sanitizeZoomRatio(ratio)
+        val requestedRatio = if (
+            dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE
+        ) 1f else sanitizeZoomRatio(ratio)
         _state.value = _state.value.copy(
             zoomRatio = requestedRatio,
             zoomPanX = if (requestedRatio <= 1.001f) 0f else _state.value.zoomPanX,
@@ -8084,11 +8123,10 @@ class Camera2Controller(private val context: Context) {
 
 
     /**
-     * Dual Capture uses Android's concurrent-camera contract instead of trying to open
-     * a second camera optimistically. A back-facing primary camera and a front camera
-     * must be advertised in the same concurrent set by the device.
+     * Front-camera Dual Capture uses Android's concurrent-camera contract. The ultra-wide
+     * option binds a second output to a physical camera of the active logical rear device.
      */
-    fun isDualCaptureSupported(): Boolean {
+    private fun isDualCaptureFrontSupported(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
         val state = _state.value
         val current = state.getCurrentCameraInfo() ?: return false
@@ -8106,6 +8144,112 @@ class Camera2Controller(private val context: Context) {
         }.getOrDefault(false)
     }
 
+    /**
+     * Resolves the 1x and ultra-wide sensors behind the currently open logical rear camera.
+     * Both outputs are configured on that logical CameraDevice; the ultra-wide sensor is never
+     * opened as a second independent CameraDevice.
+     */
+    private fun resolveDualCapturePhysicalCameraPair(): Pair<String, String>? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+        val state = _state.value
+        val current = state.getCurrentCameraInfo() ?: return null
+        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK) return null
+
+        val logicalId = current.logicalCameraId ?: current.cameraId
+        val openCameraId = runCatching { current.getOpenCameraId() }
+            .getOrDefault(current.cameraId)
+        if (openCameraId != logicalId) return null
+        if (activeOpenCameraId.isNotBlank() && activeOpenCameraId != logicalId) return null
+
+        val logicalCharacteristics = runCatching {
+            cameraManager.getCameraCharacteristics(logicalId)
+        }.getOrNull() ?: return null
+        val capabilities = logicalCharacteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+            ?: return null
+        if (!capabilities.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)) {
+            return null
+        }
+        val physicalIds = logicalCharacteristics.physicalCameraIds
+        if (physicalIds.size < 2) return null
+
+        fun equivalentFocalLength(characteristics: CameraCharacteristics): Float? {
+            val focalLength = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                ?.firstOrNull() ?: return null
+            val sensorSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                ?: return null
+            val diagonal = hypot(sensorSize.width.toDouble(), sensorSize.height.toDouble()).toFloat()
+            if (diagonal <= 0f) return null
+            return focalLength * 43.2666f / diagonal
+        }
+
+        val discoveredById = state.availableCameras.associateBy { it.cameraId }
+        val discoveredMainFocalLength = state.availableCameras
+            .asSequence()
+            .filter {
+                it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                    it.logicalCameraId == logicalId &&
+                    !it.isVirtualIszLens && !it.isCustomLensId &&
+                    it.focalLength35mmEquivalent > 0f &&
+                    it.intrinsicZoomRatio.isFinite() && it.intrinsicZoomRatio > 0f
+            }
+            .minByOrNull { abs(it.intrinsicZoomRatio - 1f) }
+            ?.takeIf { abs(it.intrinsicZoomRatio - 1f) <= 0.15f }
+            ?.focalLength35mmEquivalent
+        val referenceFocalLength = discoveredMainFocalLength
+            ?: equivalentFocalLength(logicalCharacteristics)
+            ?: current.focalLength35mmEquivalent.takeIf {
+                abs(current.intrinsicZoomRatio - 1f) <= 0.15f && it > 0f
+            }
+
+        val candidates = physicalIds.mapNotNull { physicalId ->
+            val characteristics = runCatching {
+                cameraManager.getCameraCharacteristics(physicalId)
+            }.getOrNull() ?: return@mapNotNull null
+            val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
+                ?: CameraCharacteristics.LENS_FACING_BACK
+            if (facing != CameraCharacteristics.LENS_FACING_BACK) return@mapNotNull null
+            val cameraInfo = discoveredById[physicalId]
+            val focalLength = equivalentFocalLength(characteristics)
+                ?: cameraInfo?.focalLength35mmEquivalent?.takeIf { it > 0f }
+            val ratio = if (focalLength != null && referenceFocalLength != null &&
+                referenceFocalLength > 0f
+            ) {
+                focalLength / referenceFocalLength
+            } else {
+                cameraInfo?.intrinsicZoomRatio
+            } ?: return@mapNotNull null
+            if (!ratio.isFinite() || ratio <= 0f) return@mapNotNull null
+            physicalId to ratio
+        }
+
+        val main = candidates.minByOrNull { abs(it.second - 1f) }
+            ?.takeIf { abs(it.second - 1f) <= 0.15f }
+            ?: return null
+        val widestAllowedRatio = minOf(0.85f, main.second - 0.15f)
+        if (widestAllowedRatio < 0.2f) return null
+        val ultraWide = candidates
+            .filter { it.second in 0.2f..widestAllowedRatio }
+            .minByOrNull { it.second }
+            ?: return null
+        if (main.first == ultraWide.first) return null
+
+        PLog.i(
+            TAG,
+            "Dual Capture rear pair resolved: logical=$logicalId, main1x=${main.first}, " +
+                "ultraWide=${ultraWide.first}, ratios=${main.second}/${ultraWide.second}"
+        )
+        return main.first to ultraWide.first
+    }
+
+    fun isDualCaptureSourceSupported(source: DualCaptureSource): Boolean = when (source) {
+        DualCaptureSource.FRONT -> isDualCaptureFrontSupported()
+        DualCaptureSource.ULTRA_WIDE -> resolveDualCapturePhysicalCameraPair() != null
+    }
+
+    fun isDualCaptureSupported(): Boolean =
+        isDualCaptureSourceSupported(DualCaptureSource.FRONT) ||
+            isDualCaptureSourceSupported(DualCaptureSource.ULTRA_WIDE)
+
     fun setDualCaptureEnabled(enabled: Boolean) {
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
@@ -8114,13 +8258,25 @@ class Camera2Controller(private val context: Context) {
         }
         if (dualCaptureEnabled == enabled) return
         if (enabled) {
-            if (_state.value.captureMode != CaptureMode.VIDEO || !isDualCaptureSupported()) {
-                onCameraError?.invoke(
-                    -1,
-                    "Dual Capture is not supported with the currently selected camera.",
-                    false,
-                )
+            if (_state.value.captureMode != CaptureMode.VIDEO) {
+                onCameraError?.invoke(-1, "Dual Capture is only available in Video mode.", false)
                 return
+            }
+            if (!isDualCaptureSourceSupported(_dualCaptureSource.value)) {
+                val fallback = if (_dualCaptureSource.value == DualCaptureSource.FRONT) {
+                    DualCaptureSource.ULTRA_WIDE
+                } else {
+                    DualCaptureSource.FRONT
+                }
+                if (!isDualCaptureSourceSupported(fallback)) {
+                    onCameraError?.invoke(
+                        -1,
+                        "Dual Capture is not supported for either the front or ultra-wide camera pair.",
+                        false,
+                    )
+                    return
+                }
+                _dualCaptureSource.value = fallback
             }
             dualCaptureEnabled = true
             startDualCaptureCamera()
@@ -8131,8 +8287,69 @@ class Camera2Controller(private val context: Context) {
             }
             dualCaptureEnabled = false
             dualCaptureRecordSurface = null
+            if (_dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE) {
+                restoreDualCapturePrimaryCameraState()
+            }
             stopDualCaptureCamera()
+            if (cameraDevice != null && previewSurface != null) {
+                createPreviewSession(openGeneration = cameraOpenGeneration)
+            }
         }
+    }
+
+    fun setDualCaptureSource(source: DualCaptureSource) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setDualCaptureSource(source) }
+            return
+        }
+        if (_dualCaptureSource.value == source) return
+        if (videoRecorder.isRecording() || _state.value.videoRecordingState.isProcessing) {
+            onCameraError?.invoke(-1, "Stop recording before changing the Dual Capture camera.", false)
+            return
+        }
+        if (!isDualCaptureSourceSupported(source)) {
+            val message = when (source) {
+                DualCaptureSource.FRONT -> "The front camera cannot run concurrently with the selected rear camera."
+                DualCaptureSource.ULTRA_WIDE -> "The selected rear camera does not expose simultaneous 1x and ultra-wide physical outputs."
+            }
+            onCameraError?.invoke(-1, message, false)
+            return
+        }
+
+        val previousSource = _dualCaptureSource.value
+        if (previousSource == DualCaptureSource.ULTRA_WIDE) {
+            restoreDualCapturePrimaryCameraState()
+        }
+        stopDualCaptureCamera()
+        _dualCaptureSource.value = source
+        if (dualCaptureEnabled) {
+            startDualCaptureCamera()
+        } else if (previousSource == DualCaptureSource.ULTRA_WIDE &&
+            cameraDevice != null && previewSurface != null
+        ) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+        }
+    }
+
+    private fun restoreDualCapturePrimaryCameraState() {
+        val saved = dualCaptureSavedPrimaryCameraState ?: return
+        activeOutputPhysicalCameraId = saved.physicalCameraId
+        logicalMultiCameraAutoSwitchActive = saved.logicalAutoSwitchActive
+        _state.value = _state.value.copy(
+            zoomRatio = saved.zoomRatio,
+            zoomPanX = saved.zoomPanX,
+            zoomPanY = saved.zoomPanY,
+            zoomPanEnabled = saved.zoomPanEnabled,
+        )
+        dualCaptureSavedPrimaryCameraState = null
+        dualCaptureMainPhysicalCameraId = null
+        dualCapturePhysicalCameraId = null
+        PLog.i(
+            TAG,
+            "Restored primary camera after ultra-wide Dual Capture: " +
+                "physical=$activeOutputPhysicalCameraId, zoom=${saved.zoomRatio}"
+        )
     }
 
     fun setDualCapturePreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) {
@@ -8142,6 +8359,27 @@ class Camera2Controller(private val context: Context) {
             return
         }
         if (dualCapturePreviewSurfaceTexture === surfaceTexture) return
+
+        if (dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE) {
+            val oldSurface = dualCapturePreviewSurface
+            dualCapturePreviewSurface = null
+            dualCapturePreviewSurfaceTexture = surfaceTexture
+            if (oldSurface != null || dualCaptureRecordSurface != null) {
+                // Detach the old TextureView output before releasing it; keep the encoder output
+                // configured when SurfaceTexture is recreated during an active recording.
+                if (cameraDevice != null && previewSurface != null) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
+            oldSurface?.release()
+            if (surfaceTexture == null) {
+                if (dualCaptureRecordSurface == null) _dualCaptureStreamSize.value = null
+                return
+            }
+            startDualCaptureCamera()
+            return
+        }
+
         dualCaptureSession?.let { safeCloseCaptureSession(it, "dual capture preview surface replaced") }
         dualCaptureSession = null
         dualCapturePreviewSurface?.release()
@@ -8170,7 +8408,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun resolveDualCaptureCameraId(): String? {
-        if (!isDualCaptureSupported()) return null
+        if (!isDualCaptureFrontSupported()) return null
         return _state.value.availableCameras.firstOrNull {
             it.lensFacing == CameraCharacteristics.LENS_FACING_FRONT
         }?.cameraId
@@ -8194,7 +8432,7 @@ class Camera2Controller(private val context: Context) {
                 )
                 ?: sizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
         } catch (error: Exception) {
-            PLog.e(TAG, "Cannot resolve front-camera Dual Capture stream size", error)
+            PLog.e(TAG, "Cannot resolve secondary Dual Capture stream size for camera=$cameraId", error)
             null
         }
     }
@@ -8209,6 +8447,10 @@ class Camera2Controller(private val context: Context) {
         if (!dualCaptureEnabled || _state.value.captureMode != CaptureMode.VIDEO) return
         if (cameraDevice == null || cameraDeviceLifecycle != CameraDeviceLifecycle.OPEN) return
         val previewTexture = dualCapturePreviewSurfaceTexture ?: return
+        if (_dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE) {
+            startDualCaptureUltraWideCamera(previewTexture)
+            return
+        }
         val targetCameraId = resolveDualCaptureCameraId()
         if (targetCameraId == null) {
             PLog.w(TAG, "Dual Capture unavailable: selected primary/front camera pair is not concurrent")
@@ -8236,6 +8478,10 @@ class Camera2Controller(private val context: Context) {
             dualCapturePreviewSurface = Surface(previewTexture)
             dualCaptureInputSize = targetSize
             _dualCaptureStreamSize.value = targetSize
+            _dualCaptureSensorOrientationDegrees.value = runCatching {
+                cameraManager.getCameraCharacteristics(targetCameraId)
+                    .get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            }.getOrDefault(0)
             dualCaptureCameraId = targetCameraId
             val generation = ++dualCaptureSessionGeneration
             PLog.i(
@@ -8293,6 +8539,67 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Failed to open concurrent front camera", error)
             stopDualCaptureCamera()
             onCameraError?.invoke(-1, "Cannot start front-camera Dual Capture: ${error.localizedMessage}", false)
+        }
+    }
+
+    /**
+     * Keeps the rear main stream on the logical device's 1x physical sensor and sends the
+     * ultra-wide physical output to the existing Dual Capture preview/encoder surfaces.
+     */
+    private fun startDualCaptureUltraWideCamera(previewTexture: SurfaceTexture) {
+        if (cameraDevice == null || cameraDeviceLifecycle != CameraDeviceLifecycle.OPEN) return
+        val pair = resolveDualCapturePhysicalCameraPair()
+        if (pair == null) {
+            PLog.w(TAG, "Ultra-wide Dual Capture unavailable: no logical rear 1x/ultra-wide pair")
+            onCameraError?.invoke(-1, "The selected rear camera does not support a simultaneous 1x + ultra-wide stream.", false)
+            return
+        }
+        val (mainPhysicalId, ultraWidePhysicalId) = pair
+        val targetSize = resolveDualCaptureInputSize(ultraWidePhysicalId)
+        if (targetSize == null) {
+            PLog.w(TAG, "Ultra-wide Dual Capture has no compatible SurfaceTexture output size")
+            onCameraError?.invoke(-1, "The ultra-wide camera has no compatible video preview stream.", false)
+            return
+        }
+
+        if (dualCaptureSavedPrimaryCameraState == null) {
+            val state = _state.value
+            dualCaptureSavedPrimaryCameraState = DualCapturePrimaryCameraState(
+                physicalCameraId = activeOutputPhysicalCameraId,
+                logicalAutoSwitchActive = logicalMultiCameraAutoSwitchActive,
+                zoomRatio = state.zoomRatio,
+                zoomPanX = state.zoomPanX,
+                zoomPanY = state.zoomPanY,
+                zoomPanEnabled = state.zoomPanEnabled,
+            )
+        }
+        previewTexture.setDefaultBufferSize(targetSize.width, targetSize.height)
+        if (dualCapturePreviewSurface == null) {
+            dualCapturePreviewSurface = Surface(previewTexture)
+        }
+        dualCaptureInputSize = targetSize
+        dualCapturePhysicalCameraId = ultraWidePhysicalId
+        dualCaptureMainPhysicalCameraId = mainPhysicalId
+        activeOutputPhysicalCameraId = mainPhysicalId
+        logicalMultiCameraAutoSwitchActive = false
+        _state.value = _state.value.copy(
+            zoomRatio = 1f,
+            zoomPanX = 0f,
+            zoomPanY = 0f,
+            zoomPanEnabled = false,
+        )
+        _dualCaptureSensorOrientationDegrees.value = runCatching {
+            cameraManager.getCameraCharacteristics(ultraWidePhysicalId)
+                .get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        }.getOrDefault(0)
+        _dualCaptureStreamSize.value = targetSize
+        PLog.i(
+            TAG,
+            "Ultra-wide Dual Capture ready: main1x=$mainPhysicalId, ultraWide=$ultraWidePhysicalId, " +
+                "stream=${targetSize.width}x${targetSize.height}; primary output pinned to 1x"
+        )
+        if (previewSurface != null) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
         }
     }
 
@@ -8417,8 +8724,11 @@ class Camera2Controller(private val context: Context) {
         dualCapturePreviewSurface = null
         dualCaptureRecordSurface = null
         dualCaptureCameraId = null
+        dualCapturePhysicalCameraId = null
+        dualCaptureMainPhysicalCameraId = null
         dualCaptureInputSize = null
         _dualCaptureStreamSize.value = null
+        _dualCaptureSensorOrientationDegrees.value = 0
     }
 
     private fun refreshDualCaptureRecordingTarget() {
@@ -8429,7 +8739,9 @@ class Camera2Controller(private val context: Context) {
             videoRecorder.forceStop()
             return
         }
-        createDualCaptureSession()
+        if (_dualCaptureSource.value != DualCaptureSource.ULTRA_WIDE) {
+            createDualCaptureSession()
+        }
     }
 
     fun startVideoRecording(
@@ -8444,12 +8756,25 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
-        if (dualCaptureEnabled &&
-            (dualCaptureCameraDevice == null || dualCaptureSession == null)
+        val dualCaptureReady = when (_dualCaptureSource.value) {
+            DualCaptureSource.FRONT -> dualCaptureCameraDevice != null && dualCaptureSession != null
+            DualCaptureSource.ULTRA_WIDE -> dualCapturePhysicalCameraId != null &&
+                dualCaptureMainPhysicalCameraId != null && captureSession != null
+        }
+        if (dualCaptureEnabled && !dualCaptureReady) {
+            onCameraError?.invoke(
+                -1,
+                "Wait for the selected Dual Capture camera preview to become ready before recording.",
+                false,
+            )
+            return
+        }
+        if (dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE &&
+            (_state.value.videoConfig.fps == VideoFpsPreset.FPS_120 || shouldUseVideoEnhancedStabilization())
         ) {
             onCameraError?.invoke(
                 -1,
-                "Wait for the front-camera Dual Capture preview to become ready before recording.",
+                "Ultra-wide Dual Capture requires standard frame rates and Enhanced Stabilization off.",
                 false,
             )
             return
@@ -8542,9 +8867,7 @@ class Camera2Controller(private val context: Context) {
             recordingTreeUri = _state.value.videoConfig.recordingTreeUri,
             dualCaptureInputSize = if (dualCaptureEnabled) dualCaptureInputSize else null,
             dualCaptureSensorOrientationDegrees = if (dualCaptureEnabled) {
-                _state.value.availableCameras.firstOrNull {
-                    it.lensFacing == CameraCharacteristics.LENS_FACING_FRONT
-                }?.sensorOrientation ?: 0
+                _dualCaptureSensorOrientationDegrees.value
             } else {
                 0
             },
@@ -8560,9 +8883,11 @@ class Camera2Controller(private val context: Context) {
             val completeRecording = Runnable {
                 if (dualCaptureRecordSurface != null) {
                     dualCaptureRecordSurface = null
-                    if (dualCaptureEnabled && dualCapturePreviewSurface != null) {
+                    if (dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.FRONT &&
+                        dualCapturePreviewSurface != null
+                    ) {
                         createDualCaptureSession()
-                    } else {
+                    } else if (!dualCaptureEnabled) {
                         stopDualCaptureCamera()
                     }
                 }
@@ -8707,7 +9032,11 @@ class Camera2Controller(private val context: Context) {
         videoCameraHlg10InputActive = false
         if (dualCaptureRecordSurface != null) {
             dualCaptureRecordSurface = null
-            if (dualCaptureEnabled && dualCapturePreviewSurface != null) {
+            if (dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE) {
+                if (cameraDevice != null && previewSurface != null) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            } else if (dualCaptureEnabled && dualCapturePreviewSurface != null) {
                 createDualCaptureSession()
             } else {
                 stopDualCaptureCamera()
