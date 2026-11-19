@@ -57,6 +57,7 @@ class RealtimeVideoRenderer(
     dualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE,
     dualCapturePositionX: Float = 0.66f,
     dualCapturePositionY: Float = 0.05f,
+    dualCapturePipWidthFraction: Float = 0.33f,
     private val encoderOrientationHintDegrees: Int = 0,
 ) {
     companion object {
@@ -142,6 +143,7 @@ class RealtimeVideoRenderer(
     @Volatile private var currentDualCaptureLayout = dualCaptureLayout
     @Volatile private var currentDualCapturePositionX = dualCapturePositionX.coerceIn(0f, 1f)
     @Volatile private var currentDualCapturePositionY = dualCapturePositionY.coerceIn(0f, 1f)
+    private val currentDualCapturePipWidthFraction = dualCapturePipWidthFraction.coerceIn(0.01f, 0.33f)
     private val currentDualCaptureInputSize = dualCaptureInputSize
     private val currentDualCaptureSensorOrientationDegrees = dualCaptureSensorOrientationDegrees
     private val dualCapturePresentationMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
@@ -477,7 +479,8 @@ class RealtimeVideoRenderer(
         val displayHeight = if (swapsAxes) outputWidth else outputHeight
 
         // Match the live PiP: 33% of viewfinder width, with a 3:4 window aspect ratio.
-        val width = (displayWidth * 0.33f).toInt().coerceAtLeast(1)
+        val width = (displayWidth * currentDualCapturePipWidthFraction)
+            .toInt().coerceAtLeast(1)
         val height = (width / (3f / 4f)).toInt().coerceAtLeast(1)
         val displayLeft = (currentDualCapturePositionX * displayWidth)
             .toInt().coerceIn(0, (displayWidth - width).coerceAtLeast(0))
@@ -588,7 +591,7 @@ class RealtimeVideoRenderer(
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(dualCaptureProgramId, "uCornerRadiusPx"),
-            if (isPictureInPicture) 16f * density else 0f,
+            if (isPictureInPicture) minOf(16f * density, minOf(viewport[2], viewport[3]) * 0.5f) else 0f,
         )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(dualCaptureProgramId, "uBorderWidthPx"),
