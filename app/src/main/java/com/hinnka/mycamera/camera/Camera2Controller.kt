@@ -5248,23 +5248,41 @@ class Camera2Controller(private val context: Context) {
 
     private fun applyVideoFpsRange(builder: CaptureRequest.Builder, targetFps: Int) {
         val characteristics = getActiveOpenCameraCharacteristics() ?: return
-        val availableRanges =
-            characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return
-        
-        // 寻找完全匹配的固定帧率区间，例如 [60, 60]
-        val exactRange = availableRanges.firstOrNull { it.lower == targetFps && it.upper == targetFps }
-        
-        val resolvedRange = if (exactRange != null) {
-            exactRange
-        } else {
-            // 如果设备未宣传 [60, 60]，但为了稳定吐出 60fps，我们强行构造并锁定固定区间 [targetFps, targetFps]
-            val forced = android.util.Range(targetFps, targetFps)
-            PLog.w(
+        val availableRanges = characteristics
+            .readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            ?.filter { it.lower > 0 && it.upper >= it.lower }
+            .orEmpty()
+        if (availableRanges.isEmpty()) {
+            PLog.w(TAG, "Camera advertises no usable AE FPS ranges; keeping the HAL default")
+            return
+        }
+
+        // Camera2 only accepts FPS ranges advertised by this camera. A fabricated
+        // [targetFps, targetFps] range can make the repeating request fail entirely,
+        // which is especially visible with Open Gate's demanding full-sensor stream.
+        // Prefer a fixed exact match; otherwise use a supported range containing the
+        // target. When several ranges contain it, prefer the widest range so AE/HAL
+        // can adapt instead of being unnecessarily pinned to a fixed cadence.
+        val exactRange = availableRanges.firstOrNull {
+            it.lower == targetFps && it.upper == targetFps
+        }
+        val containingRange = availableRanges
+            .filter { it.lower <= targetFps && it.upper >= targetFps }
+            .maxByOrNull { it.upper - it.lower }
+        val resolvedRange = exactRange ?: containingRange ?: availableRanges.minByOrNull { range ->
+            when {
+                targetFps < range.lower -> range.lower - targetFps
+                targetFps > range.upper -> targetFps - range.upper
+                else -> 0
+            }
+        } ?: return
+
+        if (resolvedRange.lower != targetFps || resolvedRange.upper != targetFps) {
+            PLog.i(
                 TAG,
-                "Camera characteristics do not advertise exact $targetFps fps range, forcing $forced. " +
-                    "Advertised ranges=${availableRanges.joinToString()}"
+                "Using advertised AE FPS range $resolvedRange for target $targetFps; " +
+                    "available=${availableRanges.joinToString()}"
             )
-            forced
         }
         builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, resolvedRange)
     }
