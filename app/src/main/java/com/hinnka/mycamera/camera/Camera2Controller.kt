@@ -9066,21 +9066,30 @@ class Camera2Controller(private val context: Context) {
                 _state.value.videoConfig.resolution
             ]
         } ?: _state.value.currentPreviewSize
-        val outputSize = if (_state.value.videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
-            // Keep the full-sensor stream as the input, but encode to the largest canvas
-            // verified against the selected codec so Open Gate does not fail on oversized
-            // sensor dimensions. The aspect-ratio match preserves the complete sensor view.
-            _state.value.videoCapabilities.recordingSizesByResolution[
-                _state.value.videoConfig.resolution
-            ] ?: _state.value.videoConfig.resolveOutputSize(
-                _state.value.videoCapabilities.openGatePortraitAspectRatio,
-                cameraInputSize
-            )
+        val isOpenGateRecording =
+            _state.value.videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE
+        // Try the full native camera-input canvas first. If the codec rejects it,
+        // VideoRecorder will try the largest camera-advertised canvas and the other
+        // available hardware codec before returning a recording-start error.
+        val outputSize = _state.value.videoConfig.resolveOutputSize(
+            _state.value.videoCapabilities.openGatePortraitAspectRatio,
+            cameraInputSize
+        )
+        val fallbackOutputSizes = if (isOpenGateRecording) {
+            listOfNotNull(
+                _state.value.videoCapabilities.recordingSizesByResolution[
+                    _state.value.videoConfig.resolution
+                ]
+            ).filter { it != outputSize }
         } else {
-            _state.value.videoConfig.resolveOutputSize(
-                _state.value.videoCapabilities.openGatePortraitAspectRatio,
-                cameraInputSize
-            )
+            emptyList()
+        }
+        val fallbackCodecMimes = if (isOpenGateRecording) {
+            com.hinnka.mycamera.video.VideoCodec.entries
+                .map { it.mimeType }
+                .filterNot { it == _state.value.videoConfig.codec.mimeType }
+        } else {
+            emptyList()
         }
         // Encoded video must not inherit the front-preview selfie mirror.
         // The Selfie Mirror preference applies to still photos only.
@@ -9122,6 +9131,8 @@ class Camera2Controller(private val context: Context) {
                 _state.value.videoConfig.bitrate.bitrateMbps
             },
             codecMime = _state.value.videoConfig.codec.mimeType,
+            fallbackCodecMimes = fallbackCodecMimes,
+            fallbackOutputSizes = fallbackOutputSizes,
             colorConfig = VideoEncoderColorRequest(
                 logProfile = logProfile,
                 hasActiveLut = recordingLut != null && (recordingRecipe?.lutIntensity ?: 1f) > 0f
