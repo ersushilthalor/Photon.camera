@@ -64,6 +64,12 @@ class VideoRecorder(
         private const val MICROS_PER_SECOND = 1_000_000L
     }
 
+    private data class VideoEncoderCandidate(
+        val codecInfo: MediaCodecInfo,
+        val mimeType: String,
+        val mimePriority: Int,
+    )
+
     private data class AudioCaptureConfig(
         val channelMask: Int,
         val channelCount: Int,
@@ -118,6 +124,7 @@ class VideoRecorder(
     private var renderer: RealtimeVideoRenderer? = null
     private var requestedBitrateMbps: Int = 30
     private var requestedCodecMime: String = MediaFormat.MIMETYPE_VIDEO_AVC
+    private var requestedFallbackCodecMimes: List<String> = emptyList()
     private var preferredEncoderCodecName: String? = null
     private var requestedOrientationHintDegrees: Int = 0
     private var requestedFlipEncodedFrame: Boolean = false
@@ -148,6 +155,7 @@ class VideoRecorder(
     private var activePauseStartTimeUs = UNSET_TIMESTAMP
 
     private var requestedSize = Size(1080, 1920)
+    private var requestedFallbackOutputSizes: List<Size> = emptyList()
     private var requestedFps = 30
     private var outputDateTakenMs: Long = 0L
     private var pendingVideoOutput: VideoMediaStoreWriter.PendingVideo? = null
@@ -208,6 +216,8 @@ class VideoRecorder(
         fps: Int,
         bitrateMbps: Int,
         codecMime: String,
+        fallbackCodecMimes: List<String> = emptyList(),
+        fallbackOutputSizes: List<Size> = emptyList(),
         colorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest(),
         cameraInputIsHlg10: Boolean = false,
         colorLayers: List<VideoColorEffectLayer> = emptyList(),
@@ -247,6 +257,13 @@ class VideoRecorder(
         // 已解析的显示尺寸（片门全开使用最大相机输入尺寸）。设备横竖屏差异只通过容器 rotation metadata 表达。
         requestedSize = requestedOutputSize
         requestedFps = fps
+        requestedFallbackCodecMimes = fallbackCodecMimes
+            .filter { it.isNotBlank() && it != codecMime }
+            .distinct()
+        requestedFallbackOutputSizes = fallbackOutputSizes
+            .filter { it.width > 0 && it.height > 0 }
+            .map { Size(it.width.align16(), it.height.align16()) }
+            .distinct()
         requestedBitrateMbps = bitrateMbps
         val hlg10Encoder = if (
             colorConfig.logProfile == VideoLogProfile.HLG10 && !colorConfig.force8BitHlg
@@ -305,8 +322,7 @@ class VideoRecorder(
         } catch (e: Exception) {
             val retryAs8BitHlg = !rendererInitialized &&
                 requestedColorConfig.logProfile == VideoLogProfile.HLG10 &&
-                !requestedColorConfig.force8BitHlg &&
-                preparedEncoderColorConfig?.prefer10BitInputSurface == true
+                !requestedColorConfig.force8BitHlg
             PLog.e(TAG, "Failed to prepare video recording before start", e)
             cleanupPreparedStart()
             if (!retryAs8BitHlg) {
@@ -635,75 +651,176 @@ class VideoRecorder(
 
     private fun prepareVideoEncoder() {
         if (videoEncoder != null && inputSurface != null) return
-        val width = requestedSize.width
-        val height = requestedSize.height
         val videoBitrate = (requestedBitrateMbps * 1_000_000).coerceIn(2_000_000, 300_000_000)
+        val preferredMime = requestedCodecMime
+        val sizeCandidates = (listOf(requestedOutputSize) + requestedFallbackOutputSizes)
+            .filter { it.width > 0 && it.height > 0 }
+            .distinctBy { it.width to it.height }
+        val mimeCandidates = (listOf(preferredMime) + requestedFallbackCodecMimes).distinct()
+        val codecInfos = runCatching {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+        }.getOrDefault(emptyArray())
+        var lastFailure: Exception? = null
 
-        videoEncoder = preferredEncoderCodecName?.let { codecName ->
-            runCatching { MediaCodec.createByCodecName(codecName) }.getOrNull()
-        } ?: MediaCodec.createEncoderByType(requestedCodecMime)
-        videoEncoder?.apply {
-            val capabilities = codecInfo.getCapabilitiesForType(requestedCodecMime)
-            val isCbrSupported = capabilities.encoderCapabilities?.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR) == true
-            val bitrateMode = if (isCbrSupported) {
-                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
-            } else {
-                PLog.w(TAG, "CBR bitrate mode not supported, falling back to VBR")
-                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
-            }
-            val resolvedColorConfig = resolveVideoEncoderColorConfig(codecInfo, requestedCodecMime, requestedColorConfig)
-            preparedEncoderColorConfig = resolvedColorConfig
-            val format = MediaFormat.createVideoFormat(requestedCodecMime, width, height).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, videoBitrate)
-                setInteger(MediaFormat.KEY_FRAME_RATE, requestedFps)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
-                setInteger(MediaFormat.KEY_PRIORITY, 0)
-                setInteger(MediaFormat.KEY_BITRATE_MODE, bitrateMode)
-                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-                resolvedColorConfig.applyTo(this)
-            }
-            try {
-                configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                inputSurface = createInputSurface()
-                start()
-            } catch (e: Exception) {
-                PLog.e(TAG, "Failed to start video encoder with primary config: ${e.message}")
-                if (isCbrSupported) {
-                    PLog.i(TAG, "Retrying with VBR as fallback...")
-                    format.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-                    reset()
-                    configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                    inputSurface = createInputSurface()
-                    start()
-                } else {
-                    throw e
+        for ((sizeIndex, candidateSize) in sizeCandidates.withIndex()) {
+            val candidates = buildList {
+                mimeCandidates.forEachIndexed { mimePriority, mimeType ->
+                    codecInfos.forEach codecLoop@{ codecInfo ->
+                        if (!codecInfo.isEncoder ||
+                            codecInfo.supportedTypes.none { it.equals(mimeType, ignoreCase = true) } ||
+                            (preferredEncoderCodecName != null && codecInfo.name != preferredEncoderCodecName)
+                        ) return@codecLoop
+
+                        val capabilities = runCatching {
+                            codecInfo.getCapabilitiesForType(mimeType)
+                        }.getOrNull() ?: return@codecLoop
+                        if (!capabilities.colorFormats.contains(
+                                MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                            )
+                        ) return@codecLoop
+                        val sizeSupported = runCatching {
+                            capabilities.videoCapabilities.isSizeSupported(
+                                candidateSize.width,
+                                candidateSize.height,
+                            )
+                        }.getOrDefault(false)
+                        if (sizeSupported) {
+                            add(VideoEncoderCandidate(codecInfo, mimeType, mimePriority))
+                        }
+                    }
                 }
-            }
-            PLog.i(
-                TAG,
-                "Prepared video encoder: mime=$requestedCodecMime, bitrateMode=${if (bitrateMode == 2) "CBR" else "VBR"}, " +
-                    "colorPipeline=${resolvedColorConfig.pipeline}, colorStandard=${resolvedColorConfig.colorStandard}, " +
-                    "colorTransfer=${resolvedColorConfig.colorTransfer}, colorRange=${resolvedColorConfig.colorRange}, " +
-                    "codecProfile=${resolvedColorConfig.codecProfile}, prefer10BitSurface=${resolvedColorConfig.prefer10BitInputSurface}, " +
-                    "request=${requestedColorConfig.logProfile.name}, hasLut=${requestedColorConfig.hasActiveLut}"
+            }.sortedWith(
+                compareByDescending<VideoEncoderCandidate> { it.codecInfo.isHardwareAccelerated }
+                    .thenBy { it.mimePriority }
+                    .thenBy { it.codecInfo.name }
             )
-            if (requestedColorConfig.logProfile == VideoLogProfile.HLG10 &&
-                !resolvedColorConfig.prefer10BitInputSurface
-            ) {
-                PLog.w(TAG, "No end-to-end HLG10 path available; recording with 8-bit HLG")
-            } else if (
-                requestedColorConfig.logProfile.isEnabled &&
-                requestedColorConfig.logProfile != VideoLogProfile.HLG10 &&
-                resolvedColorConfig.codecProfile == null
-            ) {
+
+            if (candidates.isEmpty()) {
                 PLog.w(
                     TAG,
-                    "Selected codec does not expose a 10-bit profile for ${requestedColorConfig.logProfile.name}. " +
-                        "Recording will continue, but encoded Log compatibility may be reduced."
+                    "No surface encoder supports ${candidateSize.width}x${candidateSize.height}; " +
+                        "checking the next Open Gate canvas"
                 )
+                lastFailure = IllegalStateException(
+                    "No encoder supports ${candidateSize.width}x${candidateSize.height}"
+                )
+                continue
+            }
+
+            for (candidate in candidates) {
+                var codec: MediaCodec? = null
+                var surface: Surface? = null
+                try {
+                    codec = MediaCodec.createByCodecName(candidate.codecInfo.name)
+                    val capabilities = candidate.codecInfo.getCapabilitiesForType(candidate.mimeType)
+                    val isCbrSupported = capabilities.encoderCapabilities?.isBitrateModeSupported(
+                        MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                    ) == true
+                    var bitrateMode = if (isCbrSupported) {
+                        MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                    } else {
+                        PLog.w(TAG, "CBR bitrate mode not supported by ${candidate.codecInfo.name}; using VBR")
+                        MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
+                    }
+                    val resolvedColorConfig = resolveVideoEncoderColorConfig(
+                        candidate.codecInfo,
+                        candidate.mimeType,
+                        requestedColorConfig,
+                    )
+                    val format = MediaFormat.createVideoFormat(
+                        candidate.mimeType,
+                        candidateSize.width,
+                        candidateSize.height,
+                    ).apply {
+                        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                        setInteger(MediaFormat.KEY_BIT_RATE, videoBitrate)
+                        setInteger(MediaFormat.KEY_FRAME_RATE, requestedFps)
+                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
+                        setInteger(MediaFormat.KEY_PRIORITY, 0)
+                        setInteger(MediaFormat.KEY_BITRATE_MODE, bitrateMode)
+                        setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+                        resolvedColorConfig.applyTo(this)
+                    }
+
+                    try {
+                        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    } catch (configureError: Exception) {
+                        if (!isCbrSupported) throw configureError
+                        PLog.w(
+                            TAG,
+                            "CBR configuration failed for ${candidate.codecInfo.name}; retrying with VBR",
+                            configureError,
+                        )
+                        bitrateMode = MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
+                        format.setInteger(MediaFormat.KEY_BITRATE_MODE, bitrateMode)
+                        codec.reset()
+                        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    }
+
+                    surface = codec.createInputSurface()
+                    codec.start()
+                    videoEncoder = codec
+                    inputSurface = surface
+                    requestedCodecMime = candidate.mimeType
+                    requestedSize = candidateSize
+                    preparedEncoderColorConfig = resolvedColorConfig
+
+                    PLog.i(
+                        TAG,
+                        "Prepared video encoder: codec=${candidate.codecInfo.name}, mime=${candidate.mimeType}, " +
+                            "preferredMime=$preferredMime, hardware=${candidate.codecInfo.isHardwareAccelerated}, " +
+                            "encoder=${candidateSize.width}x${candidateSize.height}, " +
+                            "requestedCanvas=${requestedOutputSize.width}x${requestedOutputSize.height}, " +
+                            "sizeFallback=${sizeIndex > 0}, bitrateMode=${if (bitrateMode == 2) "CBR" else "VBR"}, " +
+                            "colorPipeline=${resolvedColorConfig.pipeline}, colorStandard=${resolvedColorConfig.colorStandard}, " +
+                            "colorTransfer=${resolvedColorConfig.colorTransfer}, colorRange=${resolvedColorConfig.colorRange}, " +
+                            "codecProfile=${resolvedColorConfig.codecProfile}, " +
+                            "prefer10BitSurface=${resolvedColorConfig.prefer10BitInputSurface}, " +
+                            "request=${requestedColorConfig.logProfile.name}, hasLut=${requestedColorConfig.hasActiveLut}"
+                    )
+                    if (sizeIndex > 0) {
+                        PLog.w(
+                            TAG,
+                            "Open Gate is using the largest compatible fallback canvas: " +
+                                "${candidateSize.width}x${candidateSize.height}; requested full-sensor canvas was " +
+                                "${requestedOutputSize.width}x${requestedOutputSize.height}"
+                        )
+                    }
+                    if (requestedColorConfig.logProfile == VideoLogProfile.HLG10 &&
+                        !resolvedColorConfig.prefer10BitInputSurface
+                    ) {
+                        PLog.w(TAG, "No end-to-end HLG10 path available; recording with 8-bit HLG")
+                    } else if (
+                        requestedColorConfig.logProfile.isEnabled &&
+                        requestedColorConfig.logProfile != VideoLogProfile.HLG10 &&
+                        resolvedColorConfig.codecProfile == null
+                    ) {
+                        PLog.w(
+                            TAG,
+                            "Selected codec does not expose a 10-bit profile for ${requestedColorConfig.logProfile.name}. " +
+                                "Recording will continue, but encoded Log compatibility may be reduced."
+                        )
+                    }
+                    return
+                } catch (error: Exception) {
+                    lastFailure = error
+                    PLog.w(
+                        TAG,
+                        "Encoder rejected ${candidate.codecInfo.name} (${candidate.mimeType}) at " +
+                            "${candidateSize.width}x${candidateSize.height}: ${error.message}",
+                    )
+                    runCatching { surface?.release() }
+                    runCatching { codec?.stop() }
+                    runCatching { codec?.release() }
+                }
             }
         }
+
+        throw IllegalStateException(
+            "No available video encoder could prepare ${requestedOutputSize.width}x" +
+                "${requestedOutputSize.height} at ${requestedFps}fps for codecs $mimeCandidates",
+            lastFailure,
+        )
     }
 
     private fun initAudioEncoder(startLoop: Boolean = true): Boolean {
