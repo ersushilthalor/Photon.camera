@@ -8489,6 +8489,13 @@ class Camera2Controller(private val context: Context) {
                 onCameraError?.invoke(-1, "Dual Capture is only available in Video mode.", false)
                 return
             }
+            // Every fresh Dual Capture session starts with the rear ultra-wide inset.
+            // The front camera remains available as an explicit source-switch option.
+            if (_dualCaptureSource.value != DualCaptureSource.ULTRA_WIDE &&
+                isDualCaptureSourceSupported(DualCaptureSource.ULTRA_WIDE)
+            ) {
+                _dualCaptureSource.value = DualCaptureSource.ULTRA_WIDE
+            }
             if (!isDualCaptureSourceSupported(_dualCaptureSource.value)) {
                 val fallback = if (_dualCaptureSource.value == DualCaptureSource.FRONT) {
                     DualCaptureSource.ULTRA_WIDE
