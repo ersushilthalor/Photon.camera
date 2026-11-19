@@ -596,7 +596,7 @@ fun CameraTopSheet(
                             modifier = itemModifier
                         )
                         VideoMenuActionTile(
-                            title = "DUAL CAPTURE",
+                            title = "SPECIAL VIDEO",
                             value = "Open",
                             leadingIcon = { tint ->
                                 Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
