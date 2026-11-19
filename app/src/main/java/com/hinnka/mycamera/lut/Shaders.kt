@@ -69,6 +69,40 @@ object Shaders {
         }
     """.trimIndent()
 
+    /** Rounded picture-in-picture inset with a clean white edge for Dual Capture output. */
+    val FRAGMENT_SHADER_DUAL_CAPTURE = """
+        #version 300 es
+        #extension GL_OES_EGL_image_external_essl3 : require
+
+        precision highp float;
+
+        in vec2 vTexCoord;
+        in vec2 vOutputCoord;
+        out vec4 fragColor;
+
+        uniform samplerExternalOES uCameraTexture;
+        uniform vec2 uShapeSize;
+        uniform float uCornerRadiusPx;
+        uniform float uBorderWidthPx;
+
+        void main() {
+            vec2 halfSize = uShapeSize * 0.5;
+            vec2 point = (vOutputCoord - vec2(0.5)) * uShapeSize;
+            vec2 q = abs(point) - (halfSize - vec2(uCornerRadiusPx));
+            float distanceToShape = length(max(q, vec2(0.0))) +
+                min(max(q.x, q.y), 0.0) - uCornerRadiusPx;
+
+            if (distanceToShape > 0.0) {
+                discard;
+            }
+            if (distanceToShape > -uBorderWidthPx) {
+                fragColor = vec4(1.0);
+                return;
+            }
+            fragColor = texture(uCameraTexture, vTexCoord);
+        }
+    """.trimIndent()
+
     /**
      * 片元着色器 - 2D 纹理复制 (支持 sampler2D)
      * 用于从 FBO 纹理复制到屏幕或视频编码器
