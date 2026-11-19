@@ -9066,10 +9066,22 @@ class Camera2Controller(private val context: Context) {
                 _state.value.videoConfig.resolution
             ]
         } ?: _state.value.currentPreviewSize
-        val outputSize = _state.value.videoConfig.resolveOutputSize(
-            _state.value.videoCapabilities.openGatePortraitAspectRatio,
-            cameraInputSize
-        )
+        val outputSize = if (_state.value.videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
+            // Keep the full-sensor stream as the input, but encode to the largest canvas
+            // verified against the selected codec so Open Gate does not fail on oversized
+            // sensor dimensions. The aspect-ratio match preserves the complete sensor view.
+            _state.value.videoCapabilities.recordingSizesByResolution[
+                _state.value.videoConfig.resolution
+            ] ?: _state.value.videoConfig.resolveOutputSize(
+                _state.value.videoCapabilities.openGatePortraitAspectRatio,
+                cameraInputSize
+            )
+        } else {
+            _state.value.videoConfig.resolveOutputSize(
+                _state.value.videoCapabilities.openGatePortraitAspectRatio,
+                cameraInputSize
+            )
+        }
         // Encoded video must not inherit the front-preview selfie mirror.
         // The Selfie Mirror preference applies to still photos only.
         val shouldFlipEncodedFrame = isCurrentCameraFrontFacing()
