@@ -557,6 +557,7 @@ class VideoRecorder(
             dualCaptureLayout = requestedDualCaptureLayout,
             dualCapturePositionX = requestedDualCapturePositionX,
             dualCapturePositionY = requestedDualCapturePositionY,
+            encoderOrientationHintDegrees = requestedOrientationHintDegrees,
         )
         renderer = realtimeRenderer
         realtimeRenderer.initialize(
