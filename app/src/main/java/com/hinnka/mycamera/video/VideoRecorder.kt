@@ -138,6 +138,7 @@ class VideoRecorder(
     private var requestedDualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE
     private var requestedDualCapturePositionX: Float = 0.66f
     private var requestedDualCapturePositionY: Float = 0.05f
+    private var requestedDualCapturePipWidthFraction: Float = 0.33f
     private var cameraInputStarted = false
     private var requestedCameraTimestampSource = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
     private var requestedSensorOrientationDegrees = 0
@@ -227,6 +228,7 @@ class VideoRecorder(
         dualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE,
         dualCapturePositionX: Float = 0.66f,
         dualCapturePositionY: Float = 0.05f,
+        dualCapturePipWidthFraction: Float = 0.33f,
         onError: ((String) -> Unit)? = null,
         onFinished: ((Uri?) -> Unit)? = null
     ): Boolean {
@@ -240,6 +242,7 @@ class VideoRecorder(
         requestedDualCaptureLayout = dualCaptureLayout
         requestedDualCapturePositionX = dualCapturePositionX.coerceIn(0f, 1f)
         requestedDualCapturePositionY = dualCapturePositionY.coerceIn(0f, 1f)
+        requestedDualCapturePipWidthFraction = dualCapturePipWidthFraction.coerceIn(0.01f, 0.33f)
         // SurfaceTexture 变换后的 OES 内容已经处于自然显示方向，编码画布必须继续使用
         // 已解析的显示尺寸（片门全开使用最大相机输入尺寸）。设备横竖屏差异只通过容器 rotation metadata 表达。
         requestedSize = requestedOutputSize
@@ -557,6 +560,7 @@ class VideoRecorder(
             dualCaptureLayout = requestedDualCaptureLayout,
             dualCapturePositionX = requestedDualCapturePositionX,
             dualCapturePositionY = requestedDualCapturePositionY,
+            dualCapturePipWidthFraction = requestedDualCapturePipWidthFraction,
             encoderOrientationHintDegrees = requestedOrientationHintDegrees,
         )
         renderer = realtimeRenderer
