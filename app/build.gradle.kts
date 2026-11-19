@@ -138,7 +138,7 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     // PrismalAGSL liquid-glass renderer (same library as the supplied ZIP).
-    implementation("com.github.styropyr0:Prismal:1.0.7")
+    implementation(project(":Prismal"))
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.androidx.recyclerview)
     
