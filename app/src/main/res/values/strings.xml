@@ -1436,6 +1436,8 @@
     <string name="dual_capture_stop_recording_to_change">Stop recording before changing Dual Capture.</string>
     <string name="dual_capture_front_stream_error">The front-camera stream could not be started.</string>
     <string name="dual_capture_front_resolution">Front camera · %1$d × %2$d</string>
+    <string name="special_video_not_supported">Special Video needs a compatible rear 1x and 0.5x camera pair exposed by one logical camera.</string>
+    <string name="special_video_stop_recording_to_change">Stop recording before changing Special Video.</string>
 
     <string name="done">Done</string>
 </resources>

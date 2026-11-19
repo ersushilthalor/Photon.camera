@@ -3476,6 +3476,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val dualCaptureSensorOrientationDegrees = cameraController.dualCaptureSensorOrientationDegrees
 
     fun isDualCaptureSupported(): Boolean = cameraController.isDualCaptureSupported()
+
+    fun isSpatialVideoSupported(): Boolean = cameraController.isSpatialVideoSupported()
+
+    fun setSpatialVideoEnabled(enabled: Boolean) = cameraController.setSpatialVideoEnabled(enabled)
     fun isDualCaptureSourceSupported(source: DualCaptureSource): Boolean =
         cameraController.isDualCaptureSourceSupported(source)
     fun setDualCaptureSource(source: DualCaptureSource) {

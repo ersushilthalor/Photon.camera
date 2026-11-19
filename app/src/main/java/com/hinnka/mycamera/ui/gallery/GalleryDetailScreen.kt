@@ -4,6 +4,7 @@ import com.hinnka.mycamera.ui.components.AppModalBottomSheet
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -71,6 +72,7 @@ import androidx.media3.ui.PlayerView
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.isVisible
+import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -92,6 +94,7 @@ import com.hinnka.mycamera.ui.components.PhysicalButton
 import com.hinnka.mycamera.ui.components.ProcessingPhotoPreview
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.video.SpatialVideoStore
 import com.hinnka.mycamera.viewmodel.GalleryTab
 import kotlinx.coroutines.Dispatchers
 import me.saket.telephoto.zoomable.ZoomSpec
@@ -2298,6 +2301,22 @@ private fun VideoDetailPlayer(
     val mediaUri = remember(photo.id, photo.uri, photo.sourceUri) {
         photo.sourceUri ?: photo.uri
     }
+    val ultraWideFile = remember(photo.id, mediaUri) {
+        SpatialVideoStore.ultraWideFile(context, mediaUri)
+    }
+    var hasSpatialUltraWide by remember(photo.id, mediaUri) {
+        mutableStateOf(ultraWideFile.isFile && ultraWideFile.length() > 0L)
+    }
+    LaunchedEffect(photo.id, mediaUri) {
+        repeat(20) {
+            if (ultraWideFile.isFile && ultraWideFile.length() > 0L) {
+                hasSpatialUltraWide = true
+                return@LaunchedEffect
+            }
+            delay(500)
+        }
+    }
+    var isUltraWideSelected by rememberSaveable(photo.id) { mutableStateOf(false) }
 
     PLog.d("VideoDetailPlayer", "VideoDetailPlayer recomposing/initializing. photoId: ${photo.id}, isActive: $isActive, mediaUri: $mediaUri")
 
@@ -2381,6 +2400,7 @@ private fun VideoDetailPlayer(
     LaunchedEffect(exoPlayer, isActive, lifecycle) {
         PLog.d("VideoDetailPlayer", "VideoDetailPlayer isActive changed: $isActive, player: $exoPlayer")
         if (exoPlayer != null && isActive) {
+            isUltraWideSelected = false
             delay(150) // Wait for transitions to complete and EGL surface to be fully ready
             PLog.d("VideoDetailPlayer", "Preparing and starting ExoPlayer.")
             exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri))
@@ -2390,6 +2410,7 @@ private fun VideoDetailPlayer(
     }
 
     if (exoPlayer != null) {
+        Box(modifier = modifier.autoRotate(matchParentSize = true)) {
         AndroidView(
             factory = {
                 PLog.d("VideoDetailPlayer", "Creating PlayerView factory.")
@@ -2410,8 +2431,90 @@ private fun VideoDetailPlayer(
                 it.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                 it.isVisible = true
             },
-            modifier = modifier.autoRotate(matchParentSize = true)
+            modifier = Modifier.fillMaxSize()
         )
+        if (hasSpatialUltraWide) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 76.dp)
+                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(24.dp))
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    onClick = {
+                        val wasPlaying = exoPlayer.playWhenReady
+                        val position = exoPlayer.currentPosition.coerceAtLeast(0L)
+                        exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(ultraWideFile)), position)
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = wasPlaying
+                        isUltraWideSelected = true
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = if (isUltraWideSelected) AccentColor else Color.White
+                    )
+                ) { Text("0.5x", fontWeight = FontWeight.SemiBold) }
+                TextButton(
+                    onClick = {
+                        val wasPlaying = exoPlayer.playWhenReady
+                        val position = exoPlayer.currentPosition.coerceAtLeast(0L)
+                        exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri), position)
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = wasPlaying
+                        isUltraWideSelected = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = if (!isUltraWideSelected) AccentColor else Color.White
+                    )
+                ) { Text("1x", fontWeight = FontWeight.SemiBold) }
+                TextButton(
+                    onClick = {
+                        runCatching {
+                            val wideUri = FileProvider.getUriForFile(
+                                context,
+                                context.packageName + ".fileprovider",
+                                ultraWideFile
+                            )
+                            val share = Intent(Intent.ACTION_SEND).apply {
+                                type = "video/mp4"
+                                putExtra(Intent.EXTRA_STREAM, wideUri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(Intent.createChooser(share, "Share ultra-wide video"))
+                        }.onFailure {
+                            Toast.makeText(context, "Unable to share ultra-wide video", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                ) { Text("Share 0.5x", fontWeight = FontWeight.Medium) }
+                TextButton(
+                    onClick = {
+                        runCatching {
+                            val wideUri = FileProvider.getUriForFile(
+                                context,
+                                context.packageName + ".fileprovider",
+                                ultraWideFile
+                            )
+                            val share = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                                type = "video/mp4"
+                                putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(mediaUri, wideUri))
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                clipData = android.content.ClipData.newUri(
+                                    context.contentResolver, "Special Video", mediaUri
+                                ).apply { addItem(android.content.ClipData.Item(wideUri)) }
+                            }
+                            context.startActivity(Intent.createChooser(share, "Share both lenses"))
+                        }.onFailure {
+                            Toast.makeText(context, "Unable to share both lens videos", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                ) { Text("Share both", fontWeight = FontWeight.Medium) }
+            }
+        }
+        }
     } else {
         // Show video thumbnail with a play icon when player is not active
         Box(

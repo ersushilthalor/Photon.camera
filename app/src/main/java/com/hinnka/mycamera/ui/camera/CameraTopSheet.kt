@@ -100,6 +100,9 @@ fun CameraTopSheet(
     videoActionModeAvailable: Boolean,
     onVideoStabilizationModeChange: (VideoStabilizationMode) -> Unit,
     onVideoDualCaptureClick: () -> Unit,
+    specialVideoEnabled: Boolean = false,
+    specialVideoAvailable: Boolean = false,
+    onSpecialVideoToggle: () -> Unit = {},
     videoCodec: VideoCodec,
     onVideoCodecChange: (VideoCodec) -> Unit,
     videoAudioInputId: String,
@@ -596,12 +599,22 @@ fun CameraTopSheet(
                             modifier = itemModifier
                         )
                         VideoMenuActionTile(
-                            title = "SPECIAL VIDEO",
+                            title = "DUAL CAPTURE",
                             value = "Open",
                             leadingIcon = { tint ->
                                 Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
                             },
                             onClick = onVideoDualCaptureClick,
+                            modifier = itemModifier
+                        )
+                        VideoMenuToggleTile(
+                            title = "SPECIAL VIDEO",
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
+                            checked = specialVideoEnabled,
+                            enabled = specialVideoAvailable,
+                            onClick = onSpecialVideoToggle,
                             modifier = itemModifier
                         )
                     }

@@ -233,11 +233,19 @@ fun CameraScreen(
     var previousPreviewCaptureMode by remember { mutableStateOf(state.captureMode) }
     val isPhotoVideoModeTransition = previousPreviewCaptureMode != state.captureMode
     var dualCaptureEnabled by remember { mutableStateOf(false) }
+    var specialVideoEnabled by remember { mutableStateOf(false) }
+    val spatialVideoAvailable = remember(state.currentCameraId, state.availableCameras, state.captureMode) {
+        viewModel.isSpatialVideoSupported()
+    }
 
     LaunchedEffect(state.captureMode) {
         if (state.captureMode != CaptureMode.VIDEO && dualCaptureEnabled) {
             dualCaptureEnabled = false
             viewModel.setDualCaptureEnabled(false)
+        }
+        if (state.captureMode != CaptureMode.VIDEO && specialVideoEnabled) {
+            specialVideoEnabled = false
+            viewModel.setSpatialVideoEnabled(false)
         }
         if (isPhotoVideoModeTransition) {
             delay(PhotoVideoViewfinderExpansionDurationMillis.toLong())
@@ -1561,6 +1569,35 @@ fun CameraScreen(
                                             dualCaptureStreamSize,
                                             dualCaptureSensorOrientationDegrees,
                                         )
+                                        textureView.setOnClickListener {
+                                            if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    context.getString(R.string.dual_capture_stop_recording_to_change),
+                                                    android.widget.Toast.LENGTH_SHORT,
+                                                ).show()
+                                            } else {
+                                                val nextSource = if (dualCaptureSource == DualCaptureSource.FRONT) {
+                                                    DualCaptureSource.ULTRA_WIDE
+                                                } else {
+                                                    DualCaptureSource.FRONT
+                                                }
+                                                if (!viewModel.isDualCaptureSourceSupported(nextSource)) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        if (nextSource == DualCaptureSource.FRONT) {
+                                                            "Front camera is not available with this rear camera."
+                                                        } else {
+                                                            "Rear ultra-wide is not available with this camera."
+                                                        },
+                                                        android.widget.Toast.LENGTH_SHORT,
+                                                    ).show()
+                                                } else {
+                                                    dualCaptureDragOffset = Offset.Zero
+                                                    viewModel.setDualCaptureSource(nextSource)
+                                                }
+                                            }
+                                        }
                                     },
                                 )
                                 Box(
@@ -2112,9 +2149,40 @@ fun CameraScreen(
                         android.widget.Toast.LENGTH_LONG,
                     ).show()
                 } else {
+                    if (!dualCaptureEnabled && specialVideoEnabled) {
+                        specialVideoEnabled = false
+                        viewModel.setSpatialVideoEnabled(false)
+                    }
                     dualCaptureEnabled = !dualCaptureEnabled
                     dualCaptureDragOffset = Offset.Zero
                     viewModel.setDualCaptureEnabled(dualCaptureEnabled)
+                }
+            },
+            specialVideoEnabled = specialVideoEnabled,
+            specialVideoAvailable = spatialVideoAvailable &&
+                !state.videoRecordingState.isRecording && !state.videoRecordingState.isProcessing,
+            onSpecialVideoToggle = {
+                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(R.string.special_video_stop_recording_to_change),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                } else if (!specialVideoEnabled && !spatialVideoAvailable) {
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(R.string.special_video_not_supported),
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                } else {
+                    specialVideoEnabled = !specialVideoEnabled
+                    if (specialVideoEnabled && dualCaptureEnabled) {
+                        dualCaptureEnabled = false
+                        dualCaptureDragOffset = Offset.Zero
+                        viewModel.setDualCaptureEnabled(false)
+                    }
+                    viewModel.setSpatialVideoEnabled(specialVideoEnabled)
+                    if (specialVideoEnabled) viewModel.setZoomRatio(1f)
                 }
             },
             videoCodec = videoCodec,
