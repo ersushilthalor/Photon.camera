@@ -69,8 +69,21 @@ object VideoCapabilitiesResolver {
             maxOf(it.width, it.height) >= VideoResolutionPreset.UHD_2160P.longEdge
         }
         val hasEightMpFourThreeSource = previewOutputSizes.any(::isEightMpFourThreeSource)
+        // Open Gate keeps the largest full-sensor SurfaceTexture as its camera input,
+        // but the encoder canvas must be a size supported by the selected codec.
+        // Normalize candidate canvases to portrait orientation and retain the sensor's
+        // full-frame aspect when choosing the largest compatible output.
+        val openGateEncoderOutputSizes = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
+            previewOutputSizes
+                .map { Size(minOf(it.width, it.height), maxOf(it.width, it.height)) }
+                .distinct()
+                .filter { supportsEncoderOutputSize(requestedConfig.codec.mimeType, it) }
+        } else {
+            emptyList()
+        }
+
         val recordingOutputSizes = when {
-            requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE -> previewOutputSizes
+            requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE -> openGateEncoderOutputSizes
             !hasNativeUhdRecorderSize && hasEightMpFourThreeSource -> previewOutputSizes
             nativeThreeKSources.isNotEmpty() ->
                 (advertisedRecordingSizes + nativeThreeKSources).distinct()
