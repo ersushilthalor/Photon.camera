@@ -5,6 +5,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.media.MediaRecorder
+import android.media.MediaCodecList
 import android.os.Build
 import android.util.Range
 import android.util.Size
@@ -41,10 +42,29 @@ object VideoCapabilitiesResolver {
         // Dedicated recording uses a SurfaceTexture input, including full-sensor sizes
         // that may not be advertised for MediaRecorder.
         val advertisedRecordingSizes = resolveRecordingOutputSizes(characteristics)
+        val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        val openGateAspect = resolveOpenGatePortraitAspectRatio(activeArray, sensorOrientation)
+        val targetPortraitAspect = requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
+        val threeKOutputSize = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
+            null
+        } else {
+            VideoResolutionPreset.THREE_K.resolveOutputSize(targetPortraitAspect)
+        }
+        // 3K is offered only when the camera's real SurfaceTexture stream can be
+        // center-cropped to 3072x1728 (or the equivalent selected aspect ratio)
+        // without enlarging either dimension. This excludes "3K" made from 1080p.
+        val nativeThreeKSources = threeKOutputSize?.let { targetSize ->
+            previewOutputSizes.filter { canProduceOutputWithoutUpscaling(it, targetSize) }
+        }.orEmpty()
+        val supportsThreeKEncoder = threeKOutputSize?.let { targetSize ->
+            supportsEncoderOutputSize(requestedConfig.codec.mimeType, targetSize)
+        } ?: false
+
         // Some front/ultra-wide sensors expose an ~8 MP 4:3 SurfaceTexture stream
         // but do not advertise a 3840x2160 MediaRecorder stream. The app records
         // through its SurfaceTexture + GL renderer, so use that sensor stream as
-        // the source and let the renderer crop/scale to the selected 4K output.
+        // the source and let the renderer crop/scale to the selected output.
         val hasNativeUhdRecorderSize = advertisedRecordingSizes.any {
             maxOf(it.width, it.height) >= VideoResolutionPreset.UHD_2160P.longEdge
         }
@@ -52,14 +72,14 @@ object VideoCapabilitiesResolver {
         val recordingOutputSizes = when {
             requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE -> previewOutputSizes
             !hasNativeUhdRecorderSize && hasEightMpFourThreeSource -> previewOutputSizes
+            nativeThreeKSources.isNotEmpty() ->
+                (advertisedRecordingSizes + nativeThreeKSources).distinct()
             else -> advertisedRecordingSizes
         }
-        val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-        val openGateAspect = resolveOpenGatePortraitAspectRatio(activeArray, sensorOrientation)
 
         val availableResolutions = VideoResolutionPreset.entries.filter { preset ->
-            findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null &&
+            (preset != VideoResolutionPreset.THREE_K || supportsThreeKEncoder) &&
+                findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null &&
                 findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null
         }
 
@@ -230,6 +250,16 @@ object VideoCapabilitiesResolver {
             .firstOrNull()
         if (nativeSize != null) return nativeSize
 
+        // 3K may use a different native sensor aspect ratio (for example 4:3),
+        // but only when center-cropping that source still leaves enough pixels for
+        // the exact 3K encoder canvas. No lower-resolution source is upscaled.
+        if (preset == VideoResolutionPreset.THREE_K) {
+            val targetSize = preset.resolveOutputSize(targetAspect)
+            return outputSizes
+                .filter { canProduceOutputWithoutUpscaling(it, targetSize) }
+                .minByOrNull { it.width.toLong() * it.height.toLong() }
+        }
+
         // UHD is an encoded output preset, not a requirement that the sensor itself
         // produce 8.3 MP. If the camera exposes a genuine ~8 MP 4:3 source, allow it
         // and crop/scale in RealtimeVideoRenderer to the 4K 16:9 (or portrait 9:16)
@@ -240,6 +270,50 @@ object VideoCapabilitiesResolver {
                 .maxByOrNull { it.width.toLong() * it.height.toLong() }
         }
         return null
+    }
+
+    private fun canProduceOutputWithoutUpscaling(sourceSize: Size, outputSize: Size): Boolean {
+        if (sourceSize.width <= 0 || sourceSize.height <= 0 ||
+            outputSize.width <= 0 || outputSize.height <= 0
+        ) return false
+
+        val sourceShort = minOf(sourceSize.width, sourceSize.height).toFloat()
+        val sourceLong = maxOf(sourceSize.width, sourceSize.height).toFloat()
+        val outputShort = minOf(outputSize.width, outputSize.height)
+        val outputLong = maxOf(outputSize.width, outputSize.height)
+        val targetAspect = outputShort.toFloat() / outputLong
+        val sourceAspect = sourceShort / sourceLong
+
+        // Match the renderer's center-crop geometry, then verify both resulting
+        // source dimensions are at least as large as the requested encoded frame.
+        val croppedShort = if (sourceAspect >= targetAspect) {
+            sourceLong * targetAspect
+        } else {
+            sourceShort
+        }
+        val croppedLong = if (sourceAspect >= targetAspect) {
+            sourceLong
+        } else {
+            sourceShort / targetAspect
+        }
+        return croppedShort + 0.5f >= outputShort &&
+            croppedLong + 0.5f >= outputLong
+    }
+
+    private fun supportsEncoderOutputSize(codecMime: String, size: Size): Boolean {
+        val codecInfos = runCatching {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+        }.getOrDefault(emptyArray())
+
+        return codecInfos.any { codecInfo ->
+            codecInfo.isEncoder &&
+                codecInfo.supportedTypes.any { it.equals(codecMime, ignoreCase = true) } &&
+                runCatching {
+                    codecInfo.getCapabilitiesForType(codecMime)
+                        .videoCapabilities
+                        .isSizeSupported(size.width, size.height)
+                }.getOrDefault(false)
+        }
     }
 
     private fun isEightMpFourThreeSource(size: Size): Boolean {
