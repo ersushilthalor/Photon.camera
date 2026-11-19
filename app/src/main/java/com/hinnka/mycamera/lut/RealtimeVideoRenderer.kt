@@ -57,6 +57,7 @@ class RealtimeVideoRenderer(
     dualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE,
     dualCapturePositionX: Float = 0.66f,
     dualCapturePositionY: Float = 0.05f,
+    private val encoderOrientationHintDegrees: Int = 0,
 ) {
     companion object {
         private const val TAG = "RealtimeVideoRenderer"
@@ -439,7 +440,7 @@ class RealtimeVideoRenderer(
         check(dualCaptureTextureId != 0) { "Cannot create dual-capture OES texture" }
         dualCaptureProgramId = GlUtils.linkProgram(
             GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.VERTEX_SHADER),
-            GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_PASSTHROUGH),
+            GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, Shaders.FRAGMENT_SHADER_DUAL_CAPTURE),
         )
         check(dualCaptureProgramId != 0) { "Cannot create dual-capture GL program" }
         dualCaptureSurfaceTexture = SurfaceTexture(dualCaptureTextureId).apply {
@@ -459,6 +460,57 @@ class RealtimeVideoRenderer(
             0, 0, encoderOutputSize.width / 2, encoderOutputSize.height,
         )
         else -> null
+    }
+
+    /**
+     * Resolves the inset in the same display-oriented coordinate space as the Compose
+     * viewfinder, then maps it back into the unrotated encoder buffer. MediaMuxer applies
+     * the orientation hint when the saved video is displayed.
+     */
+    private fun resolvePictureInPictureViewport(
+        outputWidth: Int,
+        outputHeight: Int,
+    ): IntArray {
+        val rotation = ((encoderOrientationHintDegrees % 360) + 360) % 360
+        val swapsAxes = rotation == 90 || rotation == 270
+        val displayWidth = if (swapsAxes) outputHeight else outputWidth
+        val displayHeight = if (swapsAxes) outputWidth else outputHeight
+
+        // Match the live PiP: 33% of viewfinder width, with a 3:4 window aspect ratio.
+        val width = (displayWidth * 0.33f).toInt().coerceAtLeast(1)
+        val height = (width / (3f / 4f)).toInt().coerceAtLeast(1)
+        val displayLeft = (currentDualCapturePositionX * displayWidth)
+            .toInt().coerceIn(0, (displayWidth - width).coerceAtLeast(0))
+        val displayTop = (currentDualCapturePositionY * displayHeight)
+            .toInt().coerceIn(0, (displayHeight - height).coerceAtLeast(0))
+
+        val sourceRect = when (rotation) {
+            90 -> intArrayOf(
+                displayTop,
+                outputHeight - displayLeft - width,
+                height,
+                width,
+            )
+            180 -> intArrayOf(
+                outputWidth - displayLeft - width,
+                outputHeight - displayTop - height,
+                width,
+                height,
+            )
+            270 -> intArrayOf(
+                outputWidth - displayTop - height,
+                displayLeft,
+                height,
+                width,
+            )
+            else -> intArrayOf(displayLeft, displayTop, width, height)
+        }
+        val sourceLeft = sourceRect[0]
+        val sourceTop = sourceRect[1]
+        val sourceWidth = sourceRect[2]
+        val sourceHeight = sourceRect[3]
+        val sourceBottom = outputHeight - sourceTop - sourceHeight
+        return intArrayOf(sourceLeft, sourceBottom, sourceWidth, sourceHeight)
     }
 
     private fun acquireLatestDualCaptureFrame(): Boolean {
@@ -520,24 +572,28 @@ class RealtimeVideoRenderer(
             DualCaptureLayout.SIDE_BY_SIDE -> intArrayOf(
                 outputWidth / 2, 0, outputWidth - outputWidth / 2, outputHeight,
             )
-            DualCaptureLayout.PICTURE_IN_PICTURE -> {
-                val insetAspect = 9f / 16f
-                var width = (outputWidth * 0.32f).toInt().coerceAtLeast(1)
-                var height = (width / insetAspect).toInt().coerceAtLeast(1)
-                val maxHeight = (outputHeight * 0.30f).toInt().coerceAtLeast(1)
-                if (height > maxHeight) {
-                    height = maxHeight
-                    width = (height * insetAspect).toInt().coerceAtLeast(1)
-                }
-                val left = (currentDualCapturePositionX * outputWidth)
-                    .toInt().coerceIn(0, (outputWidth - width).coerceAtLeast(0))
-                val top = (currentDualCapturePositionY * outputHeight)
-                    .toInt().coerceIn(0, (outputHeight - height).coerceAtLeast(0))
-                intArrayOf(left, outputHeight - top - height, width, height)
-            }
+            DualCaptureLayout.PICTURE_IN_PICTURE -> resolvePictureInPictureViewport(
+                outputWidth = outputWidth,
+                outputHeight = outputHeight,
+            )
         }
         GLES30.glViewport(viewport[0], viewport[1], viewport[2], viewport[3])
         GLES30.glUseProgram(dualCaptureProgramId)
+        val isPictureInPicture = currentDualCaptureLayout == DualCaptureLayout.PICTURE_IN_PICTURE
+        val density = appContext.resources.displayMetrics.density
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(dualCaptureProgramId, "uShapeSize"),
+            viewport[2].toFloat(),
+            viewport[3].toFloat(),
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(dualCaptureProgramId, "uCornerRadiusPx"),
+            if (isPictureInPicture) 16f * density else 0f,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(dualCaptureProgramId, "uBorderWidthPx"),
+            if (isPictureInPicture) 1f * density else 0f,
+        )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, dualCaptureTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(dualCaptureProgramId, "uCameraTexture"), 0)
