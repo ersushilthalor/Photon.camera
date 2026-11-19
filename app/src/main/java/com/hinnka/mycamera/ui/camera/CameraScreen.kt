@@ -233,19 +233,11 @@ fun CameraScreen(
     var previousPreviewCaptureMode by remember { mutableStateOf(state.captureMode) }
     val isPhotoVideoModeTransition = previousPreviewCaptureMode != state.captureMode
     var dualCaptureEnabled by remember { mutableStateOf(false) }
-    var specialVideoEnabled by remember { mutableStateOf(false) }
-    val spatialVideoAvailable = remember(state.currentCameraId, state.availableCameras, state.captureMode) {
-        viewModel.isSpatialVideoSupported()
-    }
 
     LaunchedEffect(state.captureMode) {
         if (state.captureMode != CaptureMode.VIDEO && dualCaptureEnabled) {
             dualCaptureEnabled = false
             viewModel.setDualCaptureEnabled(false)
-        }
-        if (state.captureMode != CaptureMode.VIDEO && specialVideoEnabled) {
-            specialVideoEnabled = false
-            viewModel.setSpatialVideoEnabled(false)
         }
         if (isPhotoVideoModeTransition) {
             delay(PhotoVideoViewfinderExpansionDurationMillis.toLong())
@@ -287,7 +279,6 @@ fun CameraScreen(
     val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
     var dualCaptureLayout by remember { mutableStateOf(DualCaptureLayout.PICTURE_IN_PICTURE) }
     var dualCaptureLayoutMenuExpanded by remember { mutableStateOf(false) }
-    var dualCaptureSourceMenuExpanded by remember { mutableStateOf(false) }
     var dualCaptureDragOffset by remember { mutableStateOf(Offset.Zero) }
     val dualCaptureStreamSize by viewModel.dualCaptureStreamSize.collectAsState()
     val dualCaptureSource by viewModel.dualCaptureSource.collectAsState()
@@ -1454,13 +1445,20 @@ fun CameraScreen(
                     if (state.captureMode == CaptureMode.VIDEO && dualCaptureEnabled) {
                         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                             val insetPadding = 12.dp
+                            val pipTopPadding = VideoTopBarBaseHeight + 8.dp
                             val insetWidth = maxWidth * 0.33f
                             val dualInsetAspectRatio = 3f / 4f
                             val insetHeight = insetWidth / dualInsetAspectRatio
                             val insetOuterWidth = insetWidth + insetPadding * 2
-                            val insetOuterHeight = insetHeight + insetPadding * 2
+                            val insetOuterHeight = pipTopPadding + insetHeight + insetPadding
+                            val density = LocalDensity.current
                             val pipModifier = Modifier
-                                .padding(insetPadding)
+                                .padding(
+                                    top = pipTopPadding,
+                                    start = insetPadding,
+                                    end = insetPadding,
+                                    bottom = insetPadding,
+                                )
                                 .width(insetWidth)
                                 .aspectRatio(dualInsetAspectRatio)
                                 .align(Alignment.TopEnd)
@@ -1481,14 +1479,32 @@ fun CameraScreen(
                                                 (dualCaptureDragOffset.y + dragAmount.y).coerceIn(0f, maxY),
                                             )
                                             dualCaptureDragOffset = next
-                                            val normalizedX = (maxWidth.toPx() - insetOuterWidth.toPx() + next.x) /
+                                            val normalizedX = (maxWidth.toPx() - insetWidth.toPx() -
+                                                insetPadding.toPx() + next.x) /
                                                 maxWidth.toPx().coerceAtLeast(1f)
-                                            val normalizedY = (insetPadding.toPx() + next.y) /
+                                            val normalizedY = (pipTopPadding.toPx() + next.y) /
                                                 maxHeight.toPx().coerceAtLeast(1f)
                                             viewModel.setDualCapturePosition(normalizedX, normalizedY)
                                         }
                                     }
                                 }
+                            LaunchedEffect(dualCaptureEnabled, dualCaptureLayout, maxWidth, maxHeight) {
+                                if (dualCaptureEnabled &&
+                                    dualCaptureLayout == DualCaptureLayout.PICTURE_IN_PICTURE &&
+                                    !state.videoRecordingState.isRecording &&
+                                    !state.videoRecordingState.isProcessing
+                                ) {
+                                    val normalizedX = with(density) {
+                                        (maxWidth - insetWidth - insetPadding).toPx() /
+                                            maxWidth.toPx().coerceAtLeast(1f)
+                                    }
+                                    val normalizedY = with(density) {
+                                        pipTopPadding.toPx() / maxHeight.toPx().coerceAtLeast(1f)
+                                    }
+                                    viewModel.setDualCapturePosition(normalizedX, normalizedY)
+                                }
+                            }
+
                             val frontPreviewModifier = when (dualCaptureLayout) {
                                 DualCaptureLayout.PICTURE_IN_PICTURE -> pipModifier
                                 DualCaptureLayout.TOP_BOTTOM -> Modifier
@@ -1600,88 +1616,6 @@ fun CameraScreen(
                                         }
                                     },
                                 )
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopStart)
-                                        .padding(7.dp),
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(50))
-                                            .background(Color.Black.copy(alpha = 0.78f))
-                                            .clickable {
-                                                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
-                                                    android.widget.Toast.makeText(
-                                                        context,
-                                                        context.getString(R.string.dual_capture_stop_recording_to_change),
-                                                        android.widget.Toast.LENGTH_SHORT,
-                                                    ).show()
-                                                } else {
-                                                    val nextSource = if (dualCaptureSource == DualCaptureSource.FRONT) {
-                                                        DualCaptureSource.ULTRA_WIDE
-                                                    } else {
-                                                        DualCaptureSource.FRONT
-                                                    }
-                                                    if (viewModel.isDualCaptureSourceSupported(nextSource)) {
-                                                        dualCaptureDragOffset = Offset.Zero
-                                                        viewModel.setDualCaptureSource(nextSource)
-                                                    } else {
-                                                        android.widget.Toast.makeText(
-                                                            context,
-                                                            if (nextSource == DualCaptureSource.FRONT) {
-                                                                "Front camera is not available with this rear camera."
-                                                            } else {
-                                                                "Rear ultra-wide is not available with this camera."
-                                                            },
-                                                            android.widget.Toast.LENGTH_SHORT,
-                                                        ).show()
-                                                    }
-                                                }
-                                            }
-                                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            text = if (dualCaptureSource == DualCaptureSource.FRONT) "Front" else "UW 0.5×",
-                                            color = Color.White,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                        )
-                                        Text(
-                                            text = "▾",
-                                            color = Color.White.copy(alpha = 0.78f),
-                                            fontSize = 10.sp,
-                                            modifier = Modifier
-                                                .padding(start = 4.dp)
-                                                .clickable { dualCaptureSourceMenuExpanded = true },
-                                        )
-                                    }
-                                    DropdownMenu(
-                                        expanded = dualCaptureSourceMenuExpanded,
-                                        onDismissRequest = { dualCaptureSourceMenuExpanded = false },
-                                    ) {
-                                        if (viewModel.isDualCaptureSourceSupported(DualCaptureSource.FRONT)) {
-                                            DropdownMenuItem(
-                                                text = { Text("Front camera + rear main") },
-                                                onClick = {
-                                                    dualCaptureSourceMenuExpanded = false
-                                                    dualCaptureDragOffset = Offset.Zero
-                                                    viewModel.setDualCaptureSource(DualCaptureSource.FRONT)
-                                                },
-                                            )
-                                        }
-                                        if (viewModel.isDualCaptureSourceSupported(DualCaptureSource.ULTRA_WIDE)) {
-                                            DropdownMenuItem(
-                                                text = { Text("Rear 1× + ultra-wide 0.5×") },
-                                                onClick = {
-                                                    dualCaptureSourceMenuExpanded = false
-                                                    dualCaptureDragOffset = Offset.Zero
-                                                    viewModel.setDualCaptureSource(DualCaptureSource.ULTRA_WIDE)
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
                             }
                         }
                     }
@@ -2178,40 +2112,9 @@ fun CameraScreen(
                         android.widget.Toast.LENGTH_LONG,
                     ).show()
                 } else {
-                    if (!dualCaptureEnabled && specialVideoEnabled) {
-                        specialVideoEnabled = false
-                        viewModel.setSpatialVideoEnabled(false)
-                    }
                     dualCaptureEnabled = !dualCaptureEnabled
                     dualCaptureDragOffset = Offset.Zero
                     viewModel.setDualCaptureEnabled(dualCaptureEnabled)
-                }
-            },
-            specialVideoEnabled = specialVideoEnabled,
-            specialVideoAvailable = spatialVideoAvailable &&
-                !state.videoRecordingState.isRecording && !state.videoRecordingState.isProcessing,
-            onSpecialVideoToggle = {
-                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
-                    android.widget.Toast.makeText(
-                        context,
-                        context.getString(R.string.special_video_stop_recording_to_change),
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                } else if (!specialVideoEnabled && !spatialVideoAvailable) {
-                    android.widget.Toast.makeText(
-                        context,
-                        context.getString(R.string.special_video_not_supported),
-                        android.widget.Toast.LENGTH_LONG,
-                    ).show()
-                } else {
-                    specialVideoEnabled = !specialVideoEnabled
-                    if (specialVideoEnabled && dualCaptureEnabled) {
-                        dualCaptureEnabled = false
-                        dualCaptureDragOffset = Offset.Zero
-                        viewModel.setDualCaptureEnabled(false)
-                    }
-                    viewModel.setSpatialVideoEnabled(specialVideoEnabled)
-                    if (specialVideoEnabled) viewModel.setZoomRatio(1f)
                 }
             },
             videoCodec = videoCodec,
