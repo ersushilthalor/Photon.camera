@@ -1566,18 +1566,41 @@ fun CameraScreen(
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.TopStart)
-                                        .padding(7.dp)
-                                        .clip(RoundedCornerShape(50))
-                                        .background(Color.Black.copy(alpha = 0.78f))
-                                        .clickable { dualCaptureSourceMenuExpanded = true }
-                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        .padding(7.dp),
                                 ) {
-                                    Text(
-                                        text = if (dualCaptureSource == DualCaptureSource.FRONT) "Front" else "UW 0.5×",
-                                        color = Color.White,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(50))
+                                            .background(Color.Black.copy(alpha = 0.78f))
+                                            .clickable {
+                                                val nextSource = if (
+                                                    dualCaptureSource == DualCaptureSource.FRONT
+                                                ) {
+                                                    DualCaptureSource.ULTRA_WIDE
+                                                } else {
+                                                    DualCaptureSource.FRONT
+                                                }
+                                                dualCaptureDragOffset = Offset.Zero
+                                                viewModel.setDualCaptureSource(nextSource)
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = if (dualCaptureSource == DualCaptureSource.FRONT) "Front" else "UW 0.5×",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                        Text(
+                                            text = "▾",
+                                            color = Color.White.copy(alpha = 0.78f),
+                                            fontSize = 10.sp,
+                                            modifier = Modifier
+                                                .padding(start = 4.dp)
+                                                .clickable { dualCaptureSourceMenuExpanded = true },
+                                        )
+                                    }
                                     DropdownMenu(
                                         expanded = dualCaptureSourceMenuExpanded,
                                         onDismissRequest = { dualCaptureSourceMenuExpanded = false },
