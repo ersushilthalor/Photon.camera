@@ -874,7 +874,6 @@ fun CameraScreen(
 
         val backgroundPainter = rememberBackgroundPainter(viewModel)
         val modeSwitcherBackdrop = rememberLiquidGlassBackdrop()
-        val settingsGlassBackdrop = rememberPrismalBackdrop(modeSwitcherBackdrop)
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
@@ -2145,7 +2144,6 @@ fun CameraScreen(
         // TopSheet for settings
         CameraTopSheet(
             visible = activePanel == ActivePanel.SETTINGS,
-            glassBackdrop = settingsGlassBackdrop,
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
             topSheetAspectRatios = topSheetAspectRatios,

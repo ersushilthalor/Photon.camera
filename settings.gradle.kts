@@ -23,4 +23,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "PhotonCamera"
-include(":app", ":Prismal")
+include(":app")
