@@ -315,6 +315,7 @@ class Camera2Controller(private val context: Context) {
     val dualCaptureSensorOrientationDegrees: StateFlow<Int> = _dualCaptureSensorOrientationDegrees.asStateFlow()
     private var dualCapturePositionX = 0.66f
     private var dualCapturePositionY = 0.05f
+    private var dualCapturePipWidthFraction = 0.33f
     private var dualCapturePreviewSurfaceTexture: SurfaceTexture? = null
     private var dualCapturePreviewSurface: Surface? = null
     private var dualCaptureRecordSurface: Surface? = null
@@ -8635,9 +8636,12 @@ class Camera2Controller(private val context: Context) {
         videoRecorder.updateDualCaptureLayout(layout)
     }
 
-    fun setDualCapturePosition(x: Float, y: Float) {
+    fun setDualCapturePosition(x: Float, y: Float, widthFraction: Float? = null) {
         dualCapturePositionX = x.coerceIn(0f, 1f)
         dualCapturePositionY = y.coerceIn(0f, 1f)
+        if (widthFraction != null) {
+            dualCapturePipWidthFraction = widthFraction.coerceIn(0.01f, 0.33f)
+        }
         videoRecorder.updateDualCapturePosition(dualCapturePositionX, dualCapturePositionY)
     }
 
@@ -9118,6 +9122,7 @@ class Camera2Controller(private val context: Context) {
             dualCaptureLayout = dualCaptureLayout,
             dualCapturePositionX = dualCapturePositionX,
             dualCapturePositionY = dualCapturePositionY,
+            dualCapturePipWidthFraction = dualCapturePipWidthFraction,
             onError = { message ->
                 PLog.e(TAG, "Video recording error: $message")
                 onCameraError?.invoke(-1, message, false)
