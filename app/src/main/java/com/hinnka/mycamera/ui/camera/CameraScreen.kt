@@ -285,6 +285,7 @@ fun CameraScreen(
     val dualCaptureSensorOrientationDegrees by viewModel.dualCaptureSensorOrientationDegrees.collectAsState()
     val latestDualCaptureStreamSize = rememberUpdatedState(dualCaptureStreamSize)
     val latestDualCaptureSensorOrientation = rememberUpdatedState(dualCaptureSensorOrientationDegrees)
+    val latestDualCaptureSource = rememberUpdatedState(dualCaptureSource)
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
     val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
@@ -1572,14 +1573,41 @@ fun CameraScreen(
                                                     return true
                                                 }
 
-                                                private var producerTransformApplied = false
+                                                // The TextureView is reused when Dual Capture switches between
+                                                // front and ultra-wide cameras. A one-shot boolean leaves the
+                                                // previous producer transform active for the next camera.
+                                                // Re-apply only when the source, stream geometry, sensor
+                                                // orientation, or producer transform actually changes.
+                                                private var lastProducerTransformSignature: Long? = null
 
                                                 override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
-                                                    if (!producerTransformApplied) {
-                                                        producerTransformApplied = true
+                                                    val streamSize = latestDualCaptureStreamSize.value
+                                                    val sensorOrientation =
+                                                        latestDualCaptureSensorOrientation.value
+                                                    val source = latestDualCaptureSource.value
+                                                    val producerMatrix = FloatArray(16)
+                                                    if (runCatching {
+                                                            surface.getTransformMatrix(producerMatrix)
+                                                        }.isFailure
+                                                    ) {
+                                                        return
+                                                    }
+
+                                                    var signature =
+                                                        if (source == DualCaptureSource.FRONT) 1L else 2L
+                                                    signature = signature * 31L + (streamSize?.width ?: 0)
+                                                    signature = signature * 31L + (streamSize?.height ?: 0)
+                                                    signature = signature * 31L + sensorOrientation
+                                                    signature = signature * 31L + producerMatrix[0].toBits()
+                                                    signature = signature * 31L + producerMatrix[1].toBits()
+                                                    signature = signature * 31L + producerMatrix[4].toBits()
+                                                    signature = signature * 31L + producerMatrix[5].toBits()
+
+                                                    if (lastProducerTransformSignature != signature) {
+                                                        lastProducerTransformSignature = signature
                                                         updateDualCaptureTextureTransform(
-                                                            latestDualCaptureStreamSize.value,
-                                                            latestDualCaptureSensorOrientation.value,
+                                                            streamSize,
+                                                            sensorOrientation,
                                                         )
                                                     }
                                                 }
