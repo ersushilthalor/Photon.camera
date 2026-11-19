@@ -300,7 +300,7 @@ class Camera2Controller(private val context: Context) {
     private var previewSurfaceTexture: SurfaceTexture? = null
     private var dualCaptureEnabled = false
     private var dualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE
-    private val _dualCaptureSource = MutableStateFlow(DualCaptureSource.FRONT)
+    private val _dualCaptureSource = MutableStateFlow(DualCaptureSource.ULTRA_WIDE)
     val dualCaptureSource: StateFlow<DualCaptureSource> = _dualCaptureSource.asStateFlow()
     private val _dualCaptureSensorOrientationDegrees = MutableStateFlow(0)
     val dualCaptureSensorOrientationDegrees: StateFlow<Int> = _dualCaptureSensorOrientationDegrees.asStateFlow()
