@@ -1445,9 +1445,10 @@ fun CameraScreen(
                     if (state.captureMode == CaptureMode.VIDEO && dualCaptureEnabled) {
                         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                             val insetPadding = 12.dp
-                            val pipTopPadding = VideoTopBarBaseHeight + 8.dp
-                            val insetWidth = maxWidth * 0.33f
+                            val pipTopPadding = VideoTopBarBaseHeight + topSafePadding + 8.dp
                             val dualInsetAspectRatio = 3f / 4f
+                            val availablePipHeight = (maxHeight - pipTopPadding - insetPadding).coerceAtLeast(1.dp)
+                            val insetWidth = minOf(maxWidth * 0.33f, availablePipHeight * dualInsetAspectRatio)
                             val insetHeight = insetWidth / dualInsetAspectRatio
                             val insetOuterWidth = insetWidth + insetPadding * 2
                             val insetOuterHeight = pipTopPadding + insetHeight + insetPadding
@@ -1484,11 +1485,13 @@ fun CameraScreen(
                                                 maxWidth.toPx().coerceAtLeast(1f)
                                             val normalizedY = (pipTopPadding.toPx() + next.y) /
                                                 maxHeight.toPx().coerceAtLeast(1f)
-                                            viewModel.setDualCapturePosition(normalizedX, normalizedY)
+                                            val normalizedWidth = insetWidth.toPx() /
+                                                maxWidth.toPx().coerceAtLeast(1f)
+                                            viewModel.setDualCapturePosition(normalizedX, normalizedY, normalizedWidth)
                                         }
                                     }
                                 }
-                            LaunchedEffect(dualCaptureEnabled, dualCaptureLayout, maxWidth, maxHeight) {
+                            LaunchedEffect(dualCaptureEnabled, dualCaptureLayout, maxWidth, maxHeight, insetWidth, pipTopPadding) {
                                 if (dualCaptureEnabled &&
                                     dualCaptureLayout == DualCaptureLayout.PICTURE_IN_PICTURE &&
                                     !state.videoRecordingState.isRecording &&
@@ -1501,7 +1504,10 @@ fun CameraScreen(
                                     val normalizedY = with(density) {
                                         pipTopPadding.toPx() / maxHeight.toPx().coerceAtLeast(1f)
                                     }
-                                    viewModel.setDualCapturePosition(normalizedX, normalizedY)
+                                    val normalizedWidth = with(density) {
+                                        insetWidth.toPx() / maxWidth.toPx().coerceAtLeast(1f)
+                                    }
+                                    viewModel.setDualCapturePosition(normalizedX, normalizedY, normalizedWidth)
                                 }
                             }
 
