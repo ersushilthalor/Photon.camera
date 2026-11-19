@@ -241,7 +241,11 @@ object VideoCapabilitiesResolver {
             }
         }
         val nativeSize = outputSizes
-            .filter { maxOf(it.width, it.height) >= preset.longEdge }
+            .filter {
+                maxOf(it.width, it.height) >= preset.longEdge &&
+                    (preset != VideoResolutionPreset.THREE_K ||
+                        canProduceOutputWithoutUpscaling(it, preset.resolveOutputSize(targetAspect)))
+            }
             .sortedWith(
                 compareBy<Size> { abs(getPortraitAspectRatio(it) - targetAspect) }
                     .thenBy { abs(maxOf(it.width, it.height) - preset.longEdge) }
