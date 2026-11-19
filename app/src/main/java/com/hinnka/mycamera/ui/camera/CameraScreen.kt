@@ -933,22 +933,39 @@ fun CameraScreen(
         val sideControlSpace = if (isXpan) XpanSideControlReservedWidth else 0.dp
         val maxCardWidth = (width - sideControlSpace * 2)
             .coerceAtLeast(viewfinderFramePadding)
+        // Open Gate is a full-sensor capture mode: present its viewfinder with the same
+        // placement and available area as Photo mode. Standard video ratios remain bottom
+        // anchored to the video controls.
+        val usesPhotoStyleViewfinder = !isVideoMode || isOpenGateVideo
         val maxCardHeight = when {
             isXpan -> (contentHeight - topBarBottom - CameraControlsLayoutDefaults.XpanViewfinderClearance)
                 .coerceAtLeast(viewfinderFramePadding)
-            isVideoMode -> videoViewfinderBottom
+            !usesPhotoStyleViewfinder -> videoViewfinderBottom
             else -> contentHeight
         }
         val maxViewfinderContentWidth = (maxCardWidth - viewfinderFramePadding)
             .coerceAtLeast(0.dp)
         val maxViewfinderContentHeight = (maxCardHeight - viewfinderFramePadding)
             .coerceAtLeast(0.dp)
-        val viewfinderContentWidth = minOf(
-            maxViewfinderContentWidth,
-            maxViewfinderContentHeight * previewAspectRatio
-        )
+        // A portrait 21:9 recording frame is taller than the usable phone viewport.
+        // Keep the preview edge-to-edge and let the GL renderer center-crop the live
+        // sensor image to the visible screen area; the encoder still writes true 21:9.
+        val fillsVideoViewfinderWidth = isVideoMode && !isOpenGateVideo
+        val viewfinderContentWidth = if (fillsVideoViewfinderWidth) {
+            maxViewfinderContentWidth
+        } else {
+            minOf(
+                maxViewfinderContentWidth,
+                maxViewfinderContentHeight * previewAspectRatio
+            )
+        }
+        val viewfinderContentHeight = if (fillsVideoViewfinderWidth) {
+            minOf(maxViewfinderContentHeight, viewfinderContentWidth / previewAspectRatio)
+        } else {
+            viewfinderContentWidth / previewAspectRatio
+        }
         val cardWidth = viewfinderContentWidth + viewfinderFramePadding
-        val cardHeight = viewfinderContentWidth / previewAspectRatio + viewfinderFramePadding
+        val cardHeight = viewfinderContentHeight + viewfinderFramePadding
         val xpanSideWidth = ((width - cardWidth) / 2).coerceAtLeast(0.dp)
         val placeViewfinderBelowTopBar = contentHeight - cardHeight >= topBarBottom
         // Balance small previews between the toolbar and collapsed controls. Reserving both
@@ -959,18 +976,26 @@ fun CameraScreen(
             ((contentHeight - topBarBottom - cardHeight -
                 CameraControlsLayoutDefaults.CollapsedControlsHeight) / 2).coerceAtLeast(0.dp)
         }
-        val viewfinderTop = if (isVideoMode) {
-            // Anchor the video frame to the shutter bottom; its height is constrained
-            // above, so it cannot extend behind the Photo/Video selector.
+        val viewfinderTop = if (!usesPhotoStyleViewfinder) {
+            // Standard video frames stay anchored to the shutter bottom.
             (videoViewfinderBottom - cardHeight).coerceAtLeast(0.dp)
         } else {
+            // Photo and Open Gate share the same balanced, photo-style placement.
             (if (placeViewfinderBelowTopBar) {
                 topBarBottom + extraViewfinderTopSpacing
             } else {
                 ((contentHeight - cardHeight) / 2).coerceAtLeast(0.dp)
             }) + CameraControlsLayoutDefaults.VerticalOffset
         }
-        val viewfinderTopOverlayPadding = if (isVideoMode) {
+        // Keep the video top bar at the exact position it occupies in the 9:16 layout,
+        // independent of the selected recording ratio and the viewfinder's top edge.
+        val nineSixteenViewfinderHeight = minOf(
+            videoViewfinderBottom,
+            maxViewfinderContentWidth / (9f / 16f)
+        )
+        val videoTopBarAnchorTop = (videoViewfinderBottom - nineSixteenViewfinderHeight)
+            .coerceAtLeast(0.dp)
+        val viewfinderTopOverlayPadding = if (!usesPhotoStyleViewfinder) {
             0.dp
         } else {
             (topBarBottom - viewfinderTop).coerceAtLeast(0.dp)
@@ -1455,7 +1480,7 @@ fun CameraScreen(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .offset(
-                                    y = if (state.captureMode == CaptureMode.VIDEO) 3.dp else 0.dp
+                                    y = if (isVideoMode && !isOpenGateVideo) 3.dp else 0.dp
                                 )
                         )
                     }
@@ -1993,7 +2018,7 @@ fun CameraScreen(
                         .fillMaxWidth()
                         .height(animatedViewfinderHeight)
                         .align(Alignment.TopCenter)
-                        .offset(y = animatedViewfinderTop + (if (isVideoMode) VideoViewfinderVerticalOffset else 0.dp))
+                        .offset(y = animatedViewfinderTop + (if (!usesPhotoStyleViewfinder) VideoViewfinderVerticalOffset else 0.dp))
                         .clipToBounds()
                         .onGloballyPositioned { coordinates ->
                             viewfinderAreaBounds = coordinates.boundsInRoot()
@@ -2005,20 +2030,6 @@ fun CameraScreen(
                             .requiredSize(cardWidth, cardHeight)
                     ) {
                         viewfinder()
-                    }
-                    if (isVideoMode && activePanel != ActivePanel.SETTINGS) {
-                        // The six-dot menu takes the toolbar's place while its panel is open.
-                        Box(
-                            modifier = Modifier
-                                .width(cardWidth)
-                                .requiredHeight(cardHeight)
-                                // Keep video top controls at their original screen position
-                                // while the viewfinder itself is shifted down.
-                                .offset(y = -VideoViewfinderVerticalOffset + 10.dp),
-                            contentAlignment = Alignment.TopCenter
-                        ) {
-                            topBar()
-                        }
                     }
                     if (uiStyle == "OPPO" && activePanel == ActivePanel.NONE && !isXpan) {
                         Box(
@@ -2098,6 +2109,21 @@ fun CameraScreen(
                         controls(Modifier.fillMaxWidth())
                     }
                 )
+            }
+
+            // The toolbar is a screen-level overlay, not a child of the ratio-sized
+            // viewfinder. Its anchor is calculated from the 9:16 layout and never moves
+            // when the selected video aspect ratio changes.
+            if (isVideoMode && activePanel != ActivePanel.SETTINGS) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .offset(y = videoTopBarAnchorTop + 10.dp),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    topBar()
+                }
             }
         }
 
