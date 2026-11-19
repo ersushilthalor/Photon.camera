@@ -1609,7 +1609,35 @@ fun CameraScreen(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(50))
                                             .background(Color.Black.copy(alpha = 0.78f))
-                                            .clickable { dualCaptureSourceMenuExpanded = true }
+                                            .clickable {
+                                                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        context.getString(R.string.dual_capture_stop_recording_to_change),
+                                                        android.widget.Toast.LENGTH_SHORT,
+                                                    ).show()
+                                                } else {
+                                                    val nextSource = if (dualCaptureSource == DualCaptureSource.FRONT) {
+                                                        DualCaptureSource.ULTRA_WIDE
+                                                    } else {
+                                                        DualCaptureSource.FRONT
+                                                    }
+                                                    if (viewModel.isDualCaptureSourceSupported(nextSource)) {
+                                                        dualCaptureDragOffset = Offset.Zero
+                                                        viewModel.setDualCaptureSource(nextSource)
+                                                    } else {
+                                                        android.widget.Toast.makeText(
+                                                            context,
+                                                            if (nextSource == DualCaptureSource.FRONT) {
+                                                                "Front camera is not available with this rear camera."
+                                                            } else {
+                                                                "Rear ultra-wide is not available with this camera."
+                                                            },
+                                                            android.widget.Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                    }
+                                                }
+                                            }
                                             .padding(horizontal = 10.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
@@ -1624,7 +1652,8 @@ fun CameraScreen(
                                             color = Color.White.copy(alpha = 0.78f),
                                             fontSize = 10.sp,
                                             modifier = Modifier
-                                                .padding(start = 4.dp),
+                                                .padding(start = 4.dp)
+                                                .clickable { dualCaptureSourceMenuExpanded = true },
                                         )
                                     }
                                     DropdownMenu(
