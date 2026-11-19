@@ -1446,7 +1446,10 @@ fun CameraScreen(
                     if (state.captureMode == CaptureMode.VIDEO && dualCaptureEnabled) {
                         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                             val insetPadding = 12.dp
-                            val pipTopPadding = VideoTopBarBaseHeight + topSafePadding + 8.dp
+                            // VideoTopBar's 30 dp icon pill is centered in its 40 dp row,
+                            // which sits 13 dp below the safe-area top: its bottom edge is
+                            // 48 dp below that inset. Keep the PiP preview exactly 5 dp below it.
+                            val pipTopPadding = topSafePadding + 53.dp
                             val dualInsetAspectRatio = 3f / 4f
                             val availablePipHeight = (maxHeight - pipTopPadding - insetPadding).coerceAtLeast(1.dp)
                             val insetWidth = minOf(maxWidth * 0.33f, availablePipHeight * dualInsetAspectRatio)
