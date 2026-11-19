@@ -80,6 +80,7 @@ private val CameraTopSheetContentTopPadding = 32.dp
 fun CameraTopSheet(
     visible: Boolean,
     glassBackdrop: PrismalBackdrop,
+    glassBlurRadius: Float,
     captureMode: CaptureMode,
     aspectRatio: AspectRatio,
     topSheetAspectRatios: List<AspectRatio>,
@@ -185,7 +186,7 @@ fun CameraTopSheet(
             shape = { PrismalRoundedRectangle(30.dp) },
             // The live SurfaceView is already visible behind this overlay. Keep the
             // panel optically clear: no stale sampled frame, added blur, or colour wash.
-            blurRadius = 0.dp,
+            blurRadius = glassBlurRadius.dp,
             tint = Color.Unspecified,
             tintAlpha = 0f,
             surfaceColor = Color.Unspecified,

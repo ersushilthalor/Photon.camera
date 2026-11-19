@@ -1427,6 +1427,8 @@
     <string name="oppo_refocus_far">Far</string>
     <string name="settings_camera_menu_transparency">Quick menu transparency</string>
     <string name="settings_camera_menu_transparency_description">Adjust how much of the live preview shows through the photo and video quick menu. 0% is opaque; higher values reveal more of the blurred preview.</string>
+    <string name="settings_camera_menu_blur">Quick menu blur</string>
+    <string name="settings_camera_menu_blur_description">Adjust the glass blur strength for the photo and video quick menu. 0 dp disables blur; 16 dp is the strongest setting.</string>
 
     <string name="dual_capture_layout">Dual capture layout</string>
     <string name="dual_capture_layout_picture_in_picture">Picture-in-picture</string>

@@ -253,6 +253,7 @@ fun CameraScreen(
     val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
     val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
+    val cameraMenuBlurRadius by viewModel.cameraMenuBlurRadius.collectAsState()
     val currentLutId by viewModel.currentLutId.collectAsState()
     val lutNameOverlayState = rememberLutNameOverlayState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
@@ -2150,6 +2151,7 @@ fun CameraScreen(
         CameraTopSheet(
             visible = activePanel == ActivePanel.SETTINGS,
             glassBackdrop = settingsGlassBackdrop,
+            glassBlurRadius = cameraMenuBlurRadius,
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
             topSheetAspectRatios = topSheetAspectRatios,

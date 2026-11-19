@@ -132,6 +132,7 @@ import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.camera.VendorCaptureValueType
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.DEFAULT_CAMERA_MENU_TRANSPARENCY
+import com.hinnka.mycamera.data.DEFAULT_CAMERA_MENU_BLUR_RADIUS
 import com.hinnka.mycamera.data.VolumeKeyAction
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.PhotoSavePath
@@ -1928,6 +1929,27 @@ fun SettingsScreen(
                             onResetValue = {
                                 menuTransparencyUi = it
                                 viewModel.setCameraMenuTransparency(it)
+                            }
+                        )
+
+
+                        var menuBlurUi by remember(userPreferences.cameraMenuBlurRadius) {
+                            mutableStateOf(userPreferences.cameraMenuBlurRadius)
+                        }
+                        SliderSettingItem(
+                            title = stringResource(R.string.settings_camera_menu_blur),
+                            description = stringResource(R.string.settings_camera_menu_blur_description),
+                            value = menuBlurUi,
+                            valueRange = 0f..16f,
+                            resetValue = DEFAULT_CAMERA_MENU_BLUR_RADIUS,
+                            valueTextFormatter = { "${it.roundToInt()} dp" },
+                            onValueChange = { menuBlurUi = it },
+                            onValueChangeFinished = {
+                                viewModel.setCameraMenuBlurRadius(menuBlurUi)
+                            },
+                            onResetValue = {
+                                menuBlurUi = it
+                                viewModel.setCameraMenuBlurRadius(it)
                             }
                         )
 
