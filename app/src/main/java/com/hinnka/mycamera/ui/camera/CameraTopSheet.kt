@@ -31,6 +31,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import com.styropyr0.prismal.PrismalBackdrop
+import com.styropyr0.prismal.PrismalGlassSurface
+import com.styropyr0.prismal.shapes.PrismalRoundedRectangle
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -75,6 +79,7 @@ private val CameraTopSheetContentTopPadding = 32.dp
 @Composable
 fun CameraTopSheet(
     visible: Boolean,
+    glassBackdrop: PrismalBackdrop,
     captureMode: CaptureMode,
     aspectRatio: AspectRatio,
     topSheetAspectRatios: List<AspectRatio>,
@@ -174,17 +179,27 @@ fun CameraTopSheet(
         exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
         modifier = modifier
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(30.dp))
-                .background(VideoMenuBackground)
-                .padding(top = if (captureMode == CaptureMode.VIDEO) 24.dp else 26.dp)
-                .autoRotate()
-                .padding(horizontal = if (captureMode == CaptureMode.VIDEO) 20.dp else 24.dp)
-                .padding(bottom = 10.dp)
+        // Use Prismal's own AGSL / RenderEffect surface from the supplied library.
+        // Keep all existing menu controls and their spacing unchanged above the glass.
+        PrismalGlassSurface(
+            backdrop = glassBackdrop,
+            modifier = Modifier.fillMaxWidth(),
+            shape = { PrismalRoundedRectangle(30.dp) },
+            blurRadius = 8.dp,
+            refractionHeightPx = with(LocalDensity.current) { 16.dp.toPx() },
+            refractionAmountPx = with(LocalDensity.current) { 32.dp.toPx() },
+            saturation = 1.5f,
+            chromaticAberration = 0f,
         ) {
-            Column {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = if (captureMode == CaptureMode.VIDEO) 24.dp else 26.dp)
+                    .autoRotate()
+                    .padding(horizontal = if (captureMode == CaptureMode.VIDEO) 20.dp else 24.dp)
+                    .padding(bottom = 10.dp)
+            ) {
+                Column {
                 if (captureMode == CaptureMode.PHOTO) {
                     val isProfessionalMode = useRaw && isRawSupported
 
@@ -2058,7 +2073,6 @@ private val CameraMenuBackground = Color(0xFF111418)
 private val CameraMenuCard = Color(0xFF20242A)
 private val CameraMenuRaisedCard = Color(0xFF282D35)
 
-private val VideoMenuBackground = Color(0xFF0F0F13)
 private val VideoMenuCard = Color(0xFF242429)
 private val VideoMenuRaisedCard = Color(0xFF303036)
 
