@@ -3498,8 +3498,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setDualCaptureLayout(layout)
     }
 
-    fun setDualCapturePosition(x: Float, y: Float) {
-        cameraController.setDualCapturePosition(x, y)
+    fun setDualCapturePosition(x: Float, y: Float, widthFraction: Float? = null) {
+        cameraController.setDualCapturePosition(x, y, widthFraction)
     }
 
     fun pauseVideoRecording() {
