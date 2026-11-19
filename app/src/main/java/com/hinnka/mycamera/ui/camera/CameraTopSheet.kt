@@ -184,14 +184,15 @@ fun CameraTopSheet(
             backdrop = glassBackdrop,
             modifier = Modifier.fillMaxWidth(),
             shape = { PrismalRoundedRectangle(30.dp) },
-            blurRadius = 14.dp,
-            tint = Color(0xFFBFD9F5),
-            tintAlpha = 0.10f,
-            surfaceColor = Color(0x42151B25),
-            saturation = 1.55f,
-            refractionHeightPx = with(glassDensity) { 20.dp.toPx() },
-            refractionAmountPx = with(glassDensity) { 44.dp.toPx() },
+            blurRadius = 22.dp,
+            tint = Color.White,
+            tintAlpha = 0.08f,
+            surfaceColor = Color(0x26151B25),
+            saturation = 1.65f,
+            refractionHeightPx = with(glassDensity) { 24.dp.toPx() },
+            refractionAmountPx = with(glassDensity) { 48.dp.toPx() },
             depthEffect = true,
+            chromaticAberration = 0.28f,
         ) {
             Column(
                 modifier = Modifier
@@ -2074,12 +2075,12 @@ private fun ContentManagementQuickSetting(
 }
 
 private val CameraMenuBackground = Color(0xFF111418)
-private val CameraMenuCard = Color(0xFF20242A)
-private val CameraMenuRaisedCard = Color(0xFF282D35)
+private val CameraMenuCard = Color(0x5520242A)
+private val CameraMenuRaisedCard = Color(0x77282D35)
 
 private val VideoMenuBackground = Color(0xFF0F0F13)
-private val VideoMenuCard = Color(0xFF242429)
-private val VideoMenuRaisedCard = Color(0xFF303036)
+private val VideoMenuCard = Color(0x55242429)
+private val VideoMenuRaisedCard = Color(0x77303036)
 
 
 private fun Modifier.menuCardSurface(
@@ -2090,7 +2091,7 @@ private fun Modifier.menuCardSurface(
     .shadow(elevation = elevation, shape = shape, clip = false)
     .clip(shape)
     .background(background)
-    .border(0.75.dp, Color.White.copy(alpha = 0.075f), shape)
+    .border(0.75.dp, Color.White.copy(alpha = 0.13f), shape)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

@@ -58,7 +58,7 @@ class CameraPreviewPrismalBackdrop : PrismalBackdrop {
                 y = (sourceBounds.top - targetPosition.y).roundToInt()
             ),
             dstSize = IntSize(width, height),
-            filterQuality = FilterQuality.Medium
+            filterQuality = FilterQuality.High
         )
     }
 }

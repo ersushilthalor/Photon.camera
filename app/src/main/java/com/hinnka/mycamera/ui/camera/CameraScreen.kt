@@ -891,13 +891,16 @@ fun CameraScreen(
             val captureView = cameraGLSurfaceView
             if (activePanel == ActivePanel.SETTINGS && captureView != null) {
                 while (isActive) {
-                    captureView.captureNextPreviewFrame(maxLongEdge = 720) { bitmap ->
+                    captureView.capturePreviewFrame(maxLongEdge = 960) { bitmap ->
                         if (generation != settingsGlassCaptureGeneration || activePanel != ActivePanel.SETTINGS) {
                             if (!bitmap.isRecycled) bitmap.recycle()
                         } else {
                             val previous = settingsGlassBitmap
                             settingsGlassBitmap = bitmap
-                            settingsGlassBackdrop.update(bitmap.asImageBitmap(), previewGlBounds)
+                            settingsGlassBackdrop.update(
+                                bitmap.asImageBitmap(),
+                                previewGlBounds ?: viewfinderAreaBounds ?: previewBounds
+                            )
                             if (previous != null && previous !== bitmap) {
                                 scope.launch {
                                     delay(500L)
