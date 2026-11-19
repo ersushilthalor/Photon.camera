@@ -31,6 +31,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -60,6 +61,9 @@ import com.hinnka.mycamera.video.VideoCodec
 import com.hinnka.mycamera.ui.icons.AppIcons
 import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.theme.OnAccentColor
+import com.styropyr0.prismal.PrismalBackdrop
+import com.styropyr0.prismal.PrismalGlassSurface
+import com.styropyr0.prismal.shapes.PrismalRoundedRectangle
 
 private enum class VideoSettingPanel {
     ASPECT_RATIO,
@@ -75,6 +79,7 @@ private val CameraTopSheetContentTopPadding = 32.dp
 @Composable
 fun CameraTopSheet(
     visible: Boolean,
+    glassBackdrop: PrismalBackdrop,
     captureMode: CaptureMode,
     aspectRatio: AspectRatio,
     topSheetAspectRatios: List<AspectRatio>,
@@ -168,22 +173,34 @@ fun CameraTopSheet(
         }
     }
 
+    val glassDensity = LocalDensity.current
     AnimatedVisibility(
         visible = visible,
         enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
         exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
         modifier = modifier
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(30.dp))
-                .background(VideoMenuBackground)
-                .padding(top = if (captureMode == CaptureMode.VIDEO) 24.dp else 26.dp)
-                .autoRotate()
-                .padding(horizontal = if (captureMode == CaptureMode.VIDEO) 20.dp else 24.dp)
-                .padding(bottom = 10.dp)
+        PrismalGlassSurface(
+            backdrop = glassBackdrop,
+            modifier = Modifier.fillMaxWidth(),
+            shape = { PrismalRoundedRectangle(30.dp) },
+            blurRadius = 14.dp,
+            tint = Color(0xFFBFD9F5),
+            tintAlpha = 0.10f,
+            surfaceColor = Color(0x42151B25),
+            saturation = 1.55f,
+            refractionHeightPx = with(glassDensity) { 20.dp.toPx() },
+            refractionAmountPx = with(glassDensity) { 44.dp.toPx() },
+            depthEffect = true,
         ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = if (captureMode == CaptureMode.VIDEO) 24.dp else 26.dp)
+                    .autoRotate()
+                    .padding(horizontal = if (captureMode == CaptureMode.VIDEO) 20.dp else 24.dp)
+                    .padding(bottom = 10.dp)
+            ) {
             Column {
                 if (captureMode == CaptureMode.PHOTO) {
                     val isProfessionalMode = useRaw && isRawSupported

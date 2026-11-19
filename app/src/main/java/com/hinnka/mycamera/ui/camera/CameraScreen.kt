@@ -362,6 +362,14 @@ fun CameraScreen(
 
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
+    var settingsGlassBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var settingsGlassCaptureGeneration by remember { mutableIntStateOf(0) }
+    val latestSettingsGlassBitmap = rememberUpdatedState(settingsGlassBitmap)
+    DisposableEffect(Unit) {
+        onDispose {
+            latestSettingsGlassBitmap.value?.takeIf { !it.isRecycled }?.recycle()
+        }
+    }
 
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
     var showParameterRuler by remember(state.captureMode, state.useRaw) { mutableStateOf(false) }
@@ -874,6 +882,43 @@ fun CameraScreen(
 
         val backgroundPainter = rememberBackgroundPainter(viewModel)
         val modeSwitcherBackdrop = rememberLiquidGlassBackdrop()
+        val settingsGlassBackdrop = remember { CameraPreviewPrismalBackdrop() }
+
+        // GLSurfaceView is not captured by Compose GraphicsLayer recording. Sample the
+        // renderer's real final-display frames instead, so Prismal refracts the live viewfinder.
+        LaunchedEffect(activePanel, cameraGLSurfaceView) {
+            val generation = ++settingsGlassCaptureGeneration
+            val captureView = cameraGLSurfaceView
+            if (activePanel == ActivePanel.SETTINGS && captureView != null) {
+                while (isActive) {
+                    captureView.captureNextPreviewFrame(maxLongEdge = 720) { bitmap ->
+                        if (generation != settingsGlassCaptureGeneration || activePanel != ActivePanel.SETTINGS) {
+                            if (!bitmap.isRecycled) bitmap.recycle()
+                        } else {
+                            val previous = settingsGlassBitmap
+                            settingsGlassBitmap = bitmap
+                            settingsGlassBackdrop.update(bitmap.asImageBitmap(), previewGlBounds)
+                            if (previous != null && previous !== bitmap) {
+                                scope.launch {
+                                    delay(500L)
+                                    if (settingsGlassBitmap !== previous && !previous.isRecycled) {
+                                        previous.recycle()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    delay(180L)
+                }
+            } else {
+                // Keep the last frame through the sheet's exit animation, then release it.
+                delay(500L)
+                val previous = settingsGlassBitmap
+                settingsGlassBitmap = null
+                settingsGlassBackdrop.update(null, null)
+                if (previous != null && !previous.isRecycled) previous.recycle()
+            }
+        }
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
@@ -2144,6 +2189,7 @@ fun CameraScreen(
         // TopSheet for settings
         CameraTopSheet(
             visible = activePanel == ActivePanel.SETTINGS,
+            glassBackdrop = settingsGlassBackdrop,
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
             topSheetAspectRatios = topSheetAspectRatios,
