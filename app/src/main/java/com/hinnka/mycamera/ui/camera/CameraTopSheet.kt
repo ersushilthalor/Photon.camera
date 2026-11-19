@@ -173,7 +173,6 @@ fun CameraTopSheet(
         }
     }
 
-    val glassDensity = LocalDensity.current
     AnimatedVisibility(
         visible = visible,
         enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
@@ -184,15 +183,17 @@ fun CameraTopSheet(
             backdrop = glassBackdrop,
             modifier = Modifier.fillMaxWidth(),
             shape = { PrismalRoundedRectangle(30.dp) },
-            blurRadius = 22.dp,
-            tint = Color.White,
-            tintAlpha = 0.08f,
-            surfaceColor = Color(0x26151B25),
-            saturation = 1.65f,
-            refractionHeightPx = with(glassDensity) { 24.dp.toPx() },
-            refractionAmountPx = with(glassDensity) { 48.dp.toPx() },
-            depthEffect = true,
-            chromaticAberration = 0.28f,
+            // The live SurfaceView is already visible behind this overlay. Keep the
+            // panel optically clear: no stale sampled frame, added blur, or colour wash.
+            blurRadius = 0.dp,
+            tint = Color.Unspecified,
+            tintAlpha = 0f,
+            surfaceColor = Color.Unspecified,
+            saturation = 1.0f,
+            refractionHeightPx = 0f,
+            refractionAmountPx = 0f,
+            depthEffect = false,
+            chromaticAberration = 0f,
         ) {
             Column(
                 modifier = Modifier
