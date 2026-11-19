@@ -3,12 +3,16 @@ package com.hinnka.mycamera.ui.camera
 import android.media.AudioDeviceInfo
 import android.os.Build
 import androidx.compose.animation.*
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -32,10 +36,12 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -176,8 +182,28 @@ fun CameraTopSheet(
     val glassDensity = LocalDensity.current
     AnimatedVisibility(
         visible = visible,
-        enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-        exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+        enter = slideInVertically(
+            animationSpec = spring(
+                dampingRatio = 0.84f,
+                stiffness = Spring.StiffnessMediumLow
+            ),
+            initialOffsetY = { -(it * 0.25f).toInt() }
+        ) + scaleIn(
+            animationSpec = spring(
+                dampingRatio = 0.84f,
+                stiffness = Spring.StiffnessMediumLow
+            ),
+            initialScale = 0.94f,
+            transformOrigin = TransformOrigin(0.5f, 0f)
+        ) + fadeIn(animationSpec = tween(durationMillis = 180)),
+        exit = slideOutVertically(
+            animationSpec = tween(durationMillis = 170),
+            targetOffsetY = { -(it * 0.2f).toInt() }
+        ) + scaleOut(
+            animationSpec = tween(durationMillis = 170),
+            targetScale = 0.95f,
+            transformOrigin = TransformOrigin(0.5f, 0f)
+        ) + fadeOut(animationSpec = tween(durationMillis = 150)),
         modifier = modifier
     ) {
         PrismalGlassSurface(
@@ -187,7 +213,7 @@ fun CameraTopSheet(
             blurRadius = 22.dp,
             tint = Color.White,
             tintAlpha = 0.08f,
-            surfaceColor = Color(0x26151B25),
+            surfaceColor = Color(0x30151B25),
             saturation = 1.65f,
             refractionHeightPx = with(glassDensity) { 24.dp.toPx() },
             refractionAmountPx = with(glassDensity) { 48.dp.toPx() },
@@ -2087,11 +2113,37 @@ private fun Modifier.menuCardSurface(
     shape: RoundedCornerShape = RoundedCornerShape(9.dp),
     background: Color = CameraMenuCard,
     elevation: Dp = 3.dp
-): Modifier = this
-    .shadow(elevation = elevation, shape = shape, clip = false)
-    .clip(shape)
-    .background(background)
-    .border(0.75.dp, Color.White.copy(alpha = 0.13f), shape)
+): Modifier = composed {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1f,
+        animationSpec = spring(
+            dampingRatio = 0.7f,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "glassCardPressScale"
+    )
+    this
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+        .shadow(elevation = elevation, shape = shape, clip = false)
+        .clip(shape)
+        .background(background)
+        .border(
+            width = 0.75.dp,
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = 0.22f),
+                    Color.White.copy(alpha = 0.08f),
+                    Color.White.copy(alpha = 0.14f)
+                )
+            ),
+            shape = shape
+        )
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

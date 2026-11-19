@@ -911,7 +911,7 @@ fun CameraScreen(
                             }
                         }
                     }
-                    delay(180L)
+                    delay(66L)
                 }
             } else {
                 // Keep the last frame through the sheet's exit animation, then release it.
