@@ -19,8 +19,8 @@ class MgcEisPresentationTransformTest {
 
         assertTrue(transform.captureFromOes(oesMatrix270()))
         val captured270 = transform.matrix.copyOf()
-        assertEquals(1f, captured270[4])
-        assertEquals(1f, captured270[1])
+        assertEquals(1f, captured270[4], 0f)
+        assertEquals(1f, captured270[1], 0f)
 
         assertTrue(
             cameraKeyTracker.update(
@@ -32,10 +32,10 @@ class MgcEisPresentationTransformTest {
 
         assertTrue(transform.captureFromOes(oesMatrix90()))
         assertNotEquals(captured270.toList(), transform.matrix.toList())
-        assertEquals(-1f, transform.matrix[4])
-        assertEquals(-1f, transform.matrix[1])
-        assertEquals(1f, transform.matrix[12])
-        assertEquals(1f, transform.matrix[13])
+        assertEquals(-1f, transform.matrix[4], 0f)
+        assertEquals(-1f, transform.matrix[1], 0f)
+        assertEquals(1f, transform.matrix[12], 0f)
+        assertEquals(1f, transform.matrix[13], 0f)
 
         assertFalse(
             cameraKeyTracker.update(
