@@ -21,6 +21,9 @@ add_library(my-native-lib SHARED
     gles_gpu_timer_query_jni.cpp
     gles_hardware_buffer_jni.cpp
     lut_processor.cpp
+    direct_buffer_allocator_jni.cpp
+    yuv_processor_jni.cpp
+    raw_capture_jni.cpp
     mgc_eis_reconstruction_jni.cpp
     "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_eis_reconstruction.cpp"
     "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_type18_engine.cpp"

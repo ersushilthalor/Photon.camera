@@ -3368,36 +3368,41 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 pboId = pbos[0]
             }
 
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
-            GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
-            GLES30.glReadPixels(0, 0, targetWidth, targetHeight, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
+            var isBufferMapped = false
+            try {
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboId)
+                GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, pixelSize, null, GLES30.GL_STREAM_READ)
+                GLES30.glReadPixels(0, 0, targetWidth, targetHeight, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
 
-            val mappedBuffer = GLES30.glMapBufferRange(
-                GLES30.GL_PIXEL_PACK_BUFFER, 0, pixelSize, GLES30.GL_MAP_READ_BIT
-            ) as? ByteBuffer
+                val mappedBuffer = GLES30.glMapBufferRange(
+                    GLES30.GL_PIXEL_PACK_BUFFER, 0, pixelSize, GLES30.GL_MAP_READ_BIT
+                ) as? ByteBuffer ?: return
+                isBufferMapped = true
 
-            if (mappedBuffer == null) {
+                val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+                val finalBitmap = try {
+                    bitmap.copyPixelsFromBuffer(mappedBuffer)
+                    GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+                    isBufferMapped = false
+
+                    // 翻转 Y 轴并返回
+                    val matrix = android.graphics.Matrix()
+                    matrix.preScale(1f, -1f)
+                    Bitmap.createBitmap(bitmap, 0, 0, targetWidth, targetHeight, matrix, false)
+                } finally {
+                    bitmap.recycle()
+                }
+                request.onCaptured(finalBitmap)
+            } finally {
+                if (isBufferMapped) {
+                    GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
+                }
                 GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-                return
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
             }
 
-            val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-            bitmap.copyPixelsFromBuffer(mappedBuffer)
-            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)
-
-            // 翻转 Y 轴并返回
-            val matrix = android.graphics.Matrix()
-            matrix.preScale(1f, -1f)
-            val finalBitmap = Bitmap.createBitmap(bitmap, 0, 0, targetWidth, targetHeight, matrix, false)
-            bitmap.recycle()
-            request.onCaptured(finalBitmap)
-
-            // 3. 恢复环境
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES30.glViewport(0, 0, viewportWidth, viewportHeight)
-
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             PLog.e(TAG, "Failed to capture preview frame", e)
         }
     }

@@ -612,8 +612,13 @@ class Camera2Controller(private val context: Context) {
         state: CameraState,
         reader: ImageReader,
         continuousBurst: Boolean = false,
+        baseExposureResult: CaptureResult? = lastCaptureResult,
     ): PhotoCaptureContext? {
-        val frameCount = if (continuousBurst) BURST_CAPTURE_BATCH_SIZE else captureImageRequestCount(state, reader)
+        val frameCount = if (continuousBurst) {
+            BURST_CAPTURE_BATCH_SIZE
+        } else {
+            captureImageRequestCount(state, reader, baseExposureResult)
+        }
         val occupied = openImagesCount.get() + reservedImageCount()
         if (occupied + frameCount > CAPTURE_READER_MAX_IMAGES) {
             PLog.w(TAG, "Capture rejected: occupied=$occupied requested=$frameCount capacity=$CAPTURE_READER_MAX_IMAGES")
@@ -1165,15 +1170,29 @@ class Camera2Controller(private val context: Context) {
 
     private fun resolveImageReaderMaxImages(): Int = CAPTURE_READER_MAX_IMAGES
 
-    private fun captureImageRequestCount(state: CameraState, reader: ImageReader): Int = when {
-        state.refocusCaptureEnabled &&
+    private fun isRefocusCapture(state: CameraState, isRawCapture: Boolean): Boolean {
+        return state.refocusCaptureEnabled &&
             state.captureMode == CaptureMode.PHOTO &&
-            state.minimumFocusDistance > 0f &&
-            !isRawCaptureReader(reader) -> state.refocusFrameCount.coerceIn(3, 8)
-        shouldUseJpgMaxHdrCapture(state, isRawCaptureReader(reader)) && !shouldUseMultiFrameTorch(state) ->
-            buildHdrBracketEvOffsets(state).size
-        state.requiresMultiFrameCaptureSequence -> state.activeMultiFrameCount
-        else -> 1
+            !isRawCapture &&
+            !state.useLivePhoto &&
+            !state.useMultipleExposure &&
+            state.minimumFocusDistance > 0f
+    }
+
+    private fun captureImageRequestCount(
+        state: CameraState,
+        reader: ImageReader,
+        baseExposureResult: CaptureResult? = lastCaptureResult,
+    ): Int {
+        val isRawCapture = isRawCaptureReader(reader)
+        return when {
+            isRefocusCapture(state, isRawCapture) -> state.refocusFrameCount.coerceIn(3, 8)
+            shouldUseJpgMaxHdrCapture(state, isRawCapture, baseExposureResult) &&
+                !shouldUseMultiFrameTorch(state) ->
+                buildHdrBracketEvOffsets(state, baseExposureResult).size
+            state.requiresMultiFrameCaptureSequence -> state.activeMultiFrameCount
+            else -> 1
+        }
     }
 
     private fun canAcquireImage(logPrefix: String): Boolean {
@@ -9697,7 +9716,7 @@ class Camera2Controller(private val context: Context) {
         reader: ImageReader,
         baseExposureResult: CaptureResult?,
     ) {
-        val currentState = _state.value
+        val currentState = activePhotoCapture?.state ?: _state.value
         val useMultiFrameTorch = shouldUseMultiFrameTorch(currentState)
         val needsPrecapture =
             isFlashSupported &&
@@ -9748,7 +9767,13 @@ class Camera2Controller(private val context: Context) {
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
         if (captureSession == null) return
-        val shot = reservePhotoCapture(_state.value, reader) ?: return
+        val captureState = _state.value
+        val baseExposureResult = lastCaptureResult
+        val shot = reservePhotoCapture(
+            state = captureState,
+            reader = reader,
+            baseExposureResult = baseExposureResult,
+        ) ?: return
         activePhotoCapture = shot
         _state.update { it.copy(isCapturing = true, photoCaptureProgress = null) }
         try {
@@ -9762,34 +9787,32 @@ class Camera2Controller(private val context: Context) {
 
         try {
             livePhotoVideoStartTimestampUs = null
-            if (_state.value.useLivePhoto) {
+            if (captureState.useLivePhoto) {
                 snapshotLivePhoto()
             }
 
-            val baseExposureResult = lastCaptureResult
             // 关键修复：每次拍照前重置拍摄结果
             lastCaptureResult = null
 
             PLog.i(
                 TAG,
-                "开始拍照 - 闪光模式: ${_state.value.flashMode}, ISO模式: ${if (_state.value.isIsoAuto) "自动" else "手动(${_state.value.iso})"}"
+                "开始拍照 - 闪光模式: ${captureState.flashMode}, ISO模式: ${if (captureState.isIsoAuto) "自动" else "手动(${captureState.iso})"}"
             )
 
-            if (!_state.value.useLivePhoto) {
+            if (!captureState.useLivePhoto) {
                 // 播放快门音效
                 onPlayShutterSound?.invoke()
             }
 
-            _state.value = _state.value.copy(isCapturing = true)
+            _state.update { it.copy(isCapturing = true) }
 
             // 只有在【自动曝光 + 单次闪光】时才使用预闪流程
             // 手动曝光模式下，AE_PRECAPTURE_TRIGGER 不生效（因为 AE_MODE=OFF），直接拍照
-            val currentState = _state.value
             if (
-                currentState.requiresMultiFrameCaptureSequence ||
-                (currentState.autoHdrEnabled &&
-                    currentState.captureMode == CaptureMode.PHOTO &&
-                    !currentState.useRaw)
+                captureState.requiresMultiFrameCaptureSequence ||
+                (captureState.autoHdrEnabled &&
+                    captureState.captureMode == CaptureMode.PHOTO &&
+                    !captureState.useRaw)
             ) {
                 // Auto HDR needs exposure-synchronised gyro windows for OppoCam's alignment prior.
                 burstGyroRecorder.start(cameraHandler)
@@ -9799,9 +9822,21 @@ class Camera2Controller(private val context: Context) {
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to capture", e)
             PLog.e(TAG, "拍照失败", e)
-            _state.value = _state.value.copy(isCapturing = false)
-            burstGyroRecorder.stop()
-            resetPreviewAfterCapture()
+            if (activePhotoCapture === shot) {
+                failPhotoCapture(shot, "capture initialization failed: ${e.message}")
+                finishPhotoCaptureSequence(shot, successful = false)
+            } else {
+                _state.update {
+                    it.copy(
+                        isCapturing = false,
+                        hdrBracketCapturing = false,
+                        hdrBracketFrameCount = 0,
+                        refocusCapturing = false,
+                    )
+                }
+                burstGyroRecorder.stop()
+                resetPreviewAfterCapture()
+            }
         }
     }
 
@@ -9811,7 +9846,7 @@ class Camera2Controller(private val context: Context) {
         session: CameraCaptureSession,
         baseExposureResult: CaptureResult?,
     ) {
-        val currentState = _state.value
+        val currentState = activePhotoCapture?.state ?: _state.value
         val maxFocusDiopters = currentState.minimumFocusDistance
         if (maxFocusDiopters <= 0f) {
             PLog.w(TAG, "Refocus unavailable: lens does not expose manual focus distance")
@@ -9880,13 +9915,15 @@ class Camera2Controller(private val context: Context) {
         baseExposureResult: CaptureResult?,
         currentState: CameraState,
     ) {
-        val evOffsets = buildHdrBracketEvOffsets(currentState)
+        val evOffsets = buildHdrBracketEvOffsets(currentState, baseExposureResult)
         val hdrFrameCount = evOffsets.size
-        _state.value = _state.value.copy(
-            isCapturing = true,
-            hdrBracketCapturing = true,
-            hdrBracketFrameCount = hdrFrameCount
-        )
+        _state.update {
+            it.copy(
+                isCapturing = true,
+                hdrBracketCapturing = true,
+                hdrBracketFrameCount = hdrFrameCount,
+            )
+        }
 
         try {
             if (playShutterSound && !_state.value.useLivePhoto) {
@@ -9945,12 +9982,15 @@ class Camera2Controller(private val context: Context) {
      * OppoCam bracket order: reference, short highlight, optional long shadow.
      * Auto HDR only brackets scenes whose live histogram shows actual highlight/shadow risk.
      */
-    private fun buildHdrBracketEvOffsets(state: CameraState): List<Float> {
+    private fun buildHdrBracketEvOffsets(
+        state: CameraState,
+        baseExposureResult: CaptureResult? = lastCaptureResult,
+    ): List<Float> {
         if (state.flashMode != 0) return listOf(0f)
         if (!state.autoHdrEnabled || state.useJpgMaxHdrComposition) {
             return listOf(0f, -1.7f, 1.4f)
         }
-        return resolveAutoHdrBracketEvOffsets(state)
+        return resolveAutoHdrBracketEvOffsets(state, baseExposureResult)
     }
 
     /**
@@ -10368,9 +10408,13 @@ class Camera2Controller(private val context: Context) {
         return false
     }
 
-    private fun shouldUseJpgMaxHdrCapture(state: CameraState, isRawCapture: Boolean): Boolean {
+    private fun shouldUseJpgMaxHdrCapture(
+        state: CameraState,
+        isRawCapture: Boolean,
+        baseExposureResult: CaptureResult? = lastCaptureResult,
+    ): Boolean {
         val sceneNeedsHdr = state.useJpgMaxHdrComposition ||
-            (state.autoHdrEnabled && resolveAutoHdrBracketEvOffsets(state).size > 1)
+            (state.autoHdrEnabled && resolveAutoHdrBracketEvOffsets(state, baseExposureResult).size > 1)
         return state.captureMode == CaptureMode.PHOTO &&
                 state.isJpgMaxEnabled &&
                 sceneNeedsHdr &&
@@ -10391,7 +10435,10 @@ class Camera2Controller(private val context: Context) {
      * 256-bin histogram, then selects single, highlight-only, or full highlight+shadow capture.
      * Flat scenes stay single-frame; slow shutter scenes never add a long shadow exposure.
      */
-    private fun resolveAutoHdrBracketEvOffsets(state: CameraState): List<Float> {
+    private fun resolveAutoHdrBracketEvOffsets(
+        state: CameraState,
+        baseExposureResult: CaptureResult? = lastCaptureResult,
+    ): List<Float> {
         if (state.flashMode != 0) return emptyList()
         val histogram = state.histogram ?: return emptyList()
         if (histogram.size < 256) return emptyList()
@@ -10438,7 +10485,7 @@ class Camera2Controller(private val context: Context) {
             return emptyList()
         }
 
-        val actualExposureNs = lastCaptureResult
+        val actualExposureNs = baseExposureResult
             ?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
             ?.takeIf { it > 0L }
             ?: state.shutterSpeed
@@ -10490,16 +10537,9 @@ class Camera2Controller(private val context: Context) {
     ) {
         try {
             val isRawCapture = isRawCaptureReader(reader)
-            val currentState = stillFlashCaptureState ?: _state.value
+            val currentState = stillFlashCaptureState ?: activePhotoCapture?.state ?: _state.value
             val useMultiFrameTorch = isMultiFrameTorchCaptureActive
-            if (
-                currentState.refocusCaptureEnabled &&
-                currentState.captureMode == CaptureMode.PHOTO &&
-                !isRawCapture &&
-                !currentState.useLivePhoto &&
-                !currentState.useMultipleExposure &&
-                currentState.minimumFocusDistance > 0f
-            ) {
+            if (isRefocusCapture(currentState, isRawCapture)) {
                 val session = captureSession ?: run {
                     PLog.e(TAG, "Failed to capture refocus planes: capture session unavailable")
                     _state.update { it.copy(isCapturing = false, refocusCapturing = false) }
@@ -10509,10 +10549,12 @@ class Camera2Controller(private val context: Context) {
                 performRefocusCapture(device, reader, session, baseExposureResult)
                 return
             }
-            if (shouldUseJpgMaxHdrCapture(currentState, isRawCapture)) {
+            if (shouldUseJpgMaxHdrCapture(currentState, isRawCapture, baseExposureResult)) {
                 val session = captureSession ?: run {
                     PLog.e(TAG, "Failed to capture JPGmax bracket: capture session unavailable")
-                    _state.value = _state.value.copy(isCapturing = false)
+                    _state.update {
+                        it.copy(isCapturing = false, hdrBracketCapturing = false, hdrBracketFrameCount = 0)
+                    }
                     onHdrBracketCaptureFailed?.invoke()
                     resetPreviewAfterCapture()
                     return

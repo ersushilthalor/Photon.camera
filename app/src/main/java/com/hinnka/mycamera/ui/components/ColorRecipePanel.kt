@@ -137,7 +137,8 @@ fun ColorRecipePanel(
     headerControls: (@Composable () -> Unit)? = null,
     containerShape: Shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
     modifier: Modifier = Modifier,
-    replaceVignetteWithVideoBrightness: Boolean = false
+    replaceVignetteWithVideoBrightness: Boolean = false,
+    transparentGlassSurface: Boolean = false
 ) {
     val isBakeable: (RecipeParam) -> Boolean = { param ->
         param != RecipeParam.VIGNETTE &&
@@ -409,7 +410,12 @@ fun ColorRecipePanel(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 14.dp)
+                    .padding(
+                        start = 14.dp,
+                        top = if (transparentGlassSurface) 14.dp else 14.dp,
+                        end = 14.dp,
+                        bottom = if (transparentGlassSurface) 6.dp else 14.dp
+                    )
             ) {
                 FlatLutIntensityRow(
                     intensity = currentParams.lutIntensity,
@@ -422,14 +428,29 @@ fun ColorRecipePanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(containerShape)
-                .background(Color(0xFF111318).copy(alpha = if (isCurveDragging) 0.18f else 0.30f), containerShape)
-                .border(
-                    0.7.dp,
-                    Color.White.copy(alpha = if (isCurveDragging) 0.10f else 0.20f),
-                    containerShape
+                .then(
+                    if (transparentGlassSurface) {
+                        Modifier
+                    } else {
+                        Modifier
+                            .clip(containerShape)
+                            .background(
+                                Color(0xFF111318).copy(alpha = if (isCurveDragging) 0.18f else 0.30f),
+                                containerShape
+                            )
+                            .border(
+                                0.7.dp,
+                                Color.White.copy(alpha = if (isCurveDragging) 0.10f else 0.20f),
+                                containerShape
+                            )
+                    }
                 )
-                .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
+                .padding(
+                    start = 14.dp,
+                    top = if (transparentGlassSurface && showLutIntensity) 6.dp else 12.dp,
+                    end = 14.dp,
+                    bottom = 12.dp
+                ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // 模式切换与重置栏：大圆角胶囊按钮，文字大小统一为 11.sp
@@ -526,6 +547,7 @@ fun ColorRecipePanel(
                             basicDefaultRawValue(selectedBasicControl)
                         )
                     },
+                    transparentGlassSurface = transparentGlassSurface,
                     modifier = Modifier.fillMaxWidth(),
                 )
 
@@ -581,6 +603,7 @@ fun ColorRecipePanel(
                                             param = param,
                                             value = param.getValue(currentParams),
                                             onValueChange = { onParamChange(param, it) },
+                                            transparentGlassSurface = transparentGlassSurface,
                                         )
                                     }
                                 }
@@ -606,6 +629,7 @@ fun ColorRecipePanel(
                                             param = param,
                                             value = param.getValue(currentParams),
                                             onValueChange = { onParamChange(param, it) },
+                                            transparentGlassSurface = transparentGlassSurface,
                                         )
                                     }
                                 }
@@ -622,6 +646,7 @@ fun ColorRecipePanel(
                                             param = param,
                                             value = param.getValue(currentParams),
                                             onValueChange = { onParamChange(param, it) },
+                                            transparentGlassSurface = transparentGlassSurface,
                                         )
                                     }
                                 }
@@ -643,6 +668,7 @@ fun ColorRecipePanel(
                                     effect = effect,
                                     value = getEffectRawValue(effect),
                                     onValueChange = { setEffectRawValue(effect, it) },
+                                    transparentGlassSurface = transparentGlassSurface,
                                 )
                             }
                         }
@@ -651,6 +677,7 @@ fun ColorRecipePanel(
                         ColorRecipeRemarksBar(
                             remarks = currentParams.remarks ?: "",
                             onRemarksChange = onRemarksChange,
+                            transparentGlassSurface = transparentGlassSurface,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -983,6 +1010,7 @@ private fun BasicRecipeAdjuster(
     displayValue: Float,
     onDisplayValueChange: (Float) -> Unit,
     onReset: () -> Unit,
+    transparentGlassSurface: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val range = basicDisplayRange(control)
@@ -993,8 +1021,15 @@ private fun BasicRecipeAdjuster(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .background(Color(0xFF20242B).copy(alpha = 0.30f), RoundedCornerShape(18.dp))
-            .border(0.7.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(18.dp))
+            .then(
+                if (transparentGlassSurface) {
+                    Modifier.border(0.75.dp, Color.White.copy(alpha = 0.13f), RoundedCornerShape(18.dp))
+                } else {
+                    Modifier
+                        .background(Color(0xFF20242B).copy(alpha = 0.30f), RoundedCornerShape(18.dp))
+                        .border(0.7.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(18.dp))
+                }
+            )
             .pointerInput(Unit) {
                 detectTapGestures(
                     onDoubleTap = {
@@ -1233,6 +1268,7 @@ private fun RecipeIntegerParamItem(
     param: RecipeParam,
     value: Float,
     onValueChange: (Float) -> Unit,
+    transparentGlassSurface: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val displayRange = param.displayValueRange()
@@ -1250,8 +1286,15 @@ private fun RecipeIntegerParamItem(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFF16171B).copy(alpha = 0.85f))
-            .border(0.5.dp, Color.White.copy(alpha = 0.07f), RoundedCornerShape(10.dp))
+            .then(
+                if (transparentGlassSurface) {
+                    Modifier.border(0.75.dp, Color.White.copy(alpha = 0.13f), RoundedCornerShape(10.dp))
+                } else {
+                    Modifier
+                        .background(Color(0xFF16171B).copy(alpha = 0.85f))
+                        .border(0.5.dp, Color.White.copy(alpha = 0.07f), RoundedCornerShape(10.dp))
+                }
+            )
             .pointerInput(param) {
                 detectTapGestures(
                     onDoubleTap = {
@@ -1318,12 +1361,14 @@ private fun RecipeEffectParamItem(
     effect: EffectType,
     value: Float,
     onValueChange: (Float) -> Unit,
+    transparentGlassSurface: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     RecipeIntegerParamItem(
         param = effect.recipeParam,
         value = value,
         onValueChange = onValueChange,
+        transparentGlassSurface = transparentGlassSurface,
         modifier = modifier
     )
 }
@@ -1562,7 +1607,8 @@ private fun getLchTabColor(index: Int): Color {
 fun ColorRecipeRemarksBar(
     remarks: String,
     onRemarksChange: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    transparentGlassSurface: Boolean = false,
 ) {
     var text by remember(remarks) { mutableStateOf(remarks) }
 
@@ -1575,8 +1621,15 @@ fun ColorRecipeRemarksBar(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF16171B))
-            .border(0.5.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+            .then(
+                if (transparentGlassSurface) {
+                    Modifier.border(0.75.dp, Color.White.copy(alpha = 0.13f), RoundedCornerShape(12.dp))
+                } else {
+                    Modifier
+                        .background(Color(0xFF16171B))
+                        .border(0.5.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                }
+            )
             .padding(12.dp)
             .heightIn(min = 100.dp, max = 260.dp),
         textStyle = TextStyle(
