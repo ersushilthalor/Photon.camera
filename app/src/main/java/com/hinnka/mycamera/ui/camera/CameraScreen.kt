@@ -2485,6 +2485,7 @@ fun CameraScreen(
             }
         }
 
+        val videoEditPanelMaxHeight = maxHeight * 0.72f
         val isVideoEditVisible = activePanel == ActivePanel.EDIT && isVideoMode
         LaunchedEffect(isVideoEditVisible) {
             if (!isVideoEditVisible) {
@@ -2517,7 +2518,7 @@ fun CameraScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = maxHeight * 0.72f)
+                        .heightIn(max = videoEditPanelMaxHeight)
                         .verticalScroll(rememberScrollState())
                         .navigationBarsPadding()
                         .padding(top = 6.dp, bottom = 10.dp)
