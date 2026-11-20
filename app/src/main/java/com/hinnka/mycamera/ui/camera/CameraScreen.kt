@@ -1412,16 +1412,15 @@ fun CameraScreen(
                     }?.sensorOrientation ?: state.availableCameras.firstOrNull {
                         it.lensFacing == CameraCharacteristics.LENS_FACING_BACK
                     }?.sensorOrientation
-                    val previewOrientationOffset = if (state.captureMode == CaptureMode.VIDEO) {
-                        resolvePreviewOrientationOffset(
-                            lensFacing = activeCameraInfo?.lensFacing
-                                ?: CameraCharacteristics.LENS_FACING_BACK,
-                            sensorOrientation = activeCameraInfo?.sensorOrientation ?: 0,
-                            rearSensorOrientation = rearReferenceSensorOrientation,
-                        )
-                    } else {
-                        0
-                    }
+                    // The same GL viewfinder is used by photo and video. Apply the
+                    // front-camera preview correction in both modes; this is preview-only
+                    // and does not modify captured-photo or recorded-video orientation.
+                    val previewOrientationOffset = resolvePreviewOrientationOffset(
+                        lensFacing = activeCameraInfo?.lensFacing
+                            ?: CameraCharacteristics.LENS_FACING_BACK,
+                        sensorOrientation = activeCameraInfo?.sensorOrientation ?: 0,
+                        rearSensorOrientation = rearReferenceSensorOrientation,
+                    )
                     val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
                         .collectAsState(initial = 0)
                     val eyeFocusActive = eyeFocusEnabled &&
