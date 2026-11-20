@@ -2203,11 +2203,8 @@ fun CameraScreen(
                 glassTransparency = cameraMenuTransparency,
                 glassBlurStrength = cameraMenuBlurRadius,
                 onGlassBoundsChanged = { videoSettingsGlassBounds = it },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    // Keep the floating selector below the video top-bar controls.
-                    .padding(top = 112.dp)
+                anchorTop = videoTopBarAnchorTop + topSafePadding + 28.dp,
+                modifier = Modifier.align(Alignment.TopStart)
             )
         } else {
             SideEffect { videoSettingsGlassBounds = null }
