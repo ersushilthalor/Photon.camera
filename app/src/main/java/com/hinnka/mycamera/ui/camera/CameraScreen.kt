@@ -2163,7 +2163,11 @@ fun CameraScreen(
                     parameterRuler = {},
                     parameterBar = {},
                     captureControls = {
-                        controls(Modifier.fillMaxWidth())
+                        // The video-edit glass panel occupies the lower camera area.
+                        // Remove the complete shutter/gallery/mode-switcher cluster while it is open.
+                        if (activePanel != ActivePanel.EDIT || !isVideoMode) {
+                            controls(Modifier.fillMaxWidth())
+                        }
                     }
                 )
             }
