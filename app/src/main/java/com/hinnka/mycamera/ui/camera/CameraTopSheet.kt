@@ -109,6 +109,7 @@ fun CameraTopSheet(
     videoActionModeAvailable: Boolean,
     onVideoStabilizationModeChange: (VideoStabilizationMode) -> Unit,
     onVideoDualCaptureClick: () -> Unit,
+    onVideoEditClick: () -> Unit,
     videoCodec: VideoCodec,
     onVideoCodecChange: (VideoCodec) -> Unit,
     videoAudioInputId: String,
@@ -738,21 +739,9 @@ fun CameraTopSheet(
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
-                    VideoContentManagementTile(
-                        onClick = { showContentManagementOptions = !showContentManagementOptions },
+                    VideoEditTile(
+                        onClick = onVideoEditClick,
                         modifier = Modifier.fillMaxWidth().height(34.dp)
-                    )
-                    ContentManagementOptionsPanel(
-                        visible = showContentManagementOptions,
-                        onFilterManageClick = {
-                            handleContentManagementAction(onFilterManageClick)
-                        },
-                        onFrameManageClick = {
-                            handleContentManagementAction(onFrameManageClick)
-                        },
-                        onPresetManageClick = {
-                            handleContentManagementAction(onPresetManageClick)
-                        }
                     )
                 }
 
@@ -1764,7 +1753,7 @@ private fun VideoMenuActionTile(
 }
 
 @Composable
-private fun VideoContentManagementTile(
+private fun VideoEditTile(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1780,14 +1769,14 @@ private fun VideoContentManagementTile(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
-            imageVector = AppIcons.Image,
+            imageVector = Icons.Default.Edit,
             contentDescription = null,
             tint = AccentColor,
             modifier = Modifier.size(22.dp)
         )
         Spacer(modifier = Modifier.width(14.dp))
         Text(
-            text = stringResource(R.string.settings_section_management),
+            text = stringResource(R.string.edit),
             color = Color.White,
             fontSize = 15.sp,
             fontWeight = FontWeight.Medium,
