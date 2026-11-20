@@ -488,6 +488,7 @@ class Camera2Controller(private val context: Context) {
         val continuousBurst: Boolean = false,
         val captureTime: Long = System.currentTimeMillis(),
         val exposureCompensationStep: Float,
+        val hdrBracketEvOffsets: List<Float>? = null,
     ) {
         var reservedFrames = expectedFrames
         var submitted = false
@@ -613,7 +614,24 @@ class Camera2Controller(private val context: Context) {
         reader: ImageReader,
         continuousBurst: Boolean = false,
     ): PhotoCaptureContext? {
-        val frameCount = if (continuousBurst) BURST_CAPTURE_BATCH_SIZE else captureImageRequestCount(state, reader)
+        // Keep the scene analysis stable for this shutter press. The live histogram and
+        // last preview CaptureResult may change while AF/AE precapture is running.
+        val captureState = state.copy(histogram = state.histogram?.copyOf())
+        val isRawCapture = isRawCaptureReader(reader)
+        val hdrBracketEvOffsets = if (
+            !continuousBurst &&
+            shouldUseJpgMaxHdrCapture(captureState, isRawCapture) &&
+            !shouldUseMultiFrameTorch(captureState)
+        ) {
+            buildHdrBracketEvOffsets(captureState).takeIf { it.size > 1 }
+        } else {
+            null
+        }
+        val frameCount = if (continuousBurst) {
+            BURST_CAPTURE_BATCH_SIZE
+        } else {
+            captureImageRequestCount(captureState, reader, hdrBracketEvOffsets)
+        }
         val occupied = openImagesCount.get() + reservedImageCount()
         if (occupied + frameCount > CAPTURE_READER_MAX_IMAGES) {
             PLog.w(TAG, "Capture rejected: occupied=$occupied requested=$frameCount capacity=$CAPTURE_READER_MAX_IMAGES")
@@ -621,7 +639,7 @@ class Camera2Controller(private val context: Context) {
         }
         val shot = PhotoCaptureContext(
             id = ++nextPhotoCaptureId,
-            state = state,
+            state = captureState,
             reader = reader,
             expectedFrames = frameCount,
             characteristics = activeOutputPhysicalCameraId
@@ -629,7 +647,8 @@ class Camera2Controller(private val context: Context) {
                 ?: getActiveOpenCameraCharacteristics(),
             physicalCameraId = activeOutputPhysicalCameraId,
             continuousBurst = continuousBurst,
-            exposureCompensationStep = state.getExposureCompensationStep(),
+            exposureCompensationStep = captureState.getExposureCompensationStep(),
+            hdrBracketEvOffsets = hdrBracketEvOffsets,
         )
         photoCaptures[shot.id] = shot
         PLog.d(TAG, "Capture reserved: id=${shot.id} frames=$frameCount occupied=$occupied")
@@ -1165,11 +1184,16 @@ class Camera2Controller(private val context: Context) {
 
     private fun resolveImageReaderMaxImages(): Int = CAPTURE_READER_MAX_IMAGES
 
-    private fun captureImageRequestCount(state: CameraState, reader: ImageReader): Int = when {
+    private fun captureImageRequestCount(
+        state: CameraState,
+        reader: ImageReader,
+        hdrBracketEvOffsets: List<Float>? = null,
+    ): Int = when {
         state.refocusCaptureEnabled &&
             state.captureMode == CaptureMode.PHOTO &&
             state.minimumFocusDistance > 0f &&
             !isRawCaptureReader(reader) -> state.refocusFrameCount.coerceIn(3, 8)
+        hdrBracketEvOffsets != null -> hdrBracketEvOffsets.size
         shouldUseJpgMaxHdrCapture(state, isRawCaptureReader(reader)) && !shouldUseMultiFrameTorch(state) ->
             buildHdrBracketEvOffsets(state).size
         state.requiresMultiFrameCaptureSequence -> state.activeMultiFrameCount
@@ -9879,8 +9903,8 @@ class Camera2Controller(private val context: Context) {
         playShutterSound: Boolean,
         baseExposureResult: CaptureResult?,
         currentState: CameraState,
+        evOffsets: List<Float>,
     ) {
-        val evOffsets = buildHdrBracketEvOffsets(currentState)
         val hdrFrameCount = evOffsets.size
         _state.value = _state.value.copy(
             isCapturing = true,
@@ -10490,7 +10514,8 @@ class Camera2Controller(private val context: Context) {
     ) {
         try {
             val isRawCapture = isRawCaptureReader(reader)
-            val currentState = stillFlashCaptureState ?: _state.value
+            val captureShot = activePhotoCapture
+            val currentState = stillFlashCaptureState ?: captureShot?.state ?: _state.value
             val useMultiFrameTorch = isMultiFrameTorchCaptureActive
             if (
                 currentState.refocusCaptureEnabled &&
@@ -10509,7 +10534,8 @@ class Camera2Controller(private val context: Context) {
                 performRefocusCapture(device, reader, session, baseExposureResult)
                 return
             }
-            if (shouldUseJpgMaxHdrCapture(currentState, isRawCapture)) {
+            val hdrBracketEvOffsets = captureShot?.hdrBracketEvOffsets
+            if (hdrBracketEvOffsets != null) {
                 val session = captureSession ?: run {
                     PLog.e(TAG, "Failed to capture JPGmax bracket: capture session unavailable")
                     _state.value = _state.value.copy(isCapturing = false)
@@ -10517,7 +10543,7 @@ class Camera2Controller(private val context: Context) {
                     resetPreviewAfterCapture()
                     return
                 }
-                PLog.d(TAG, "JPGmax YUV bracket capture")
+                PLog.d(TAG, "JPGmax YUV bracket capture: frames=${hdrBracketEvOffsets.size}")
                 performHdrBracketCapture(
                     device = device,
                     reader = reader,
@@ -10525,6 +10551,7 @@ class Camera2Controller(private val context: Context) {
                     playShutterSound = false,
                     baseExposureResult = baseExposureResult,
                     currentState = currentState,
+                    evOffsets = hdrBracketEvOffsets,
                 )
                 return
             }
