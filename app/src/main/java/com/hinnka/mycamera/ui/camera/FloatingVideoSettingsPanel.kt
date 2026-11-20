@@ -1,0 +1,259 @@
+package com.hinnka.mycamera.ui.camera
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.hinnka.mycamera.ui.components.OppoCameraGlassSurface
+import com.hinnka.mycamera.video.VideoAspectRatio
+import com.hinnka.mycamera.video.VideoCapabilities
+import com.hinnka.mycamera.video.VideoConfig
+import com.hinnka.mycamera.video.VideoFpsPreset
+import com.hinnka.mycamera.video.VideoResolutionPreset
+
+private val VideoSelectorGold = Color(0xFFFFC107)
+private val VideoSelectorLabel = Color.White.copy(alpha = 0.72f)
+private val VideoSelectorText = Color.White
+private val VideoSelectorDescription = Color.White.copy(alpha = 0.85f)
+
+/**
+ * OPPO Cam-style floating video selector. Choices are limited to modes supported
+ * by the active camera. The frosted material reuses the current GL preview; it
+ * does not open a second camera stream or create a separate preview renderer.
+ */
+@Composable
+fun FloatingVideoSettingsPanel(
+    isOpen: Boolean,
+    videoConfig: VideoConfig,
+    videoCapabilities: VideoCapabilities,
+    onResolutionSelected: (VideoResolutionPreset) -> Unit,
+    onFpsSelected: (VideoFpsPreset) -> Unit,
+    onDismiss: () -> Unit,
+    glassTransparency: Float,
+    glassBlurStrength: Float,
+    onGlassBoundsChanged: (Rect?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!isOpen) return
+
+    val resolutionOptions = videoCapabilities.availableResolutions
+        .filter { it != VideoResolutionPreset.HD_720P }
+    val fpsOptions = videoCapabilities.availableFpsByResolution[videoConfig.resolution]
+        ?.takeIf { it.isNotEmpty() }
+        ?: videoCapabilities.availableFps
+    val visibleFpsOptions = fpsOptions.ifEmpty { listOf(videoConfig.fps) }
+
+    val description = when (videoConfig.resolution) {
+        VideoResolutionPreset.UHD_2160P -> "Ultra HD resolution"
+        VideoResolutionPreset.THREE_K -> "3K resolution"
+        VideoResolutionPreset.QHD_1440P -> "2K QHD resolution"
+        VideoResolutionPreset.FHD_1080P -> "Full HD resolution"
+        VideoResolutionPreset.HD_720P -> "HD resolution"
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss,
+            ),
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                ),
+        ) {
+            AnimatedVisibility(
+                visible = isOpen,
+                enter = fadeIn(tween(170)) +
+                    scaleIn(
+                        initialScale = 0.78f,
+                        animationSpec = spring(dampingRatio = 0.52f, stiffness = 430f),
+                    ) +
+                    expandVertically(
+                        expandFrom = Alignment.Top,
+                        animationSpec = spring(dampingRatio = 0.68f, stiffness = 380f),
+                    ) +
+                    slideInVertically(
+                        initialOffsetY = { -it / 5 },
+                        animationSpec = spring(dampingRatio = 0.68f, stiffness = 380f),
+                    ),
+                exit = fadeOut(tween(120)) +
+                    scaleOut(targetScale = 0.94f, animationSpec = tween(120)) +
+                    shrinkVertically(
+                        shrinkTowards = Alignment.Top,
+                        animationSpec = tween(130),
+                    ),
+            ) {
+                OppoCameraGlassSurface(
+                    modifier = Modifier
+                        .widthIn(min = 300.dp, max = 340.dp)
+                        .padding(horizontal = 12.dp)
+                        .testTag("floating_video_settings_panel"),
+                    transparency = glassTransparency,
+                    blurStrength = glassBlurStrength,
+                    onBoundsChanged = onGlassBoundsChanged,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp, vertical = 14.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Size",
+                                color = VideoSelectorLabel,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.width(46.dp),
+                            )
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                            ) {
+                                if (videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE ||
+                                    resolutionOptions.isEmpty()
+                                ) {
+                                    Text(
+                                        text = if (videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) "MAX" else "—",
+                                        color = VideoSelectorText,
+                                        fontSize = 14.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                } else {
+                                    resolutionOptions.forEach { resolution ->
+                                        val selected = resolution == videoConfig.resolution
+                                        val label = when (resolution) {
+                                            VideoResolutionPreset.UHD_2160P -> "UHD"
+                                            VideoResolutionPreset.THREE_K -> "3K"
+                                            VideoResolutionPreset.QHD_1440P -> "2K"
+                                            VideoResolutionPreset.FHD_1080P -> "FHD"
+                                            VideoResolutionPreset.HD_720P -> "HD"
+                                        }
+                                        Box(
+                                            modifier = Modifier.weight(1f),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                color = if (selected) VideoSelectorGold else VideoSelectorText,
+                                                fontSize = 14.5.sp,
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                                                letterSpacing = 0.2.sp,
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .clickable { onResolutionSelected(resolution) }
+                                                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                                                    .testTag("video_resolution_$label"),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "FPS",
+                                color = VideoSelectorLabel,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.width(46.dp),
+                            )
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                            ) {
+                                visibleFpsOptions.forEach { fps ->
+                                    val selected = fps == videoConfig.fps
+                                    Box(
+                                        modifier = Modifier.weight(1f),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            text = fps.fps.toString(),
+                                            color = if (selected) VideoSelectorGold else VideoSelectorText,
+                                            fontSize = 14.5.sp,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                                            letterSpacing = 0.2.sp,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .clickable { onFpsSelected(fps) }
+                                                .padding(horizontal = 6.dp, vertical = 5.dp)
+                                                .testTag("video_fps_" + fps.fps),
+                                        )
+                                    }
+                                }
+                                repeat((4 - visibleFpsOptions.size).coerceAtLeast(0)) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            text = description,
+                            color = VideoSelectorDescription,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Normal,
+                            letterSpacing = 0.2.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("video_resolution_description"),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

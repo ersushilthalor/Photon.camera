@@ -60,6 +60,17 @@ object VideoCapabilitiesResolver {
         val supportsThreeKEncoder = threeKOutputSize?.let { targetSize ->
             supportsEncoderOutputSize(requestedConfig.codec.mimeType, targetSize)
         } ?: false
+        val qhdOutputSize = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
+            null
+        } else {
+            VideoResolutionPreset.QHD_1440P.resolveOutputSize(targetPortraitAspect)
+        }
+        val nativeQhdSources = qhdOutputSize?.let { targetSize ->
+            previewOutputSizes.filter { canProduceOutputWithoutUpscaling(it, targetSize) }
+        }.orEmpty()
+        val supportsQhdEncoder = qhdOutputSize?.let { targetSize ->
+            supportsEncoderOutputSize(requestedConfig.codec.mimeType, targetSize)
+        } ?: false
 
         // Some front/ultra-wide sensors expose an ~8 MP 4:3 SurfaceTexture stream
         // but do not advertise a 3840x2160 MediaRecorder stream. The app records
@@ -89,16 +100,19 @@ object VideoCapabilitiesResolver {
         val recordingOutputSizes = when {
             requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE -> openGateEncoderOutputSizes
             !hasNativeUhdRecorderSize && hasEightMpFourThreeSource -> previewOutputSizes
-            nativeThreeKSources.isNotEmpty() ->
-                (advertisedRecordingSizes + nativeThreeKSources).distinct()
+            nativeThreeKSources.isNotEmpty() || nativeQhdSources.isNotEmpty() ->
+                (advertisedRecordingSizes + nativeThreeKSources + nativeQhdSources).distinct()
             else -> advertisedRecordingSizes
         }
 
-        val availableResolutions = VideoResolutionPreset.entries.filter { preset ->
-            (preset != VideoResolutionPreset.THREE_K || supportsThreeKEncoder) &&
-                findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null &&
-                findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null
-        }
+        val availableResolutions = VideoResolutionPreset.entries
+            .filter { it != VideoResolutionPreset.HD_720P }
+            .filter { preset ->
+                (preset != VideoResolutionPreset.THREE_K || supportsThreeKEncoder) &&
+                    (preset != VideoResolutionPreset.QHD_1440P || supportsQhdEncoder) &&
+                    findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null &&
+                    findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null
+            }
 
         val recordingSizesByResolution = availableResolutions.mapNotNull { preset ->
             findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
@@ -114,6 +128,7 @@ object VideoCapabilitiesResolver {
         }.toMap()
 
         val resolvedResolution = requestedConfig.resolution.takeIf { availableResolutions.contains(it) }
+            ?: VideoResolutionPreset.FHD_1080P.takeIf { it in availableResolutions }
             ?: availableResolutions.firstOrNull()
             ?: VideoResolutionPreset.FHD_1080P
 
@@ -149,11 +164,22 @@ object VideoCapabilitiesResolver {
         // The 1080p-sized preview is only a fallback when no matching input stream is available.
         val previewSize = cameraInputSize
 
-        val availableFps = resolveAvailableFps(
-            characteristics = characteristics,
-            cameraInputSize = cameraInputSize,
-            previewSize = previewSize
-        )
+        val availableFpsByResolution = cameraInputSizesByResolution.mapValues { (_, inputSize) ->
+            resolveAvailableFps(
+                characteristics = characteristics,
+                cameraInputSize = inputSize,
+                previewSize = inputSize
+            )
+        }
+        val availableFps = availableFpsByResolution[resolvedResolution]
+            .orEmpty()
+            .ifEmpty {
+                resolveAvailableFps(
+                    characteristics = characteristics,
+                    cameraInputSize = cameraInputSize,
+                    previewSize = previewSize
+                )
+            }
         val resolvedFps = requestedConfig.fps.takeIf { availableFps.contains(it) }
             ?: availableFps.firstOrNull()
             ?: VideoFpsPreset.FPS_30
@@ -229,7 +255,8 @@ object VideoCapabilitiesResolver {
                 openGatePortraitAspectRatio = openGateAspect,
                 availableStabilizationModes = availableStabilizationModes,
                 supportsTorch = isFlashSupported,
-                linearTonemapSupported = linearTonemapSupported
+                linearTonemapSupported = linearTonemapSupported,
+                availableFpsByResolution = availableFpsByResolution
             ),
             previewSize = previewSize,
             recordingSize = recordingSize
@@ -275,7 +302,7 @@ object VideoCapabilitiesResolver {
         val nativeSize = outputSizes
             .filter {
                 maxOf(it.width, it.height) >= preset.longEdge &&
-                    (preset != VideoResolutionPreset.THREE_K ||
+                    (preset != VideoResolutionPreset.THREE_K && preset != VideoResolutionPreset.QHD_1440P ||
                         canProduceOutputWithoutUpscaling(it, preset.resolveOutputSize(targetAspect)))
             }
             .sortedWith(
@@ -289,7 +316,7 @@ object VideoCapabilitiesResolver {
         // 3K may use a different native sensor aspect ratio (for example 4:3),
         // but only when center-cropping that source still leaves enough pixels for
         // the exact 3K encoder canvas. No lower-resolution source is upscaled.
-        if (preset == VideoResolutionPreset.THREE_K) {
+        if (preset == VideoResolutionPreset.THREE_K || preset == VideoResolutionPreset.QHD_1440P) {
             val targetSize = preset.resolveOutputSize(targetAspect)
             return outputSizes
                 .filter { canProduceOutputWithoutUpscaling(it, targetSize) }

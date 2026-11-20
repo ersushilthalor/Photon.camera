@@ -310,6 +310,7 @@ fun CameraScreen(
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var previewGlBounds by remember { mutableStateOf<Rect?>(null) }
     var settingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
+    var videoSettingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var cameraGLSurfaceView by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
     var zoomJoystickOpen by remember { mutableStateOf(false) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
@@ -358,6 +359,22 @@ fun CameraScreen(
 
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
+    var videoSettingsPanelOpen by remember { mutableStateOf(false) }
+
+    LaunchedEffect(
+        state.captureMode,
+        state.videoRecordingState.isRecording,
+        state.videoRecordingState.isProcessing,
+        activePanel,
+    ) {
+        if (state.captureMode != CaptureMode.VIDEO ||
+            state.videoRecordingState.isRecording ||
+            state.videoRecordingState.isProcessing ||
+            activePanel != ActivePanel.NONE
+        ) {
+            videoSettingsPanelOpen = false
+        }
+    }
 
     // Blur the visible menu area in the existing camera GL output. Coordinates from
     // Compose and the GLSurfaceView share the same root-pixel space.
@@ -366,13 +383,19 @@ fun CameraScreen(
         cameraGLSurfaceView,
         activePanel,
         settingsGlassBounds,
+        videoSettingsGlassBounds,
+        videoSettingsPanelOpen,
         previewGlBounds,
         cameraMenuBlurRadius,
     ) {
         val glView = cameraGLSurfaceView ?: return@LaunchedEffect
         val preview = previewGlBounds
-        val panel = settingsGlassBounds
-        if (activePanel != ActivePanel.SETTINGS || preview == null || panel == null ||
+        val panel = when {
+            activePanel == ActivePanel.SETTINGS -> settingsGlassBounds
+            videoSettingsPanelOpen -> videoSettingsGlassBounds
+            else -> null
+        }
+        if ((activePanel != ActivePanel.SETTINGS && !videoSettingsPanelOpen) || preview == null || panel == null ||
             preview.width <= 0f || preview.height <= 0f || cameraMenuBlurRadius <= 0f
         ) {
             glView.setQuickMenuGlassEffect(enabled = false)
@@ -1067,11 +1090,11 @@ fun CameraScreen(
                 onVideoTorchToggle = { viewModel.setVideoTorchEnabled(!state.videoConfig.torchEnabled) },
                 onVideoResolutionClick = {
                     if (state.videoConfig.aspectRatio != VideoAspectRatio.OPEN_GATE) {
-                        cycleVideoResolution(state)?.let(viewModel::setVideoResolution)
+                        videoSettingsPanelOpen = !videoSettingsPanelOpen
                     }
                 },
                 onVideoFpsClick = {
-                    cycleVideoFps(state)?.let(viewModel::setVideoFps)
+                    videoSettingsPanelOpen = !videoSettingsPanelOpen
                 },
                 videoHdrEnabled = videoHdrEnabled,
                 onVideoHdrToggle = {
@@ -2153,6 +2176,30 @@ fun CameraScreen(
                     topBar()
                 }
             }
+        }
+
+        if (isVideoMode && videoSettingsPanelOpen &&
+            !state.videoRecordingState.isRecording &&
+            !state.videoRecordingState.isProcessing &&
+            activePanel == ActivePanel.NONE
+        ) {
+            FloatingVideoSettingsPanel(
+                isOpen = true,
+                videoConfig = state.videoConfig,
+                videoCapabilities = state.videoCapabilities,
+                onResolutionSelected = viewModel::setVideoResolution,
+                onFpsSelected = viewModel::setVideoFps,
+                onDismiss = { videoSettingsPanelOpen = false },
+                glassTransparency = cameraMenuTransparency,
+                glassBlurStrength = cameraMenuBlurRadius,
+                onGlassBoundsChanged = { videoSettingsGlassBounds = it },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 56.dp)
+            )
+        } else {
+            SideEffect { videoSettingsGlassBounds = null }
         }
 
         val panelDismissBounds = if (isXpan) {

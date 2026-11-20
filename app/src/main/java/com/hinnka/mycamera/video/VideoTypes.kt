@@ -52,6 +52,7 @@ enum class VideoResolutionPreset(
 ) {
     UHD_2160P("2160p", 2160, 3840),
     THREE_K("3K", 1728, 3072),
+    QHD_1440P("2K", 1440, 2560),
     FHD_1080P("1080p", 1080, 1920),
     HD_720P("720p", 720, 1280);
 
@@ -188,7 +189,8 @@ data class VideoCapabilities(
     val openGatePortraitAspectRatio: Float = 3f / 4f,
     val availableStabilizationModes: List<VideoStabilizationMode> = emptyList(),
     val supportsTorch: Boolean = false,
-    val linearTonemapSupported: Boolean = false
+    val linearTonemapSupported: Boolean = false,
+    val availableFpsByResolution: Map<VideoResolutionPreset, List<VideoFpsPreset>> = emptyMap()
 )
 
 data class VideoRecordingState(

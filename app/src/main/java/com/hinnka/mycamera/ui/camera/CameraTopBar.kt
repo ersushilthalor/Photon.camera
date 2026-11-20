@@ -348,6 +348,7 @@ private fun VideoParameterCluster(
             } else when (videoConfig.resolution) {
                 VideoResolutionPreset.UHD_2160P -> "4K"
                 VideoResolutionPreset.THREE_K -> "3K"
+                VideoResolutionPreset.QHD_1440P -> "2K"
                 VideoResolutionPreset.FHD_1080P -> "1080p"
                 VideoResolutionPreset.HD_720P -> "720p"
             }
