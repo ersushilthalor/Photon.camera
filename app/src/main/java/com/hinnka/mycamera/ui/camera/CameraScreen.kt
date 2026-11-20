@@ -122,7 +122,6 @@ private enum class CameraShootingMode {
 }
 
 private const val PreviewTransitionRevealDurationMillis = 800
-private const val PhotoVideoViewfinderExpansionDurationMillis = 0
 private const val RawCaptureTapDebounceMillis = 1000L
 private const val DefaultShutterSpeedNs = 1_000_000_000f / 60f
 private const val DefaultIso = 100f
@@ -230,8 +229,6 @@ fun CameraScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
-    var previousPreviewCaptureMode by remember { mutableStateOf(state.captureMode) }
-    val isPhotoVideoModeTransition = previousPreviewCaptureMode != state.captureMode
     var dualCaptureEnabled by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.captureMode) {
@@ -239,10 +236,6 @@ fun CameraScreen(
             dualCaptureEnabled = false
             viewModel.setDualCaptureEnabled(false)
         }
-        if (isPhotoVideoModeTransition) {
-            delay(PhotoVideoViewfinderExpansionDurationMillis.toLong())
-        }
-        previousPreviewCaptureMode = state.captureMode
     }
 
     val uiStyle by viewModel.uiStyle.collectAsState()
@@ -1050,35 +1043,10 @@ fun CameraScreen(
         } else {
             (topBarBottom - viewfinderTop).coerceAtLeast(0.dp)
         }
-        val viewfinderBoundsAnimationSpec: FiniteAnimationSpec<Dp> = if (isPhotoVideoModeTransition) {
-            tween<Dp>(
-                durationMillis = PhotoVideoViewfinderExpansionDurationMillis,
-                easing = FastOutSlowInEasing
-            )
-        } else {
-            snap<Dp>()
-        }
-        val animatedViewfinderHeight by animateDpAsState(
-            targetValue = cardHeight,
-            animationSpec = viewfinderBoundsAnimationSpec,
-            label = "photoVideoViewfinderHeight"
-        )
-        val animatedViewfinderCenterY by animateDpAsState(
-            targetValue = viewfinderTop + cardHeight / 2,
-            animationSpec = viewfinderBoundsAnimationSpec,
-            label = "photoVideoViewfinderCenter"
-        )
-        val animatedViewfinderTop = animatedViewfinderCenterY - animatedViewfinderHeight / 2
-
-        // Drive the renderer's center-crop matrix from the animated viewfinder bounds.
-        // This changes only sensor-space crop; the texture and preview surface are never stretched.
-        val modeSwitchPreviewAspectRatio = if (
-            isPhotoVideoModeTransition && animatedViewfinderHeight.value > 0f
-        ) {
-            (cardWidth.value / animatedViewfinderHeight.value).takeIf { it.isFinite() && it > 0f } ?: 0f
-        } else {
-            0f
-        }
+        // Photo/video mode changes use the final viewfinder geometry immediately.
+        // No intermediate bounds or sensor-crop interpolation is applied.
+        val animatedViewfinderHeight = cardHeight
+        val animatedViewfinderTop = viewfinderTop
 
         val topBar = @Composable {
             CameraTopBar(
@@ -1440,7 +1408,6 @@ fun CameraScreen(
                             previewSize = previewSize,
                             captureSize = state.currentCaptureSize,
                             captureMode = state.captureMode,
-                            modeSwitchPreviewAspectRatio = modeSwitchPreviewAspectRatio,
                             sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation
                                 ?: 0,
                             lensFacing = if (activeCameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
@@ -3107,24 +3074,16 @@ private fun CaptureModeSwitcher(
         // internals are preserved but are not exposed as a separate UI mode.
         val knobWidth = maxWidth / 2
         val selectedIndex = if (shootingMode == CameraShootingMode.VIDEO) 0 else 1
-        val knobOffset by animateDpAsState(
-            targetValue = knobWidth * selectedIndex,
-            animationSpec = tween(durationMillis = 220),
-            label = "modeSwitcher"
-        )
+        // Snap the selector directly to the chosen mode; do not slide the knob.
+        val knobOffset = knobWidth * selectedIndex
         if (oppoStyle) {
-            val selectedBackground by animateColorAsState(
-                targetValue = Color(0xFF303030),
-                animationSpec = tween(durationMillis = 220),
-                label = "modeSwitcherColor"
-            )
             Box(
                 modifier = Modifier
                     .offset(x = knobOffset)
                     .width(knobWidth)
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(15.dp))
-                    .background(selectedBackground)
+                    .background(Color(0xFF303030))
             )
         } else {
             val liquidGlassStyle = remember {
