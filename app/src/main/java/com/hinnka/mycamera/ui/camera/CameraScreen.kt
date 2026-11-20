@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
@@ -319,6 +320,7 @@ fun CameraScreen(
     var settingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var videoSettingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var videoEditGlassBounds by remember { mutableStateOf<Rect?>(null) }
+    var videoEditPillBounds by remember { mutableStateOf<Rect?>(null) }
     var cameraGLSurfaceView by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
     var zoomJoystickOpen by remember { mutableStateOf(false) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
@@ -368,6 +370,7 @@ fun CameraScreen(
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
     var videoSettingsPanelOpen by remember { mutableStateOf(false) }
+    var videoEditOpenedFromModePill by remember { mutableStateOf(false) }
 
     LaunchedEffect(
         state.captureMode,
@@ -2023,6 +2026,17 @@ fun CameraScreen(
                 onCaptureModeSelected = ::setShootingModeImmediately,
                 modeSwitchEnabled = !previewTransitionActive,
                 modeSwitcherBackdrop = modeSwitcherBackdrop,
+                onVideoEditSwipeUp = {
+                    if (state.captureMode == CaptureMode.VIDEO &&
+                        !state.videoRecordingState.isRecording &&
+                        !state.videoRecordingState.isProcessing &&
+                        activePanel == ActivePanel.NONE
+                    ) {
+                        videoEditOpenedFromModePill = true
+                        activePanel = ActivePanel.EDIT
+                    }
+                },
+                onVideoPillBoundsChanged = { bounds -> videoEditPillBounds = bounds },
                 onCaptureTap = {
                     val shouldDebounceRawCapture =
                         state.useRaw && state.captureMode == CaptureMode.PHOTO
@@ -2290,6 +2304,7 @@ fun CameraScreen(
                 }
             },
             onVideoEditClick = {
+                videoEditOpenedFromModePill = false
                 activePanel = ActivePanel.EDIT
             },
             videoCodec = videoCodec,
@@ -2464,6 +2479,7 @@ fun CameraScreen(
                     onSavePresetClick = viewModel::saveCurrentSettingsToActivePreset,
                     onPresetManagementClick = onPresetManagementClick,
                     onEditClick = {
+                        videoEditOpenedFromModePill = false
                         activePanel = ActivePanel.EDIT
                     },
                     showEditButtonWhenNoLut = isVideoMode,
@@ -2491,6 +2507,22 @@ fun CameraScreen(
 
         val videoEditPanelMaxHeight = maxHeight * 0.72f
         val isVideoEditVisible = activePanel == ActivePanel.EDIT && isVideoMode
+        val videoEditTransformOrigin = remember(videoEditPillBounds, cameraScreenBounds) {
+            val pill = videoEditPillBounds
+            val screen = cameraScreenBounds
+            if (pill != null && screen != null && screen.width > 0f && screen.height > 0f) {
+                val panelHeight = screen.height * 0.72f
+                val panelTop = screen.bottom - panelHeight
+                TransformOrigin(
+                    pivotFractionX = ((pill.left + pill.right) * 0.5f - screen.left) / screen.width,
+                    pivotFractionY = ((pill.top + pill.bottom) * 0.5f - panelTop) / panelHeight
+                ).let { origin ->
+                    TransformOrigin(origin.pivotFractionX.coerceIn(0f, 1f), origin.pivotFractionY.coerceIn(0f, 1f))
+                }
+            } else {
+                TransformOrigin(0.5f, 0.86f)
+            }
+        }
         LaunchedEffect(isVideoEditVisible) {
             if (!isVideoEditVisible) {
                 videoEditGlassBounds = null
@@ -2503,8 +2535,24 @@ fun CameraScreen(
         }
         AnimatedVisibility(
             visible = isVideoEditVisible,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            enter = if (videoEditOpenedFromModePill) {
+                scaleIn(
+                    initialScale = 0.16f,
+                    transformOrigin = videoEditTransformOrigin,
+                    animationSpec = spring(dampingRatio = 0.72f, stiffness = 420f)
+                ) + fadeIn(tween(durationMillis = 110))
+            } else {
+                slideInVertically(initialOffsetY = { it }) + fadeIn()
+            },
+            exit = if (videoEditOpenedFromModePill) {
+                scaleOut(
+                    targetScale = 0.16f,
+                    transformOrigin = videoEditTransformOrigin,
+                    animationSpec = spring(dampingRatio = 0.78f, stiffness = 420f)
+                ) + fadeOut(tween(durationMillis = 110))
+            } else {
+                slideOutVertically(targetOffsetY = { it }) + fadeOut()
+            },
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
             OppoCameraGlassSurface(
@@ -2681,6 +2729,8 @@ private fun Controls(
     onCaptureModeSelected: (CameraShootingMode) -> Unit,
     modeSwitchEnabled: Boolean,
     modeSwitcherBackdrop: PrismalBackdrop,
+    onVideoEditSwipeUp: () -> Unit,
+    onVideoPillBoundsChanged: (Rect) -> Unit,
     onCaptureTap: () -> Unit,
     onGalleryClick: () -> Unit,
     sideControlInset: Dp?,
@@ -2824,7 +2874,9 @@ private fun Controls(
                     enabled = modeSwitchEnabled &&
                         !state.videoRecordingState.isRecording &&
                         !state.videoRecordingState.isProcessing,
-                    onModeSelected = onCaptureModeSelected
+                    onModeSelected = onCaptureModeSelected,
+                    onVideoEditSwipeUp = onVideoEditSwipeUp,
+                    onVideoPillBoundsChanged = onVideoPillBoundsChanged
                 )
 
                 PhysicalButton(
@@ -3170,7 +3222,9 @@ private fun CaptureModeSwitcher(
     modeSwitcherBackdrop: PrismalBackdrop,
     shootingMode: CameraShootingMode,
     enabled: Boolean,
-    onModeSelected: (CameraShootingMode) -> Unit
+    onModeSelected: (CameraShootingMode) -> Unit,
+    onVideoEditSwipeUp: () -> Unit,
+    onVideoPillBoundsChanged: (Rect) -> Unit
 ) {
     val selectedIndex = if (shootingMode == CameraShootingMode.VIDEO) 0 else 1
 
@@ -3179,6 +3233,15 @@ private fun CaptureModeSwitcher(
             modifier = Modifier
                 .width(171.dp)
                 .height(CameraControlsLayoutDefaults.ModeSwitcherHeight)
+                .onGloballyPositioned { coordinates ->
+                    val bounds = coordinates.boundsInRoot()
+                    onVideoPillBoundsChanged(Rect(bounds.left, bounds.top, bounds.left + bounds.width / 2f, bounds.bottom))
+                }
+                .videoPillSwipeUpGesture(
+                    videoSelected = shootingMode == CameraShootingMode.VIDEO,
+                    enabled = enabled,
+                    onSwipeUp = onVideoEditSwipeUp
+                )
                 .clip(RoundedCornerShape(18.dp))
                 .background(Color(0xFF202020))
                 .padding(3.dp)
@@ -3229,6 +3292,15 @@ private fun CaptureModeSwitcher(
             modifier = Modifier
                 .width(171.dp)
                 .height(CameraControlsLayoutDefaults.ModeSwitcherHeight)
+                .onGloballyPositioned { coordinates ->
+                    val bounds = coordinates.boundsInRoot()
+                    onVideoPillBoundsChanged(Rect(bounds.left, bounds.top, bounds.left + bounds.width / 2f, bounds.bottom))
+                }
+                .videoPillSwipeUpGesture(
+                    videoSelected = shootingMode == CameraShootingMode.VIDEO,
+                    enabled = enabled,
+                    onSwipeUp = onVideoEditSwipeUp
+                )
                 .pointerInput(enabled) {
                     if (!enabled) {
                         awaitPointerEventScope {
@@ -3269,6 +3341,50 @@ private fun CaptureModeSwitcher(
                 height = CameraControlsLayoutDefaults.ModeSwitcherHeight,
                 hapticFeedback = enabled
             )
+        }
+    }
+}
+
+/**
+ * Opens the video edit window only for an upward swipe that starts on the selected
+ * Video segment. Vertical motion is consumed only after the upward threshold is crossed,
+ * so ordinary taps and horizontal segment dragging keep their native behavior.
+ */
+private fun Modifier.videoPillSwipeUpGesture(
+    videoSelected: Boolean,
+    enabled: Boolean,
+    onSwipeUp: () -> Unit
+): Modifier = pointerInput(videoSelected, enabled, onSwipeUp) {
+    if (!videoSelected || !enabled) return@pointerInput
+
+    awaitEachGesture {
+        val down = awaitFirstDown(
+            requireUnconsumed = false,
+            pass = PointerEventPass.Initial
+        )
+        // The first half is the Video segment; the second half must remain a normal
+        // Photo selection gesture.
+        if (down.position.x >= size.width / 2f) {
+            return@awaitEachGesture
+        }
+
+        var triggered = false
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            val drag = change.position - down.position
+            val isUpwardSwipe = drag.y < -(viewConfiguration.touchSlop * 3f) &&
+                abs(drag.y) > abs(drag.x) * 1.2f
+
+            if (!triggered && isUpwardSwipe) {
+                triggered = true
+                change.consume()
+                onSwipeUp()
+            } else if (triggered) {
+                change.consume()
+            }
+
+            if (!change.pressed) break
         }
     }
 }
