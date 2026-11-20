@@ -188,6 +188,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setModeSwitchCropZoom(zoom: Float) {
+        queueEvent {
+            renderer.setModeSwitchCropZoom(zoom)
+            requestRender()
+        }
+    }
+
     fun setStabilizationCoordinator(coordinator: RealtimeStabilizationCoordinator?) {
         if (currentStabilizationCoordinator === coordinator) return
         currentStabilizationCoordinator = coordinator

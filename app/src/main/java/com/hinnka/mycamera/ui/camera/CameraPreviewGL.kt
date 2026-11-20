@@ -48,6 +48,7 @@ fun CameraPreviewGL(
     previewSize: Size,
     captureSize: Size,
     captureMode: CaptureMode,
+    modeSwitchCropZoom: Float = 1f,
     sensorOrientation: Int,
     lensFacing: Int,
     previewOrientationOffset: Int = 0,
@@ -233,6 +234,7 @@ fun CameraPreviewGL(
                         glSurfaceView.setDeviceRotation(rotationDegrees.toInt())
                         glSurfaceView.setCalibrationOffset(calibrationOffset)
                         glSurfaceView.setCaptureAspectRatio(aspectRatio)
+                        glSurfaceView.setModeSwitchCropZoom(modeSwitchCropZoom)
                         glSurfaceView.setStabilizationInputSize(
                             stabilizationInputSize.width,
                             stabilizationInputSize.height,

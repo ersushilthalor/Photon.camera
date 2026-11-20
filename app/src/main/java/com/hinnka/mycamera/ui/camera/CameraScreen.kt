@@ -1075,6 +1075,16 @@ fun CameraScreen(
         )
         val animatedViewfinderTop = animatedViewfinderCenterY - animatedViewfinderHeight / 2
 
+        // Match the viewfinder bounds animation with one isotropic crop in the GL sensor image.
+        // A single zoom factor crops equally from all four edges instead of stretching the frame.
+        val modeSwitchCropZoom = if (isPhotoVideoModeTransition && cardHeight.value > 0f) {
+            val heightRatio = animatedViewfinderHeight.value / cardHeight.value
+            maxOf(heightRatio, 1f / heightRatio.coerceAtLeast(0.0001f))
+                .coerceIn(1f, 1.25f)
+        } else {
+            1f
+        }
+
         val topBar = @Composable {
             CameraTopBar(
                 captureMode = state.captureMode,
@@ -1435,6 +1445,7 @@ fun CameraScreen(
                             previewSize = previewSize,
                             captureSize = state.currentCaptureSize,
                             captureMode = state.captureMode,
+                            modeSwitchCropZoom = modeSwitchCropZoom,
                             sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation
                                 ?: 0,
                             lensFacing = if (activeCameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,

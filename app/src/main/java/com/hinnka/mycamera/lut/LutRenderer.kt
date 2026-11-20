@@ -234,6 +234,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val mvpMatrix = FloatArray(16)
     private val stabilizationMvpMatrix = FloatArray(16)
     private val eisFallbackMvpMatrix = FloatArray(16)
+    private val modeSwitchMvpMatrix = FloatArray(16)
+
+    @Volatile
+    private var modeSwitchCropZoom = 1f
 
     // Primary Camera2 preview input.
     private var surfaceTexture: SurfaceTexture? = null
@@ -1441,7 +1445,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             }
         }
 
-        return baseMatrix
+        val cropZoom = modeSwitchCropZoom
+        if (cropZoom <= 1.0001f) return baseMatrix
+
+        // Scale the sensor image uniformly around the viewport center: all four edges
+        // move together, preserving the preview geometry without non-uniform stretching.
+        System.arraycopy(baseMatrix, 0, modeSwitchMvpMatrix, 0, modeSwitchMvpMatrix.size)
+        Matrix.scaleM(modeSwitchMvpMatrix, 0, cropZoom, cropZoom, 1f)
+        return modeSwitchMvpMatrix
     }
 
     private fun useCurrentOesFrame() {
@@ -2800,6 +2811,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             captureAspectRatio = safeAspectRatio
             updateCaptureSize()
         }
+    }
+
+    fun setModeSwitchCropZoom(zoom: Float) {
+        modeSwitchCropZoom = if (zoom.isFinite()) zoom.coerceIn(1f, 1.25f) else 1f
     }
 
     /**
