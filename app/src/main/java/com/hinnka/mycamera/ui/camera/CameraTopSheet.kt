@@ -63,9 +63,6 @@ import com.hinnka.mycamera.video.VideoCodec
 import com.hinnka.mycamera.ui.icons.AppIcons
 import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.theme.OnAccentColor
-import com.styropyr0.prismal.PrismalBackdrop
-import com.styropyr0.prismal.PrismalGlassSurface
-import com.styropyr0.prismal.shapes.PrismalRoundedRectangle
 
 private enum class VideoSettingPanel {
     ASPECT_RATIO,
@@ -81,8 +78,8 @@ private val CameraTopSheetContentTopPadding = 32.dp
 @Composable
 fun CameraTopSheet(
     visible: Boolean,
-    glassBackdrop: PrismalBackdrop,
     glassTransparency: Float,
+    glassBlurStrength: Float,
     onGlassBoundsChanged: (Rect?) -> Unit,
     captureMode: CaptureMode,
     aspectRatio: AspectRatio,
@@ -188,25 +185,11 @@ fun CameraTopSheet(
         exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
         modifier = modifier
     ) {
-        PrismalGlassSurface(
-            backdrop = glassBackdrop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .onGloballyPositioned { onGlassBoundsChanged(it.boundsInRoot()) },
-            shape = { PrismalRoundedRectangle(30.dp) },
-            // The actual live-preview blur is rendered by LutRenderer from the current
-            // camera texture. This surface only applies the adjustable material opacity.
-            blurRadius = 0.dp,
-            tint = Color.Unspecified,
-            tintAlpha = 0f,
-            surfaceColor = Color(0xFF111111).copy(
-                alpha = 1f - glassTransparency.coerceIn(0f, 1f)
-            ),
-            saturation = 1.0f,
-            refractionHeightPx = 0f,
-            refractionAmountPx = 0f,
-            depthEffect = false,
-            chromaticAberration = 0f,
+        OppoCameraGlassSurface(
+            modifier = Modifier.fillMaxWidth(),
+            transparency = glassTransparency,
+            blurStrength = glassBlurStrength,
+            onBoundsChanged = onGlassBoundsChanged,
         ) {
             Column(
                 modifier = Modifier

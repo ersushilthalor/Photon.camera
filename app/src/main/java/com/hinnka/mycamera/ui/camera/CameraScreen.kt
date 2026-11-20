@@ -87,7 +87,6 @@ import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
-import com.styropyr0.prismal.sources.emptyGlassSource
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.DualCaptureLayout
 import com.hinnka.mycamera.video.DualCaptureSource
@@ -400,7 +399,7 @@ fun CameraScreen(
         val rightPx = (right - preview.left).coerceIn(0f, preview.width)
         val bottomPx = (preview.height - (bottom - preview.top)).coerceIn(0f, preview.height)
         val topPx = (preview.height - (top - preview.top)).coerceIn(0f, preview.height)
-        val blurRadiusPx = with(glassDensity) { cameraMenuBlurRadius.dp.toPx() }
+        val blurRadiusPx = (cameraMenuBlurRadius.coerceIn(0f, 50f) * 2.2f).coerceIn(0f, 160f)
         val cornerRadiusPx = with(glassDensity) { 30.dp.toPx() }
 
         glView.setQuickMenuGlassEffect(
@@ -925,10 +924,6 @@ fun CameraScreen(
 
         val backgroundPainter = rememberBackgroundPainter(viewModel)
         val modeSwitcherBackdrop = rememberLiquidGlassBackdrop()
-
-        // The settings sheet is a transparent overlay over the one live GLSurfaceView.
-        // Do not read the GL framebuffer back into a delayed bitmap for the menu.
-        val settingsGlassBackdrop = remember { emptyGlassSource() }
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
@@ -2210,8 +2205,8 @@ fun CameraScreen(
         // TopSheet for settings
         CameraTopSheet(
             visible = activePanel == ActivePanel.SETTINGS,
-            glassBackdrop = settingsGlassBackdrop,
             glassTransparency = cameraMenuTransparency,
+            glassBlurStrength = cameraMenuBlurRadius,
             onGlassBoundsChanged = { settingsGlassBounds = it },
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,

@@ -1940,7 +1940,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_camera_menu_blur),
                             description = stringResource(R.string.settings_camera_menu_blur_description),
                             value = menuBlurUi,
-                            valueRange = 0f..16f,
+                            valueRange = 0f..50f,
                             resetValue = DEFAULT_CAMERA_MENU_BLUR_RADIUS,
                             valueTextFormatter = { "${it.roundToInt()} dp" },
                             onValueChange = { menuBlurUi = it },

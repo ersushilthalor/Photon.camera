@@ -553,7 +553,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         quickMenuGlassBottomPx = bottomPx
         quickMenuGlassRightPx = rightPx
         quickMenuGlassTopPx = topPx
-        quickMenuGlassBlurRadiusPx = blurRadiusPx.coerceIn(0f, 64f)
+        quickMenuGlassBlurRadiusPx = blurRadiusPx.coerceIn(0f, 160f)
         quickMenuGlassCornerRadiusPx = cornerRadiusPx.coerceAtLeast(0f)
         quickMenuGlassEnabled =
             enabled &&

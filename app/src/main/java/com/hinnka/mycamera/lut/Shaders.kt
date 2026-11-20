@@ -155,7 +155,7 @@ object Shaders {
                 cornerRadius;
             float mask = 1.0 - smoothstep(-1.25, 1.25, distanceToRoundedRect);
 
-            float radius = clamp(uBlurRadiusPx, 0.0, 64.0);
+            float radius = clamp(uBlurRadiusPx, 0.0, 160.0);
             vec2 halfStep = uTexelSize * radius * 0.5;
             vec2 fullStep = uTexelSize * radius;
 

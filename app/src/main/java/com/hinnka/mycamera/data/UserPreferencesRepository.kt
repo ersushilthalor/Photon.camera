@@ -121,8 +121,8 @@ enum class CaptureButtonStyle {
     }
 }
 
-const val DEFAULT_CAMERA_MENU_TRANSPARENCY = 0.25f
-const val DEFAULT_CAMERA_MENU_BLUR_RADIUS = 0f
+const val DEFAULT_CAMERA_MENU_TRANSPARENCY = 0.55f
+const val DEFAULT_CAMERA_MENU_BLUR_RADIUS = 22f
 
 /**
  * 用户偏好设置数据类
@@ -770,7 +770,7 @@ class UserPreferencesRepository(private val context: Context) {
                 ).coerceIn(0f, 1f),
                 cameraMenuBlurRadius = (
                     preferences[CAMERA_MENU_BLUR_RADIUS_KEY] ?: DEFAULT_CAMERA_MENU_BLUR_RADIUS
-                ).coerceIn(0f, 16f),
+                ).coerceIn(0f, 50f),
                 volumeKeyAction = VolumeKeyAction.valueOf(
                     preferences[VOLUME_KEY_ACTION] ?: VolumeKeyAction.CAPTURE.name
                 ),
@@ -1688,7 +1688,7 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun saveCameraMenuBlurRadius(value: Float) {
         context.dataStore.edit { preferences ->
-            preferences[CAMERA_MENU_BLUR_RADIUS_KEY] = value.coerceIn(0f, 16f)
+            preferences[CAMERA_MENU_BLUR_RADIUS_KEY] = value.coerceIn(0f, 50f)
         }
     }
 
