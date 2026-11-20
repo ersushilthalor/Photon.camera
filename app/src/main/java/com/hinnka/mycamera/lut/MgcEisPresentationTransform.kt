@@ -1,12 +1,19 @@
 package com.hinnka.mycamera.lut
 
 import android.graphics.SurfaceTexture
-import android.opengl.Matrix
 import kotlin.math.abs
+
+private fun setIdentityMatrix(matrix: FloatArray) {
+    matrix.fill(0f)
+    matrix[0] = 1f
+    matrix[5] = 1f
+    matrix[10] = 1f
+    matrix[15] = 1f
+}
 
 /** Retains the cardinal OES orientation for the delayed ImageReader output presentation. */
 internal class MgcEisPresentationTransform {
-    val matrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+    val matrix = FloatArray(16).also(::setIdentityMatrix)
     private var captured = false
 
     /**
@@ -44,7 +51,7 @@ internal class MgcEisPresentationTransform {
             return false
         }
 
-        Matrix.setIdentityM(matrix, 0)
+        setIdentityMatrix(matrix)
         if (!uAlongX) {
             // The OES transform is a cardinal 90° rotation. Convert its
             // bottom-left OES origin to the regular 2D texture's orientation.
@@ -68,8 +75,40 @@ internal class MgcEisPresentationTransform {
     }
 
     fun reset() {
-        Matrix.setIdentityM(matrix, 0)
+        setIdentityMatrix(matrix)
         captured = false
+    }
+}
+
+
+/** Camera stream identity used to invalidate orientation state across lens switches. */
+internal data class MgcEisCameraKey(
+    val sensorOrientation: Int,
+    val lensFacing: Int,
+)
+
+/**
+ * Tracks the active preview camera. A key change invalidates the frozen OES presentation
+ * transform and advances the generation before the new stream can be consumed.
+ */
+internal class MgcEisCameraKeyTracker(
+    initialKey: MgcEisCameraKey,
+    private val presentationTransform: MgcEisPresentationTransform,
+) {
+    @Volatile
+    private var activeKey: MgcEisCameraKey = initialKey
+
+    @Volatile
+    var generation: Long = 0L
+        private set
+
+    @Synchronized
+    fun update(nextKey: MgcEisCameraKey): Boolean {
+        if (nextKey == activeKey) return false
+        activeKey = nextKey
+        presentationTransform.reset()
+        generation += 1L
+        return true
     }
 }
 
