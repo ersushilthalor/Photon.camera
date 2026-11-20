@@ -27,22 +27,25 @@ enum class LutEditorTarget(val baselineTarget: BaselineColorCorrectionTarget? = 
 }
 
 /**
- * 可复用的 LUT 色彩配方编辑内容面板（包含状态加载、防抖保存与销毁前刷盘）。
+ * LUT 色彩配方编辑底部弹窗。物理效果参数存在时，与色彩调整显示在同一编辑面板中。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LutEditPanelContent(
+fun LutEditBottomSheet(
     lutId: String,
+    onDismiss: () -> Unit,
     initialParams: ColorRecipeParams? = null,
     onParamsPreviewChange: ((ColorRecipeParams) -> Unit)? = null,
     imageHistogram: ImageHistogram? = null,
     showEffects: Boolean = false,
     editorTarget: LutEditorTarget = LutEditorTarget.CREATIVE_GLOBAL,
+    containerColor: Color? = null,
     modifier: Modifier = Modifier,
     replaceVignetteWithVideoBrightness: Boolean = false,
-    videoOnly: Boolean = false,
-    transparentGlassSurface: Boolean = false,
+    videoOnly: Boolean = false
 ) {
     val lutEditViewModel: LutEditViewModel = viewModel()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val coroutineScope = rememberCoroutineScope()
 
     var editingParams by remember { mutableStateOf(ColorRecipeParams.DEFAULT) }
@@ -104,69 +107,13 @@ fun LutEditPanelContent(
         }
     }
 
-    ColorRecipePanel(
-        currentParams = editingParams,
-        onParamChange = { param, value ->
-            onParamsUpdated(param.setValue(editingParams, value))
-        },
-        onParamsChange = { newParams ->
-            onParamsUpdated(newParams)
-        },
-        onRemarksChange = {
-            onParamsUpdated(editingParams.copy(remarks = it))
-        },
-        onCurveChange = { channel, points ->
-            onParamsUpdated(
-                when (channel) {
-                    com.hinnka.mycamera.ui.components.CurveChannel.MASTER ->
-                        editingParams.copy(masterCurvePoints = points)
-                    com.hinnka.mycamera.ui.components.CurveChannel.RED ->
-                        editingParams.copy(redCurvePoints = points)
-                    com.hinnka.mycamera.ui.components.CurveChannel.GREEN ->
-                        editingParams.copy(greenCurvePoints = points)
-                    com.hinnka.mycamera.ui.components.CurveChannel.BLUE ->
-                        editingParams.copy(blueCurvePoints = points)
-                }
-            )
-        },
-        imageHistogram = imageHistogram,
-        showLutIntensity = editorTarget == LutEditorTarget.CREATIVE_GLOBAL && lutId != "none",
-        currentEffects = editingParams.toEffectParams().takeIf { showEffects },
-        onEffectsChange = if (showEffects) {
-            { effects -> onParamsUpdated(effects.applyTo(editingParams)) }
-        } else {
-            null
-        },
-        modifier = modifier.fillMaxWidth(),
-        replaceVignetteWithVideoBrightness = replaceVignetteWithVideoBrightness,
-        transparentGlassSurface = transparentGlassSurface,
-    )
-}
-
-/**
- * LUT 色彩配方编辑底部弹窗。物理效果参数存在时，与色彩调整显示在同一编辑面板中。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LutEditBottomSheet(
-    lutId: String,
-    onDismiss: () -> Unit,
-    initialParams: ColorRecipeParams? = null,
-    onParamsPreviewChange: ((ColorRecipeParams) -> Unit)? = null,
-    imageHistogram: ImageHistogram? = null,
-    showEffects: Boolean = false,
-    editorTarget: LutEditorTarget = LutEditorTarget.CREATIVE_GLOBAL,
-    containerColor: Color? = null,
-    modifier: Modifier = Modifier,
-    replaceVignetteWithVideoBrightness: Boolean = false,
-    videoOnly: Boolean = false
-) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-
     AppModalBottomSheet(
         containerColor = containerColor,
         style = AppSheetStyle.Frosted,
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            flushLutSave()
+            onDismiss()
+        },
         sheetState = sheetState,
         modifier = modifier,
         dragHandle = null,
@@ -176,16 +123,41 @@ fun LutEditBottomSheet(
                 .fillMaxWidth()
                 .navigationBarsPadding()
         ) {
-            LutEditPanelContent(
-                lutId = lutId,
-                initialParams = initialParams,
-                onParamsPreviewChange = onParamsPreviewChange,
+            ColorRecipePanel(
+                currentParams = editingParams,
+                onParamChange = { param, value ->
+                    onParamsUpdated(param.setValue(editingParams, value))
+                },
+                onParamsChange = { newParams ->
+                    onParamsUpdated(newParams)
+                },
+                onRemarksChange = {
+                    onParamsUpdated(editingParams.copy(remarks = it))
+                },
+                onCurveChange = { channel, points ->
+                    onParamsUpdated(
+                        when (channel) {
+                            com.hinnka.mycamera.ui.components.CurveChannel.MASTER ->
+                                editingParams.copy(masterCurvePoints = points)
+                            com.hinnka.mycamera.ui.components.CurveChannel.RED ->
+                                editingParams.copy(redCurvePoints = points)
+                            com.hinnka.mycamera.ui.components.CurveChannel.GREEN ->
+                                editingParams.copy(greenCurvePoints = points)
+                            com.hinnka.mycamera.ui.components.CurveChannel.BLUE ->
+                                editingParams.copy(blueCurvePoints = points)
+                        }
+                    )
+                },
                 imageHistogram = imageHistogram,
-                showEffects = showEffects,
-                editorTarget = editorTarget,
-                replaceVignetteWithVideoBrightness = replaceVignetteWithVideoBrightness,
-                videoOnly = videoOnly,
-                transparentGlassSurface = false,
+                showLutIntensity = editorTarget == LutEditorTarget.CREATIVE_GLOBAL && lutId != "none",
+                currentEffects = editingParams.toEffectParams().takeIf { showEffects },
+                onEffectsChange = if (showEffects) {
+                    { effects -> onParamsUpdated(effects.applyTo(editingParams)) }
+                } else {
+                    null
+                },
+                modifier = Modifier.fillMaxWidth(),
+                replaceVignetteWithVideoBrightness = replaceVignetteWithVideoBrightness
             )
         }
     }

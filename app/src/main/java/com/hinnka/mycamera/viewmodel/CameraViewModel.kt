@@ -2206,9 +2206,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (burstPhotoId == completedPhotoId) {
                     burstPhotoId = null
                     burstSettings = null
-                    withContext(Dispatchers.Main.immediate) {
-                        burstImageCount = 0
-                    }
+                    burstImageCount = 0
                 }
             }
         }
@@ -3570,15 +3568,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 null
             }
-            withContext(Dispatchers.Main.immediate) {
-                multipleExposureState = multipleExposureState.copy(
-                    capturedCount = frameFiles.size,
-                    frames = frameFiles.mapIndexed { index, file -> MultipleExposureFrame(index + 1, file) },
-                    previewBitmap = preview,
-                    sessionId = if (frameFiles.isEmpty()) null else sessionId,
-                    isProcessing = false
-                )
-            }
+            multipleExposureState = multipleExposureState.copy(
+                capturedCount = frameFiles.size,
+                frames = frameFiles.mapIndexed { index, file -> MultipleExposureFrame(index + 1, file) },
+                previewBitmap = preview,
+                sessionId = if (frameFiles.isEmpty()) null else sessionId,
+                isProcessing = false
+            )
             if (frameFiles.isEmpty()) {
                 multipleExposureMetadata = null
             }
@@ -3620,21 +3616,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 settings.preferences.photoQuality
             ) ?: return
 
-            withContext(Dispatchers.Main.immediate) {
-                multipleExposureState = multipleExposureState.copy(
-                    sessionId = sessionId,
-                    frames = multipleExposureState.frames + MultipleExposureFrame(frameIndex, frameFile),
-                    capturedCount = frameIndex
-                )
-            }
+            multipleExposureState = multipleExposureState.copy(
+                sessionId = sessionId,
+                frames = multipleExposureState.frames + MultipleExposureFrame(frameIndex, frameFile),
+                capturedCount = frameIndex
+            )
             if (frameIndex >= multipleExposureState.targetCount) {
                 finishMultipleExposureSessionNow { markCapturedThumbnailSaved(settings, it) }
             } else {
                 refreshMultipleExposurePreview(sessionId).join()
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to handle multiple exposure frame", e)
         }
     }
@@ -6382,9 +6374,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
             markCapturedThumbnailSaved(settings, photoId)
             _imageSavedEvent.emit(photoId)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
         } finally {
             image.close()
@@ -6822,9 +6812,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
             markCapturedThumbnailSaved(settings, photoId)
             _imageSavedEvent.emit(photoId)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to save image", e)
         }
     }
@@ -6927,9 +6915,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } finally {
                 if (!bitmap.isRecycled) bitmap.recycle()
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to process refocus photo", e)
             orderedFrames.forEach { it.image.close() }
             GalleryManager.clearMultipleExposureSession(context, sessionId)
@@ -7102,9 +7088,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
             markCapturedThumbnailSaved(settings, photoId)
             _imageSavedEvent.emit(photoId)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to process Oppo HDR bracket", e)
         } finally {
             fusedBitmap?.takeIf { !it.isRecycled }?.recycle()

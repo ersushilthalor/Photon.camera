@@ -2166,9 +2166,7 @@ object GalleryManager {
                 )
             }
             markProcessingPhotoDisplayReady(photoId, originalFile, metadata)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to savePhoto", e)
         } finally {
             preparedUltraHdrSource?.hdrReference?.bitmap?.let { bitmap ->
@@ -2687,9 +2685,7 @@ object GalleryManager {
                 it !== bitmap && !it.isRecycled
             }?.recycle()
             markProcessingPhotoDisplayReady(photoId, photoFile, updatedMetadata, isRawSource = true)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to savePhoto", e)
         } finally {
             image.close()
@@ -2823,9 +2819,7 @@ object GalleryManager {
                     photoQuality
                 )
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to save bitmap photo", e)
         }
     }
@@ -2864,9 +2858,7 @@ object GalleryManager {
             }
             finalBitmap.recycle()
             frameFile
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             PLog.e(TAG, "Failed to save multiple exposure frame", e)
             null
         }
@@ -2946,9 +2938,7 @@ object GalleryManager {
                 colorSpace = colorSpace,
             )
             hdrStackResult
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             images.forEach { it.close() }
             PLog.e(TAG, "Failed to compose HDR bracket photo", e)
             null
