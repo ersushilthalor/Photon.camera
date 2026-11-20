@@ -3779,7 +3779,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 captureResult = baseFrame.captureResult,
                 settings = settings,
             )
-        } else if (photo.state.isMultiFrameEnabled) {
+        } else if (photo.state.isMultiFrameEnabled && photo.frames.size > 1) {
             val burstPlanningStartedAtMs = SystemClock.elapsedRealtime()
             val chronologicalFrames = photo.frames.map {
                 PendingRawStackFrame(rawStackFrame(it.image, it.captureResult, it.frameMetadata), it.captureInfo, it.captureResult)
