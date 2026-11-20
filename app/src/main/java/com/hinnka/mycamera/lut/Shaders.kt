@@ -121,6 +121,64 @@ object Shaders {
         }
     """.trimIndent()
 
+    /**
+     * Live camera quick-menu glass. This is a display-only pass over the existing preview
+     * texture (no second camera stream and no CPU bitmap readback).
+     */
+    val FRAGMENT_SHADER_QUICK_MENU_GLASS = """
+        #version 300 es
+        precision highp float;
+
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+
+        uniform sampler2D uCameraTexture;
+        uniform vec2 uTexelSize;
+        uniform vec4 uGlassRectPx; // left, bottom, right, top in GL viewport pixels
+        uniform float uBlurRadiusPx;
+        uniform float uCornerRadiusPx;
+
+        void main() {
+            vec4 original = texture(uCameraTexture, vTexCoord);
+            vec2 halfSize = (uGlassRectPx.zw - uGlassRectPx.xy) * 0.5;
+            vec2 center = (uGlassRectPx.xy + uGlassRectPx.zw) * 0.5;
+            vec2 point = gl_FragCoord.xy - center;
+            float cornerRadius = clamp(
+                uCornerRadiusPx,
+                0.0,
+                min(halfSize.x, halfSize.y)
+            );
+            vec2 q = abs(point) - (halfSize - vec2(cornerRadius));
+            float distanceToRoundedRect =
+                length(max(q, vec2(0.0))) +
+                min(max(q.x, q.y), 0.0) -
+                cornerRadius;
+            float mask = 1.0 - smoothstep(-1.25, 1.25, distanceToRoundedRect);
+
+            float radius = clamp(uBlurRadiusPx, 0.0, 64.0);
+            vec2 halfStep = uTexelSize * radius * 0.5;
+            vec2 fullStep = uTexelSize * radius;
+
+            vec3 blurred = original.rgb * 0.20;
+            blurred += texture(uCameraTexture, vTexCoord + vec2( halfStep.x, 0.0)).rgb * 0.10;
+            blurred += texture(uCameraTexture, vTexCoord + vec2(-halfStep.x, 0.0)).rgb * 0.10;
+            blurred += texture(uCameraTexture, vTexCoord + vec2(0.0,  halfStep.y)).rgb * 0.10;
+            blurred += texture(uCameraTexture, vTexCoord + vec2(0.0, -halfStep.y)).rgb * 0.10;
+
+            blurred += texture(uCameraTexture, vTexCoord + vec2( fullStep.x, 0.0)).rgb * 0.06;
+            blurred += texture(uCameraTexture, vTexCoord + vec2(-fullStep.x, 0.0)).rgb * 0.06;
+            blurred += texture(uCameraTexture, vTexCoord + vec2(0.0,  fullStep.y)).rgb * 0.06;
+            blurred += texture(uCameraTexture, vTexCoord + vec2(0.0, -fullStep.y)).rgb * 0.06;
+
+            blurred += texture(uCameraTexture, vTexCoord + vec2( halfStep.x,  halfStep.y)).rgb * 0.04;
+            blurred += texture(uCameraTexture, vTexCoord + vec2(-halfStep.x,  halfStep.y)).rgb * 0.04;
+            blurred += texture(uCameraTexture, vTexCoord + vec2( halfStep.x, -halfStep.y)).rgb * 0.04;
+            blurred += texture(uCameraTexture, vTexCoord + vec2(-halfStep.x, -halfStep.y)).rgb * 0.04;
+
+            fragColor = vec4(mix(original.rgb, blurred, mask), original.a);
+        }
+    """.trimIndent()
+
     /** 简单顶点着色器（HDF 后处理 Pass 专用，无 MVP/ST 矩阵） */
     val SIMPLE_VERTEX_SHADER = """
         #version 300 es

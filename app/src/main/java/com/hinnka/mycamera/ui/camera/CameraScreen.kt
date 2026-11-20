@@ -254,6 +254,7 @@ fun CameraScreen(
     val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
     val cameraMenuBlurRadius by viewModel.cameraMenuBlurRadius.collectAsState()
+    val cameraMenuTransparency by viewModel.cameraMenuTransparency.collectAsState()
     val currentLutId by viewModel.currentLutId.collectAsState()
     val lutNameOverlayState = rememberLutNameOverlayState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
@@ -316,6 +317,7 @@ fun CameraScreen(
     var cameraScreenBounds by remember { mutableStateOf<Rect?>(null) }
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var previewGlBounds by remember { mutableStateOf<Rect?>(null) }
+    var settingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var cameraGLSurfaceView by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
     var zoomJoystickOpen by remember { mutableStateOf(false) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
@@ -364,6 +366,53 @@ fun CameraScreen(
 
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
+
+    // Blur the visible menu area in the existing camera GL output. Coordinates from
+    // Compose and the GLSurfaceView share the same root-pixel space.
+    val glassDensity = LocalDensity.current
+    LaunchedEffect(
+        cameraGLSurfaceView,
+        activePanel,
+        settingsGlassBounds,
+        previewGlBounds,
+        cameraMenuBlurRadius,
+    ) {
+        val glView = cameraGLSurfaceView ?: return@LaunchedEffect
+        val preview = previewGlBounds
+        val panel = settingsGlassBounds
+        if (activePanel != ActivePanel.SETTINGS || preview == null || panel == null ||
+            preview.width <= 0f || preview.height <= 0f || cameraMenuBlurRadius <= 0f
+        ) {
+            glView.setQuickMenuGlassEffect(enabled = false)
+            return@LaunchedEffect
+        }
+
+        val left = maxOf(preview.left, panel.left)
+        val top = maxOf(preview.top, panel.top)
+        val right = minOf(preview.right, panel.right)
+        val bottom = minOf(preview.bottom, panel.bottom)
+        if (right <= left || bottom <= top) {
+            glView.setQuickMenuGlassEffect(enabled = false)
+            return@LaunchedEffect
+        }
+
+        val leftPx = (left - preview.left).coerceIn(0f, preview.width)
+        val rightPx = (right - preview.left).coerceIn(0f, preview.width)
+        val bottomPx = (preview.height - (bottom - preview.top)).coerceIn(0f, preview.height)
+        val topPx = (preview.height - (top - preview.top)).coerceIn(0f, preview.height)
+        val blurRadiusPx = with(glassDensity) { cameraMenuBlurRadius.dp.toPx() }
+        val cornerRadiusPx = with(glassDensity) { 30.dp.toPx() }
+
+        glView.setQuickMenuGlassEffect(
+            enabled = true,
+            leftPx = leftPx,
+            bottomPx = bottomPx,
+            rightPx = rightPx,
+            topPx = topPx,
+            blurRadiusPx = blurRadiusPx,
+            cornerRadiusPx = cornerRadiusPx,
+        )
+    }
 
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
     var showParameterRuler by remember(state.captureMode, state.useRaw) { mutableStateOf(false) }
@@ -2151,7 +2200,8 @@ fun CameraScreen(
         CameraTopSheet(
             visible = activePanel == ActivePanel.SETTINGS,
             glassBackdrop = settingsGlassBackdrop,
-            glassBlurRadius = cameraMenuBlurRadius,
+            glassTransparency = cameraMenuTransparency,
+            onGlassBoundsChanged = { settingsGlassBounds = it },
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
             topSheetAspectRatios = topSheetAspectRatios,

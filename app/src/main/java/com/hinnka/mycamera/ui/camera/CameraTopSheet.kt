@@ -33,6 +33,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -80,7 +83,8 @@ private val CameraTopSheetContentTopPadding = 32.dp
 fun CameraTopSheet(
     visible: Boolean,
     glassBackdrop: PrismalBackdrop,
-    glassBlurRadius: Float,
+    glassTransparency: Float,
+    onGlassBoundsChanged: (Rect?) -> Unit,
     captureMode: CaptureMode,
     aspectRatio: AspectRatio,
     topSheetAspectRatios: List<AspectRatio>,
@@ -168,6 +172,10 @@ fun CameraTopSheet(
         expandedVideoPanel = null
     }
 
+    LaunchedEffect(visible) {
+        if (!visible) onGlassBoundsChanged(null)
+    }
+
     LaunchedEffect(useRaw) {
         if (!useRaw) {
             showRenderingEngineSheet = false
@@ -182,14 +190,18 @@ fun CameraTopSheet(
     ) {
         PrismalGlassSurface(
             backdrop = glassBackdrop,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onGloballyPositioned { onGlassBoundsChanged(it.boundsInRoot()) },
             shape = { PrismalRoundedRectangle(30.dp) },
-            // The live SurfaceView is already visible behind this overlay. Keep the
-            // panel optically clear: no stale sampled frame, added blur, or colour wash.
-            blurRadius = glassBlurRadius.dp,
+            // The actual live-preview blur is rendered by LutRenderer from the current
+            // camera texture. This surface only applies the adjustable material opacity.
+            blurRadius = 0.dp,
             tint = Color.Unspecified,
             tintAlpha = 0f,
-            surfaceColor = Color.Unspecified,
+            surfaceColor = Color(0xFF111111).copy(
+                alpha = 1f - glassTransparency.coerceIn(0f, 1f)
+            ),
             saturation = 1.0f,
             refractionHeightPx = 0f,
             refractionAmountPx = 0f,
