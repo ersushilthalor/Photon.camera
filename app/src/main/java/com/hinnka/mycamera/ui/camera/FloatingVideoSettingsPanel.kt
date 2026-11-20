@@ -1,11 +1,13 @@
 package com.hinnka.mycamera.ui.camera
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandIn
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
@@ -19,7 +21,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,12 +33,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.ui.components.OppoCameraGlassSurface
 import com.hinnka.mycamera.video.VideoAspectRatio
@@ -67,7 +65,6 @@ fun FloatingVideoSettingsPanel(
     glassTransparency: Float,
     glassBlurStrength: Float,
     onGlassBoundsChanged: (Rect?) -> Unit,
-    anchorTop: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
 ) {
     if (!isOpen) return
@@ -78,12 +75,6 @@ fun FloatingVideoSettingsPanel(
         ?.takeIf { it.isNotEmpty() }
         ?: videoCapabilities.availableFps
     val visibleFpsOptions = fpsOptions.ifEmpty { listOf(videoConfig.fps) }
-    val density = LocalDensity.current
-    // Match the compact resolution/FPS capsule that transforms into this panel.
-    val collapsedPillSize = with(density) {
-        IntSize(width = 96.dp.roundToPx(), height = 30.dp.roundToPx())
-    }
-
     val description = when (videoConfig.resolution) {
         VideoResolutionPreset.UHD_2160P -> "Ultra HD resolution"
         VideoResolutionPreset.THREE_K -> "3K resolution"
@@ -103,8 +94,7 @@ fun FloatingVideoSettingsPanel(
     ) {
         Box(
             modifier = Modifier
-                .align(Alignment.TopStart)
-                .offset(x = 8.dp, y = anchorTop)
+                .align(Alignment.TopCenter)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -113,27 +103,24 @@ fun FloatingVideoSettingsPanel(
         ) {
             AnimatedVisibility(
                 visible = isOpen,
-                enter = fadeIn(tween(100)) +
-                    expandIn(
-                        expandFrom = Alignment.TopStart,
-                        initialSize = { fullSize ->
-                            IntSize(
-                                width = minOf(collapsedPillSize.width, fullSize.width),
-                                height = minOf(collapsedPillSize.height, fullSize.height),
-                            )
-                        },
-                        animationSpec = spring(dampingRatio = 0.54f, stiffness = 340f),
-                    ) +
+                enter = fadeIn(tween(170)) +
                     scaleIn(
-                        initialScale = 0.92f,
-                        transformOrigin = TransformOrigin(0f, 0f),
-                        animationSpec = spring(dampingRatio = 0.56f, stiffness = 420f),
+                        initialScale = 0.78f,
+                        animationSpec = spring(dampingRatio = 0.52f, stiffness = 430f),
+                    ) +
+                    expandVertically(
+                        expandFrom = Alignment.Top,
+                        animationSpec = spring(dampingRatio = 0.68f, stiffness = 380f),
+                    ) +
+                    slideInVertically(
+                        initialOffsetY = { -it / 5 },
+                        animationSpec = spring(dampingRatio = 0.68f, stiffness = 380f),
                     ),
                 exit = fadeOut(tween(120)) +
-                    scaleOut(
-                        targetScale = 0.96f,
-                        transformOrigin = TransformOrigin(0f, 0f),
-                        animationSpec = tween(120),
+                    scaleOut(targetScale = 0.94f, animationSpec = tween(120)) +
+                    shrinkVertically(
+                        shrinkTowards = Alignment.Top,
+                        animationSpec = tween(130),
                     ),
             ) {
                 OppoCameraGlassSurface(
