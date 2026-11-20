@@ -243,15 +243,18 @@ private fun VideoTopBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Match the photo-mode format capsule: resolution and frame rate stay visible,
-            // including during recording, and each value remains independently tappable.
-            VideoParameterCluster(
-                videoConfig = videoConfig,
-                onResolutionClick = onVideoResolutionClick,
-                onFpsClick = onVideoFpsClick
-            )
+            if (isRecording) {
+                // Keep the two remaining actions anchored to the right edge.
+                Spacer(modifier = Modifier.weight(1f))
+            } else {
+                VideoParameterCluster(
+                    videoConfig = videoConfig,
+                    onResolutionClick = onVideoResolutionClick,
+                    onFpsClick = onVideoFpsClick
+                )
+            }
 
-            // Use the same compact grouped control capsule and touch targets as photo mode.
+            // During recording, leave only Flash/Torch and HDR visible.
             Box(
                 modifier = Modifier
                     .height(30.dp)
@@ -299,14 +302,23 @@ private fun VideoTopBar(
                         )
                     }
 
-                    TopBarActionButton(
-                        onClick = onSettingsClick,
-                        contentDescription = stringResource(R.string.settings)
-                    ) {
-                        SixDotMenuIcon()
-                }
+                    if (!isRecording) {
+                        TopBarActionButton(
+                            onClick = onSettingsClick,
+                            contentDescription = stringResource(R.string.settings)
+                        ) {
+                            SixDotMenuIcon()
+                        }
+                    }
                 }
             }
+        }
+
+        if (isRecording) {
+            RecordingHud(
+                elapsedMs = recordingElapsedMs,
+                modifier = Modifier.align(Alignment.Center)
+            )
         }
     }
 }
@@ -405,7 +417,6 @@ private fun VideoActionIcon(
 @Composable
 private fun RecordingHud(
     elapsedMs: Long,
-    videoConfig: VideoConfig,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "recBlink")
@@ -418,69 +429,33 @@ private fun RecordingHud(
         ),
         label = "recDotAlpha"
     )
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Surface(
-            color = Color.Black.copy(alpha = 0.5f),
-            shape = RoundedCornerShape(20.dp),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(Color.Red.copy(alpha = dotAlpha))
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = formatRecordingDuration(elapsedMs),
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 0.5.sp
-                    )
-                )
-            }
-        }
 
+    Surface(
+        modifier = modifier,
+        color = Color.Black.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+    ) {
         Row(
-            modifier = Modifier.padding(top = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = if (videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
-                    stringResource(R.string.video_resolution_max)
-                } else {
-                    videoConfig.resolution.displayName
-                },
-                color = Color.White.copy(alpha = 0.6f),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(Color.Red.copy(alpha = dotAlpha))
             )
-            Box(Modifier.size(2.5.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.4f)))
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "${videoConfig.fps.fps} FPS",
-                color = Color.White.copy(alpha = 0.6f),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold
-            )
-            if (videoConfig.logProfile != VideoLogProfile.OFF) {
-                Box(Modifier.size(2.5.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.4f)))
-                Text(
-                    text = "LOG",
-                    color = AccentColor.copy(alpha = 0.8f),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold
+                text = formatRecordingDuration(elapsedMs),
+                color = Color.White,
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 0.5.sp
                 )
-            }
+            )
         }
     }
 }
