@@ -1445,8 +1445,8 @@ fun CameraScreen(
                             previewSize = previewSize,
                             captureSize = state.currentCaptureSize,
                             captureMode = state.captureMode,
-                            sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation
-                                ?: 0,
+                            cameraId = activeCameraInfo?.cameraId ?: state.currentCameraId,
+                            sensorOrientation = activeCameraInfo?.sensorOrientation ?: 0,
                             lensFacing = if (activeCameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
                             previewOrientationOffset = previewOrientationOffset,
                             calibrationOffset = calibrationOffset,
