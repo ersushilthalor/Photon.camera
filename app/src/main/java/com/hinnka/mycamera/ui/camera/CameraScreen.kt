@@ -2256,6 +2256,9 @@ fun CameraScreen(
                     viewModel.setDualCaptureEnabled(dualCaptureEnabled)
                 }
             },
+            onVideoEditClick = {
+                activePanel = ActivePanel.EDIT
+            },
             videoCodec = videoCodec,
             onVideoCodecChange = { viewModel.setVideoCodec(it) },
             videoAudioInputId = state.videoConfig.audioInputId,
