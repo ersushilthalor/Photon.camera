@@ -3136,8 +3136,25 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     /**
      * Supplies the Camera2 ID used in camera-switch diagnostics.
      */
-    fun setCameraId(cameraId: String?) {
+    /**
+     * Applies one atomic preview-camera identity update. The GL renderer must not observe
+     * a half-updated (sensor orientation, facing, camera ID) tuple during lens handoff.
+     */
+    @Synchronized
+    fun setPreviewCameraConfiguration(
+        cameraId: String?,
+        orientation: Int,
+        facing: Int,
+    ) {
         currentCameraId = cameraId?.takeIf { it.isNotBlank() }
+        val cameraKeyChanged = sensorOrientation != orientation || lensFacing != facing
+        sensorOrientation = orientation
+        lensFacing = facing
+        if (cameraKeyChanged) {
+            handlePreviewCameraKeyChange()
+            updateMVPMatrix()
+            updateCaptureSize()
+        }
     }
 
     /**
@@ -3146,10 +3163,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Synchronized
     fun setSensorOrientation(orientation: Int) {
         if (sensorOrientation != orientation) {
-            sensorOrientation = orientation
-            handlePreviewCameraKeyChange()
-            updateMVPMatrix()
-            updateCaptureSize()
+            setPreviewCameraConfiguration(currentCameraId, orientation, lensFacing)
         }
     }
 
@@ -3220,10 +3234,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Synchronized
     fun setLensFacing(facing: Int) {
         if (lensFacing != facing) {
-            lensFacing = facing
-            handlePreviewCameraKeyChange()
-            updateMVPMatrix()
-            updateCaptureSize()
+            setPreviewCameraConfiguration(currentCameraId, sensorOrientation, facing)
         }
     }
 
