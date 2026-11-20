@@ -3358,41 +3358,49 @@ private fun Modifier.videoPillSwipeUpGesture(
     videoSelected: Boolean,
     enabled: Boolean,
     onSwipeUp: () -> Unit
-): Modifier = pointerInput(videoSelected, enabled, onSwipeUp) {
-    if (!videoSelected || !enabled) return@pointerInput
+): Modifier = composed {
+    // The callback is recreated by the parent composable. Keep the pointer-input
+    // coroutine alive during recomposition and always invoke the latest callback.
+    val currentOnSwipeUp by rememberUpdatedState(onSwipeUp)
 
-    awaitEachGesture {
-        val down = awaitFirstDown(
-            requireUnconsumed = false,
-            pass = PointerEventPass.Initial
-        )
-        // The first half is the Video segment; the second half must remain a normal
-        // Photo selection gesture.
-        if (down.position.x >= size.width / 2f) {
-            return@awaitEachGesture
-        }
+    pointerInput(videoSelected, enabled) {
+        if (!videoSelected || !enabled) return@pointerInput
 
-        var triggered = false
-        while (true) {
-            val event = awaitPointerEvent(PointerEventPass.Initial)
-            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-            val drag = change.position - down.position
-            val isUpwardSwipe = drag.y < -(viewConfiguration.touchSlop * 3f) &&
-                abs(drag.y) > abs(drag.x) * 1.2f
+        awaitEachGesture {
+            val down = awaitFirstDown(
+                requireUnconsumed = false,
+                pass = PointerEventPass.Initial
+            )
 
-            if (!triggered && isUpwardSwipe) {
-                triggered = true
-                change.consume()
-                onSwipeUp()
-            } else if (triggered) {
-                change.consume()
+            // The Video segment is the left half. Photo taps/drags remain untouched.
+            if (down.position.x >= size.width / 2f) {
+                return@awaitEachGesture
             }
 
-            if (!change.pressed) break
+            var triggered = false
+            while (true) {
+                // Observe after child handlers so the segmented control cannot hide
+                // movement from this parent-level swipe detector.
+                val event = awaitPointerEvent(PointerEventPass.Final)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                val drag = change.position - down.position
+                val upwardDistance = -drag.y
+                val isUpwardSwipe = upwardDistance > viewConfiguration.touchSlop * 1.5f &&
+                    upwardDistance > abs(drag.x) * 1.1f
+
+                if (!triggered && isUpwardSwipe) {
+                    triggered = true
+                    change.consume()
+                    currentOnSwipeUp()
+                } else if (triggered) {
+                    change.consume()
+                }
+
+                if (!change.pressed) break
+            }
         }
     }
 }
-
 @Composable
 private fun ModeSwitcherItem(
     label: String,
