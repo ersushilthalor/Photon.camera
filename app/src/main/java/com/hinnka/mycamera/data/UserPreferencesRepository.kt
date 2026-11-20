@@ -655,7 +655,8 @@ class UserPreferencesRepository(private val context: Context) {
                 storedVideoStabilizationMode
             }
             val storedVideoResolution = VideoResolutionPreset.entries.firstOrNull {
-                it.name == preferences[VIDEO_RESOLUTION]
+                it.name == preferences[VIDEO_RESOLUTION] &&
+                    it != VideoResolutionPreset.HD_720P
             } ?: VideoResolutionPreset.FHD_1080P
             val storedVideoFps = VideoFpsPreset.entries.firstOrNull {
                 it.name == preferences[VIDEO_FPS]
