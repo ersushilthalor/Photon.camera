@@ -238,7 +238,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val modeSwitchMvpMatrix = FloatArray(16)
 
     @Volatile
-    private var modeSwitchCropZoom = 1f
+    private var modeSwitchPreviewAspectRatio = 0f
 
     // Primary Camera2 preview input.
     private var surfaceTexture: SurfaceTexture? = null
@@ -1472,14 +1472,26 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             }
         }
 
-        val cropZoom = modeSwitchCropZoom
-        if (cropZoom <= 1.0001f) return baseMatrix
-
-        // Scale the sensor image uniformly around the viewport center: all four edges
-        // move together, preserving the preview geometry without non-uniform stretching.
-        System.arraycopy(baseMatrix, 0, modeSwitchMvpMatrix, 0, modeSwitchMvpMatrix.size)
-        Matrix.scaleM(modeSwitchMvpMatrix, 0, cropZoom, cropZoom, 1f)
-        return modeSwitchMvpMatrix
+        val animatedAspect = modeSwitchPreviewAspectRatio
+        if (targetWidth == viewportWidth && targetHeight == viewportHeight &&
+            animatedAspect.isFinite() && animatedAspect > 0f
+        ) {
+            val sourceWidth = if (stabilized) stabilizationInputWidth else previewWidth
+            val sourceHeight = if (stabilized) stabilizationInputHeight else previewHeight
+            val matrix = buildMvpMatrix(
+                targetWidth = targetWidth,
+                targetHeight = targetHeight,
+                sourceWidth = sourceWidth,
+                sourceHeight = sourceHeight,
+                viewAspectOverride = animatedAspect,
+                outMatrix = modeSwitchMvpMatrix,
+            )
+            if (needsEisSafetyCrop) {
+                Matrix.scaleM(matrix, 0, EIS_OUTPUT_CROP_ZOOM, EIS_OUTPUT_CROP_ZOOM, 1f)
+            }
+            return matrix
+        }
+        return baseMatrix
     }
 
     private fun useCurrentOesFrame() {
@@ -2903,8 +2915,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
     }
 
-    fun setModeSwitchCropZoom(zoom: Float) {
-        modeSwitchCropZoom = if (zoom.isFinite()) zoom.coerceIn(1f, 1.25f) else 1f
+    fun setModeSwitchPreviewAspectRatio(aspectRatio: Float) {
+        modeSwitchPreviewAspectRatio = aspectRatio.takeIf { it.isFinite() && it > 0f } ?: 0f
     }
 
     /**
@@ -2964,8 +2976,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         targetHeight: Int,
         sourceWidth: Int = previewWidth,
         sourceHeight: Int = previewHeight,
+        viewAspectOverride: Float? = null,
+        outMatrix: FloatArray? = null,
     ): FloatArray {
-        val matrix = FloatArray(16)
+        val matrix = outMatrix ?: FloatArray(16)
         Matrix.setIdentityM(matrix, 0)
         if (targetWidth <= 0 || targetHeight <= 0) {
             return matrix
@@ -2980,7 +2994,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         } else {
             (sourceWidth.toFloat() * cropWidth) / (sourceHeight.toFloat() * cropHeight)
         }
-        val viewAspect = targetWidth.toFloat() / targetHeight.toFloat()
+        val viewAspect = viewAspectOverride?.takeIf { it.isFinite() && it > 0f }
+            ?: (targetWidth.toFloat() / targetHeight.toFloat())
 
         if (totalPreviewCorrection != 0) {
             Matrix.rotateM(matrix, 0, (-totalPreviewCorrection).toFloat(), 0f, 0f, 1f)

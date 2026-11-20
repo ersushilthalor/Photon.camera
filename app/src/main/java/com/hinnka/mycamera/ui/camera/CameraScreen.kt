@@ -1070,15 +1070,14 @@ fun CameraScreen(
         )
         val animatedViewfinderTop = animatedViewfinderCenterY - animatedViewfinderHeight / 2
 
-        // The GL viewport already uses the destination aspect ratio. Counter its extra
-        // center-crop at the start of the transition, then converge to the destination crop.
-        // A single isotropic factor preserves sensor geometry in both switch directions.
-        val modeSwitchCropZoom = if (isPhotoVideoModeTransition && cardHeight.value > 0f) {
-            val heightRatio = animatedViewfinderHeight.value / cardHeight.value
-            minOf(heightRatio, 1f / heightRatio.coerceAtLeast(0.0001f))
-                .coerceIn(0.5f, 1f)
+        // Drive the renderer's center-crop matrix from the animated viewfinder bounds.
+        // This changes only sensor-space crop; the texture and preview surface are never stretched.
+        val modeSwitchPreviewAspectRatio = if (
+            isPhotoVideoModeTransition && animatedViewfinderHeight.value > 0f
+        ) {
+            (cardWidth.value / animatedViewfinderHeight.value).takeIf { it.isFinite() && it > 0f } ?: 0f
         } else {
-            1f
+            0f
         }
 
         val topBar = @Composable {
@@ -1441,7 +1440,7 @@ fun CameraScreen(
                             previewSize = previewSize,
                             captureSize = state.currentCaptureSize,
                             captureMode = state.captureMode,
-                            modeSwitchCropZoom = modeSwitchCropZoom,
+                            modeSwitchPreviewAspectRatio = modeSwitchPreviewAspectRatio,
                             sensorOrientation = state.getCurrentCameraInfo()?.sensorOrientation
                                 ?: 0,
                             lensFacing = if (activeCameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,

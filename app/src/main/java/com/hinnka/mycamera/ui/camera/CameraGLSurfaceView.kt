@@ -197,9 +197,9 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
-    fun setModeSwitchCropZoom(zoom: Float) {
+    fun setModeSwitchPreviewAspectRatio(aspectRatio: Float) {
         queueEvent {
-            renderer.setModeSwitchCropZoom(zoom)
+            renderer.setModeSwitchPreviewAspectRatio(aspectRatio)
             requestRender()
         }
     }
