@@ -2205,7 +2205,8 @@ fun CameraScreen(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
-                    .padding(top = 56.dp)
+                    // Keep the floating selector below the video top-bar controls.
+                    .padding(top = 112.dp)
             )
         } else {
             SideEffect { videoSettingsGlassBounds = null }
