@@ -14,12 +14,14 @@ import android.provider.Settings
 import android.view.WindowManager
 import android.view.TextureView
 import android.util.Size
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -311,6 +313,7 @@ fun CameraScreen(
     var previewGlBounds by remember { mutableStateOf<Rect?>(null) }
     var settingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var videoSettingsGlassBounds by remember { mutableStateOf<Rect?>(null) }
+    var videoEditGlassBounds by remember { mutableStateOf<Rect?>(null) }
     var cameraGLSurfaceView by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
     var zoomJoystickOpen by remember { mutableStateOf(false) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
@@ -382,20 +385,24 @@ fun CameraScreen(
     LaunchedEffect(
         cameraGLSurfaceView,
         activePanel,
+        state.captureMode,
         settingsGlassBounds,
         videoSettingsGlassBounds,
+        videoEditGlassBounds,
         videoSettingsPanelOpen,
         previewGlBounds,
         cameraMenuBlurRadius,
     ) {
         val glView = cameraGLSurfaceView ?: return@LaunchedEffect
         val preview = previewGlBounds
+        val isVideoEditOpen = activePanel == ActivePanel.EDIT && state.captureMode == CaptureMode.VIDEO
         val panel = when {
             activePanel == ActivePanel.SETTINGS -> settingsGlassBounds
+            isVideoEditOpen -> videoEditGlassBounds
             videoSettingsPanelOpen -> videoSettingsGlassBounds
             else -> null
         }
-        if ((activePanel != ActivePanel.SETTINGS && !videoSettingsPanelOpen) || preview == null || panel == null ||
+        if ((activePanel != ActivePanel.SETTINGS && !isVideoEditOpen && !videoSettingsPanelOpen) || preview == null || panel == null ||
             preview.width <= 0f || preview.height <= 0f || cameraMenuBlurRadius <= 0f
         ) {
             glView.setQuickMenuGlassEffect(enabled = false)
@@ -2377,8 +2384,7 @@ fun CameraScreen(
         val filterPanelBottom = requestedFilterPanelBottom.coerceIn(filterPanelTop, maxHeight)
 
         AnimatedVisibility(
-            activePanel == ActivePanel.FILTERS ||
-                (activePanel == ActivePanel.EDIT && isVideoMode && !state.videoConfig.logProfile.isEnabled),
+            activePanel == ActivePanel.FILTERS,
             enter = if (isXpan) {slideInVertically(initialOffsetY = { it })} else fadeIn(),
             exit = if (isXpan) {slideOutVertically(targetOffsetY = { it })} else fadeOut()
         ) {
@@ -2477,7 +2483,58 @@ fun CameraScreen(
             }
         }
 
-        if (activePanel == ActivePanel.EDIT) {
+        val videoEditPanelMaxHeight = maxHeight * 0.72f
+        val isVideoEditVisible = activePanel == ActivePanel.EDIT && isVideoMode
+        LaunchedEffect(isVideoEditVisible) {
+            if (!isVideoEditVisible) {
+                videoEditGlassBounds = null
+            }
+        }
+        if (isVideoEditVisible) {
+            BackHandler {
+                activePanel = ActivePanel.NONE
+            }
+        }
+        AnimatedVisibility(
+            visible = isVideoEditVisible,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            OppoCameraGlassSurface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    ),
+                transparency = cameraMenuTransparency,
+                blurStrength = cameraMenuBlurRadius,
+                onBoundsChanged = { videoEditGlassBounds = it },
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = videoEditPanelMaxHeight)
+                        .verticalScroll(rememberScrollState())
+                        .navigationBarsPadding()
+                        .padding(top = 6.dp, bottom = 10.dp)
+                ) {
+                    LutEditPanelContent(
+                        lutId = currentLutId,
+                        initialParams = effectiveRecipeParams,
+                        onParamsPreviewChange = { previewRecipeParamsOverride = it },
+                        showEffects = true,
+                        replaceVignetteWithVideoBrightness = true,
+                        videoOnly = true,
+                        transparentGlassSurface = true,
+                    )
+                }
+            }
+        }
+
+        if (activePanel == ActivePanel.EDIT && !isVideoMode) {
             LutEditBottomSheet(
                 lutId = currentLutId,
                 initialParams = effectiveRecipeParams,
