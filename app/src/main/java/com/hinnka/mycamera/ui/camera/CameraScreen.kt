@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
@@ -71,6 +72,10 @@ import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import coil.compose.AsyncImage
+import com.styropyr0.prismal.PrismalBackdrop
+import com.styropyr0.prismal.components.PrismalSegmentedControl
+import com.styropyr0.prismal.sources.prismalGlassLayer
+import com.styropyr0.prismal.sources.rememberPrismalGlassLayer
 import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.theme.accentContentColor
 import com.hinnka.mycamera.MyCameraApplication
@@ -946,7 +951,7 @@ fun CameraScreen(
     ) {
 
         val backgroundPainter = rememberBackgroundPainter(viewModel)
-        val modeSwitcherBackdrop = rememberLiquidGlassBackdrop()
+        val modeSwitcherBackdrop = rememberPrismalGlassLayer()
 
         val isVideoMode = state.captureMode == CaptureMode.VIDEO
         val isPhotoStyleMode = state.captureMode != CaptureMode.VIDEO
@@ -2059,12 +2064,12 @@ fun CameraScreen(
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
-            // Capture only the content behind the bottom controls. The controls stay outside
-            // this layer so the liquid-glass surface cannot sample itself.
+            // Capture only the camera scene behind the bottom controls. The segmented
+            // selector stays outside this layer so its glass lens cannot sample itself.
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .liquidGlassBackdropSource(modeSwitcherBackdrop)
+                    .prismalGlassLayer(modeSwitcherBackdrop)
                     .paint(backgroundPainter, contentScale = ContentScale.Crop)
                     .navigationBarsPadding(),
             ) {
@@ -2675,7 +2680,7 @@ private fun Controls(
     onSwitchCameraClick: () -> Unit,
     onCaptureModeSelected: (CameraShootingMode) -> Unit,
     modeSwitchEnabled: Boolean,
-    modeSwitcherBackdrop: LiquidGlassBackdrop,
+    modeSwitcherBackdrop: PrismalBackdrop,
     onCaptureTap: () -> Unit,
     onGalleryClick: () -> Unit,
     sideControlInset: Dp?,
@@ -3162,26 +3167,27 @@ private fun rememberPhotoCaptureProgress(progress: PhotoCaptureProgress?): State
 @Composable
 private fun CaptureModeSwitcher(
     oppoStyle: Boolean,
-    modeSwitcherBackdrop: LiquidGlassBackdrop,
+    modeSwitcherBackdrop: PrismalBackdrop,
     shootingMode: CameraShootingMode,
     enabled: Boolean,
     onModeSelected: (CameraShootingMode) -> Unit
 ) {
-    BoxWithConstraints(
-        modifier = Modifier
-            .width(171.dp)
-            .height(CameraControlsLayoutDefaults.ModeSwitcherHeight)
-            .clip(if (oppoStyle) RoundedCornerShape(18.dp) else CircleShape)
-            .background(if (oppoStyle) Color(0xFF202020) else Color.White.copy(alpha = 0.13f))
-            .padding(3.dp)
-    ) {
-        // The visible switcher contains only Photo and Video. Pro/RAW capture
-        // internals are preserved but are not exposed as a separate UI mode.
-        val knobWidth = maxWidth / 2
-        val selectedIndex = if (shootingMode == CameraShootingMode.VIDEO) 0 else 1
-        // Snap the selector directly to the chosen mode; do not slide the knob.
-        val knobOffset = knobWidth * selectedIndex
-        if (oppoStyle) {
+    val selectedIndex = if (shootingMode == CameraShootingMode.VIDEO) 0 else 1
+
+    if (oppoStyle) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .width(171.dp)
+                .height(CameraControlsLayoutDefaults.ModeSwitcherHeight)
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color(0xFF202020))
+                .padding(3.dp)
+        ) {
+            // Preserve the existing OPPO-style switcher; only the standard liquid-glass
+            // switcher is replaced by the Prismal segmented-control component.
+            val knobWidth = maxWidth / 2
+            val knobOffset = knobWidth * selectedIndex
+
             Box(
                 modifier = Modifier
                     .offset(x = knobOffset)
@@ -3190,91 +3196,78 @@ private fun CaptureModeSwitcher(
                     .clip(RoundedCornerShape(15.dp))
                     .background(Color(0xFF303030))
             )
-        } else {
-            val liquidGlassStyle = remember {
-                LiquidGlassStyle(
-                    // A nearly clear lens: keep the selected half visibly transparent and refractive.
-                    blurRadius = 0.5.dp,
-                    refractionHeight = 18.dp,
-                    refractionAmount = 16.dp,
-                    saturation = 1.45f,
-                    tint = Color(0x12FFFFFF),
-                    highlightWidth = 0.65.dp,
-                    highlightBlur = 0.4.dp,
-                    highlightAlpha = 0.58f,
-                    fallbackColor = Color(0x18FFFFFF)
-                )
-            }
-            val outerGlassStyle = remember {
-                LiquidGlassStyle(
-                    // Keep the outer track neutral grey; the selected inner half supplies the lens effect.
-                    blurRadius = 8.dp,
-                    refractionHeight = 20.dp,
-                    refractionAmount = 0.dp,
-                    saturation = 1.0f,
-                    tint = Color(0x66707070),
-                    highlightWidth = 0.dp,
-                    highlightBlur = 0.dp,
-                    highlightAlpha = 0f,
-                    fallbackColor = Color(0xCC707070)
-                )
-            }
-            // Capture the rendered grey outer track as a separate backdrop.
-            // The selected inner glass must refract this surface, not the dark camera
-            // scene behind the entire mode switcher.
-            val selectedGlassBackdrop = rememberLiquidGlassBackdrop()
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .liquidGlassBackdropSource(selectedGlassBackdrop)
+
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                LiquidGlassSurface(
-                    backdrop = modeSwitcherBackdrop,
-                    modifier = Modifier.fillMaxSize(),
-                    cornerRadius = 19.5.dp,
-                    style = outerGlassStyle,
-                    enabled = true
-                ) {}
-            }
-            Box(
-                modifier = Modifier
-                    .offset(x = knobOffset)
-                    .width(knobWidth)
-                    .fillMaxHeight()
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.035f))
-                    .border(0.5.dp, Color.White.copy(alpha = 0.18f), CircleShape)
-            ) {
-                LiquidGlassSurface(
-                    backdrop = selectedGlassBackdrop,
-                    modifier = Modifier.fillMaxSize(),
-                    cornerRadius = 19.5.dp,
-                    style = liquidGlassStyle,
-                    enabled = true
-                ) {}
+                ModeSwitcherItem(
+                    label = stringResource(R.string.capture_mode_video).uppercase() +
+                        if (shootingMode == CameraShootingMode.VIDEO) " ▴" else "",
+                    selected = shootingMode == CameraShootingMode.VIDEO,
+                    enabled = enabled,
+                    onClick = { onModeSelected(CameraShootingMode.VIDEO) },
+                    modifier = Modifier.weight(1f),
+                    selectedContentColor = Color(0xFFFF9A32)
+                )
+                ModeSwitcherItem(
+                    label = stringResource(R.string.capture_mode_photo).uppercase() +
+                        if (shootingMode != CameraShootingMode.VIDEO) " ▴" else "",
+                    selected = shootingMode != CameraShootingMode.VIDEO,
+                    enabled = enabled,
+                    onClick = { onModeSelected(CameraShootingMode.PHOTO) },
+                    modifier = Modifier.weight(1f),
+                    selectedContentColor = Color(0xFFFF9A32)
+                )
             }
         }
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically
+    } else {
+        // Use the actual Prismal segmented control (the top component in the reference),
+        // not the bottom-tabs or horizontal-selector component. It provides the springy
+        // selected pill, refractive highlight, tap selection and draggable thumb.
+        Box(
+            modifier = Modifier
+                .width(171.dp)
+                .height(CameraControlsLayoutDefaults.ModeSwitcherHeight)
+                .pointerInput(enabled) {
+                    if (!enabled) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent(PointerEventPass.Initial)
+                                    .changes
+                                    .forEach { it.consume() }
+                            }
+                        }
+                    }
+                },
+            contentAlignment = Alignment.Center
         ) {
-            ModeSwitcherItem(
-                label = stringResource(R.string.capture_mode_video).uppercase() +
-                    if (oppoStyle && shootingMode == CameraShootingMode.VIDEO) " ▴" else "",
-                selected = shootingMode == CameraShootingMode.VIDEO,
-                enabled = enabled,
-                onClick = { onModeSelected(CameraShootingMode.VIDEO) },
-                modifier = Modifier.weight(1f),
-                selectedContentColor = if (oppoStyle) Color(0xFFFF9A32) else Color(0xFFFFD400)
-            )
-            ModeSwitcherItem(
-                label = stringResource(R.string.capture_mode_photo).uppercase() +
-                    if (oppoStyle && shootingMode != CameraShootingMode.VIDEO) " ▴" else "",
-                selected = shootingMode != CameraShootingMode.VIDEO,
-                enabled = enabled,
-                onClick = { onModeSelected(CameraShootingMode.PHOTO) },
-                modifier = Modifier.weight(1f),
-                selectedContentColor = if (oppoStyle) Color(0xFFFF9A32) else Color(0xFFFFD400)
+            PrismalSegmentedControl(
+                labels = listOf(
+                    stringResource(R.string.capture_mode_video).uppercase(),
+                    stringResource(R.string.capture_mode_photo).uppercase()
+                ),
+                selectedIndex = selectedIndex,
+                onSelected = { index ->
+                    if (enabled) {
+                        onModeSelected(
+                            if (index == 0) CameraShootingMode.VIDEO else CameraShootingMode.PHOTO
+                        )
+                    }
+                },
+                backdrop = modeSwitcherBackdrop,
+                modifier = Modifier.fillMaxSize(),
+                textStyle = TextStyle(
+                    fontSize = 14.sp,
+                    lineHeight = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.sp
+                ),
+                textColor = Color.White,
+                trackColor = Color(0xFF787880).copy(alpha = 0.36f),
+                thumbColor = Color.White.copy(alpha = 0.28f),
+                height = CameraControlsLayoutDefaults.ModeSwitcherHeight,
+                hapticFeedback = enabled
             )
         }
     }
