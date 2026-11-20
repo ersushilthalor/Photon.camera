@@ -4127,6 +4127,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val rawNeedsUpdate = useRaw != null &&
             (state.value.useRaw != useRaw || this.useRaw.value != useRaw)
         if (state.value.captureMode == mode && !rawNeedsUpdate) return
+        if (state.value.captureMode != mode) {
+            glSurfaceView?.beginModeSwitch(waitForSessionStart = state.value.isPreviewActive)
+        }
 
         shootingModeSwitchJob = viewModelScope.launch {
             applyCameraFeatureUpdate(

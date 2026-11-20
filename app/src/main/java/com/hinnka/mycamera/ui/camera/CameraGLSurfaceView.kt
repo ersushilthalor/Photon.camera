@@ -128,6 +128,15 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun beginModeSwitch(waitForSessionStart: Boolean) {
+        queueEvent { renderer.beginModeSwitchGeometry(waitForSessionStart) }
+        // A failed or unavailable session callback must not leave source geometry deferred.
+        postDelayed({
+            queueEvent { renderer.finishPendingModeSwitchGeometry() }
+            requestRender()
+        }, 1500L)
+    }
+
     fun markPreviewTransitionStart(
         sessionReconfigureStartedAtElapsedMs: Long,
         modeSwitchTapAtElapsedMs: Long?,

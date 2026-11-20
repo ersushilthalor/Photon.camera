@@ -6,6 +6,7 @@ import android.graphics.PointF
 import android.graphics.SurfaceTexture
 import android.opengl.*
 import android.os.SystemClock
+import android.util.Size
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.livephoto.resolveLivePhotoRotationDegrees
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
@@ -534,6 +535,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var lastCaptureHeight = 0
     private var firstFrameRendered = false
     private var pendingModeSwitchReconfigureStartedAtMs: Long? = null
+    private var modeSwitchGeometryPending = false
+    private var modeSwitchGeometryAwaitingFrame = false
+    private var modeSwitchGeometryBaselineTimestampNs = 0L
+    private var pendingModeSwitchPreviewSize: Size? = null
+    private var pendingModeSwitchStabilizationSize: Size? = null
     private var pendingModeSwitchTapAtMs: Long? = null
 
     /**
@@ -562,6 +568,23 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             quickMenuGlassBlurRadiusPx > 0.01f
     }
 
+    /**
+     * Keep the old frame's source geometry while the mode-specific Camera2 stream is replaced.
+     * The pending geometry is committed atomically with the first frame from the new session.
+     */
+    fun beginModeSwitchGeometry(waitForSessionStart: Boolean) {
+        modeSwitchGeometryPending = true
+        modeSwitchGeometryAwaitingFrame = !waitForSessionStart
+        modeSwitchGeometryBaselineTimestampNs = surfaceTexture?.timestamp ?: currentFrameTimestampNs
+        pendingModeSwitchPreviewSize = null
+        pendingModeSwitchStabilizationSize = null
+        PLog.i(
+            TAG,
+            "Mode-switch geometry deferred: waitForSessionStart=$waitForSessionStart, " +
+                "source=${previewWidth}x${previewHeight}, timestampNs=$modeSwitchGeometryBaselineTimestampNs"
+        )
+    }
+
     /** Called on the GL thread after the old capture session has been retired. */
     fun markPreviewTransitionStart(
         sessionReconfigureStartedAtElapsedMs: Long,
@@ -569,6 +592,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     ) {
         pendingModeSwitchReconfigureStartedAtMs = sessionReconfigureStartedAtElapsedMs
         pendingModeSwitchTapAtMs = modeSwitchTapAtElapsedMs
+        if (modeSwitchGeometryPending) {
+            modeSwitchGeometryBaselineTimestampNs = surfaceTexture?.timestamp ?: currentFrameTimestampNs
+            modeSwitchGeometryAwaitingFrame = true
+        }
         PLog.i(
             TAG,
             "Mode-switch trace armed: sessionStartElapsedRealtimeMs=$sessionReconfigureStartedAtElapsedMs, " +
@@ -1465,14 +1492,16 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     private fun acquireLatestCameraFrame(): Boolean {
         return try {
-            surfaceTexture?.updateTexImage()
-            surfaceTexture?.getTransformMatrix(stMatrix)
+            val texture = surfaceTexture ?: return false
+            texture.updateTexImage()
+            texture.getTransformMatrix(stMatrix)
+            applyPendingModeSwitchGeometryForFrame(texture.timestamp)
             if (previewStabilizationUseCase != null &&
                 !mgcEisPresentationTransform.captureFromOes(stMatrix)
             ) {
                 PLog.w(TAG, "MGC cannot derive a cardinal presentation orientation yet")
             }
-            surfaceTexture != null
+            true
         } catch (error: RuntimeException) {
             PLog.e(
                 TAG,
@@ -2623,16 +2652,26 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
      * 设置预览尺寸
      */
     fun setPreviewSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        surfaceTexture?.setDefaultBufferSize(width, height)
+        if (modeSwitchGeometryPending) {
+            if (previewWidth != width || previewHeight != height) {
+                pendingModeSwitchPreviewSize = Size(width, height)
+            }
+            return
+        }
+        applyPreviewSizeGeometry(width, height)
+    }
+
+    private fun applyPreviewSizeGeometry(width: Int, height: Int) {
         val sizeChanged = previewWidth != width || previewHeight != height
         previewWidth = width
         previewHeight = height
-        surfaceTexture?.setDefaultBufferSize(width, height)
         if (sizeChanged && previewStabilizationUseCase != null) {
             mgcEisHardwareBufferRenderer.release()
             mgcEisYuvRenderer.release()
             recreatePreviewStabilizationSession()
         }
-        // 更新 MVP 矩阵以处理 center crop
         updateMVPMatrix()
         updateCaptureSize()
     }
@@ -2643,6 +2682,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         ) {
             return
         }
+        if (modeSwitchGeometryPending) {
+            pendingModeSwitchStabilizationSize = Size(width, height)
+            return
+        }
+        applyStabilizationInputGeometry(width, height)
+    }
+
+    private fun applyStabilizationInputGeometry(width: Int, height: Int) {
+        if (stabilizationInputWidth == width && stabilizationInputHeight == height) return
         stabilizationInputWidth = width
         stabilizationInputHeight = height
         updateMVPMatrix()
@@ -2651,6 +2699,48 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             mgcEisYuvRenderer.release()
             recreatePreviewStabilizationSession()
         }
+    }
+
+    private fun applyPendingModeSwitchGeometryForFrame(frameTimestampNs: Long) {
+        if (!modeSwitchGeometryPending || !modeSwitchGeometryAwaitingFrame || frameTimestampNs <= 0L) {
+            return
+        }
+        if (modeSwitchGeometryBaselineTimestampNs > 0L &&
+            frameTimestampNs <= modeSwitchGeometryBaselineTimestampNs
+        ) {
+            return
+        }
+        val previewSize = pendingModeSwitchPreviewSize
+        val stabilizationSize = pendingModeSwitchStabilizationSize
+        if (previewSize != null) {
+            applyPreviewSizeGeometry(previewSize.width, previewSize.height)
+        }
+        if (stabilizationSize != null) {
+            applyStabilizationInputGeometry(stabilizationSize.width, stabilizationSize.height)
+        }
+        modeSwitchGeometryPending = false
+        modeSwitchGeometryAwaitingFrame = false
+        pendingModeSwitchPreviewSize = null
+        pendingModeSwitchStabilizationSize = null
+        PLog.i(
+            TAG,
+            "Mode-switch geometry committed on new frame: timestampNs=$frameTimestampNs, " +
+                "preview=${previewWidth}x${previewHeight}, " +
+                "stabilization=${stabilizationInputWidth}x${stabilizationInputHeight}"
+        )
+    }
+
+    fun finishPendingModeSwitchGeometry() {
+        if (!modeSwitchGeometryPending) return
+        pendingModeSwitchPreviewSize?.let { applyPreviewSizeGeometry(it.width, it.height) }
+        pendingModeSwitchStabilizationSize?.let {
+            applyStabilizationInputGeometry(it.width, it.height)
+        }
+        modeSwitchGeometryPending = false
+        modeSwitchGeometryAwaitingFrame = false
+        pendingModeSwitchPreviewSize = null
+        pendingModeSwitchStabilizationSize = null
+        PLog.w(TAG, "Mode-switch geometry fallback applied without a matching preview frame")
     }
 
     fun setStabilizationCoordinator(coordinator: RealtimeStabilizationCoordinator?) {

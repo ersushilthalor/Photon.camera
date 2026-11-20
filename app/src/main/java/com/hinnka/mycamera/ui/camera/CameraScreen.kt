@@ -1070,12 +1070,13 @@ fun CameraScreen(
         )
         val animatedViewfinderTop = animatedViewfinderCenterY - animatedViewfinderHeight / 2
 
-        // Match the viewfinder bounds animation with one isotropic crop in the GL sensor image.
-        // A single zoom factor crops equally from all four edges instead of stretching the frame.
+        // The GL viewport already uses the destination aspect ratio. Counter its extra
+        // center-crop at the start of the transition, then converge to the destination crop.
+        // A single isotropic factor preserves sensor geometry in both switch directions.
         val modeSwitchCropZoom = if (isPhotoVideoModeTransition && cardHeight.value > 0f) {
             val heightRatio = animatedViewfinderHeight.value / cardHeight.value
-            maxOf(heightRatio, 1f / heightRatio.coerceAtLeast(0.0001f))
-                .coerceIn(1f, 1.25f)
+            minOf(heightRatio, 1f / heightRatio.coerceAtLeast(0.0001f))
+                .coerceIn(0.5f, 1f)
         } else {
             1f
         }
