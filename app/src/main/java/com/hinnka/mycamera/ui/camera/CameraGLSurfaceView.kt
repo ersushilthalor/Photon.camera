@@ -161,6 +161,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun setPreviewCameraConfiguration(cameraId: String?, sensorOrientation: Int, lensFacing: Int) {
+        queueEvent {
+            renderer.setPreviewCameraConfiguration(cameraId, sensorOrientation, lensFacing)
+            requestRender()
+        }
+    }
+
     fun setSensorOrientation(orientation: Int) {
         queueEvent {
             renderer.setSensorOrientation(orientation)
