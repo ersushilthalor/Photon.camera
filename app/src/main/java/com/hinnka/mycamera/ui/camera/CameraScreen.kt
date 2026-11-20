@@ -122,7 +122,7 @@ private enum class CameraShootingMode {
 }
 
 private const val PreviewTransitionRevealDurationMillis = 800
-private const val PhotoVideoViewfinderExpansionDurationMillis = 300
+private const val PhotoVideoViewfinderExpansionDurationMillis = 0
 private const val RawCaptureTapDebounceMillis = 1000L
 private const val DefaultShutterSpeedNs = 1_000_000_000f / 60f
 private const val DefaultIso = 100f
