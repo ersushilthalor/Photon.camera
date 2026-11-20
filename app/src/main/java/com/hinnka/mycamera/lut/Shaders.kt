@@ -138,6 +138,16 @@ object Shaders {
         uniform float uBlurRadiusPx;
         uniform float uCornerRadiusPx;
 
+        // A normalized 5-tap Gaussian kernel. Its 2D product gives the same soft,
+        // isotropic diffusion as the OppoCam RenderEffect backdrop blur.
+        const float GAUSSIAN_WEIGHTS[5] = float[](
+            0.0544887,
+            0.2442013,
+            0.4026199,
+            0.2442013,
+            0.0544887
+        );
+
         void main() {
             vec4 original = texture(uCameraTexture, vTexCoord);
             vec2 halfSize = (uGlassRectPx.zw - uGlassRectPx.xy) * 0.5;
@@ -156,24 +166,23 @@ object Shaders {
             float mask = 1.0 - smoothstep(-1.25, 1.25, distanceToRoundedRect);
 
             float radius = clamp(uBlurRadiusPx, 0.0, 160.0);
-            vec2 halfStep = uTexelSize * radius * 0.5;
-            vec2 fullStep = uTexelSize * radius;
+            if (mask <= 0.001 || radius <= 0.01) {
+                fragColor = original;
+                return;
+            }
 
-            vec3 blurred = original.rgb * 0.20;
-            blurred += texture(uCameraTexture, vTexCoord + vec2( halfStep.x, 0.0)).rgb * 0.10;
-            blurred += texture(uCameraTexture, vTexCoord + vec2(-halfStep.x, 0.0)).rgb * 0.10;
-            blurred += texture(uCameraTexture, vTexCoord + vec2(0.0,  halfStep.y)).rgb * 0.10;
-            blurred += texture(uCameraTexture, vTexCoord + vec2(0.0, -halfStep.y)).rgb * 0.10;
-
-            blurred += texture(uCameraTexture, vTexCoord + vec2( fullStep.x, 0.0)).rgb * 0.06;
-            blurred += texture(uCameraTexture, vTexCoord + vec2(-fullStep.x, 0.0)).rgb * 0.06;
-            blurred += texture(uCameraTexture, vTexCoord + vec2(0.0,  fullStep.y)).rgb * 0.06;
-            blurred += texture(uCameraTexture, vTexCoord + vec2(0.0, -fullStep.y)).rgb * 0.06;
-
-            blurred += texture(uCameraTexture, vTexCoord + vec2( halfStep.x,  halfStep.y)).rgb * 0.04;
-            blurred += texture(uCameraTexture, vTexCoord + vec2(-halfStep.x,  halfStep.y)).rgb * 0.04;
-            blurred += texture(uCameraTexture, vTexCoord + vec2( halfStep.x, -halfStep.y)).rgb * 0.04;
-            blurred += texture(uCameraTexture, vTexCoord + vec2(-halfStep.x, -halfStep.y)).rgb * 0.04;
+            // Blur strength is already mapped using OppoCam's 2.2x factor by CameraScreen.
+            // Samples stay on the existing camera texture; no second stream or readback is used.
+            vec2 sampleStep = uTexelSize * radius;
+            vec3 blurred = vec3(0.0);
+            for (int y = -2; y <= 2; ++y) {
+                float wy = GAUSSIAN_WEIGHTS[y + 2];
+                for (int x = -2; x <= 2; ++x) {
+                    float weight = wy * GAUSSIAN_WEIGHTS[x + 2];
+                    vec2 offset = vec2(float(x), float(y)) * sampleStep;
+                    blurred += texture(uCameraTexture, vTexCoord + offset).rgb * weight;
+                }
+            }
 
             fragColor = vec4(mix(original.rgb, blurred, mask), original.a);
         }
