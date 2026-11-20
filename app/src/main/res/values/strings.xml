@@ -626,7 +626,7 @@
     <string name="log_download_failed">Failed to download logs</string>
 
     <!-- Filter/Frame Management -->
-    <string name="settings_section_management">Content Management</string>
+    <string name="settings_section_management">Edit</string>
     <string name="settings_filter_management">LUT Manage</string>
     <string name="settings_filter_management_description">Manage LUTs, set default, reorder</string>
     <string name="settings_frame_management">Frame Manage</string>
