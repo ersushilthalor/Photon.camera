@@ -28,6 +28,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import com.hinnka.mycamera.raw.RawEnginePreviewPlan
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.abs
@@ -250,12 +251,16 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     // Primary Camera2 preview input.
     private var surfaceTexture: SurfaceTexture? = null
-    private val frameAvailable = AtomicBoolean(false)
+    private val frameAvailableGeneration = AtomicLong(-1L)
     private var stabilizationCoordinator: RealtimeStabilizationCoordinator? = null
     @Volatile
     private var stabilizationSession: RealtimeStabilizationCoordinator.Session? = null
     @Volatile
     private var stabilizationSessionStarted = false
+    @Volatile
+    private var stabilizationSessionGeneration = 0L
+    @Volatile
+    private var pendingPresentationCaptureGeneration = -1L
     @Volatile
     private var stabilizationOutputAvailable = false
     private var previewStabilizationUseCase: StabilizationUseCase? = null
@@ -512,11 +517,21 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var previewHeight: Int = 1080
     private var stabilizationInputWidth: Int = 1920
     private var stabilizationInputHeight: Int = 1080
+    @Volatile
     private var sensorOrientation: Int = 0
     private var previewOrientationOffset: Int = 0
     private var calibrationOffset: Int = 0
     private var deviceRotation: Int = 0
+    @Volatile
     private var lensFacing: Int = 1 // CameraCharacteristics.LENS_FACING_BACK
+    private val previewCameraKeyTracker = MgcEisCameraKeyTracker(
+        initialKey = MgcEisCameraKey(sensorOrientation, lensFacing),
+        presentationTransform = mgcEisPresentationTransform,
+    )
+    private val cameraGeneration: Long
+        get() = previewCameraKeyTracker.generation
+    @Volatile
+    private var currentCameraId: String? = null
 
     // 回调
     var onSurfaceTextureAvailable: ((SurfaceTexture) -> Unit)? = null
@@ -633,11 +648,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         cameraTextureId = GlUtils.createOESTexture()
 
         // Create the primary camera SurfaceTexture.
-        frameAvailable.set(false)
+        frameAvailableGeneration.set(-1L)
         surfaceTexture = SurfaceTexture(cameraTextureId).apply {
             setDefaultBufferSize(previewWidth, previewHeight)
             setOnFrameAvailableListener {
-                frameAvailable.set(true)
+                // Bind this callback to the camera stream that was active when the frame arrived.
+                frameAvailableGeneration.set(cameraGeneration)
                 if (previewStabilizationUseCase == null ||
                     stabilizationCoordinator?.isCurrentCameraSupported != true ||
                     !stabilizationOutputAvailable
@@ -1105,6 +1121,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     /**
      * 绘制帧
      */
+    @Synchronized
     override fun onDrawFrame(gl: GL10?) {
         if (renderingPaused) return
         if (viewportWidth <= 0 || viewportHeight <= 0) return
@@ -1120,47 +1137,82 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (delayedStabilizationEnabled && !stabilizationSessionStarted) {
             stabilizationSessionStarted = stabilizationSession?.start() == true
         }
-        val oesFrameUpdated = frameAvailable.getAndSet(false) && acquireLatestCameraFrame()
+        val cameraFrameGeneration = cameraGeneration
+        val oesFrameGeneration = frameAvailableGeneration.getAndSet(-1L)
+        val oesFrameUpdated = oesFrameGeneration >= 0L &&
+            acquireLatestCameraFrame(
+                delayedStabilizationEnabled = delayedStabilizationEnabled,
+                frameGeneration = oesFrameGeneration,
+                expectedGeneration = cameraFrameGeneration,
+            )
         var cameraFrameUpdated = oesFrameUpdated
 
         if (delayedStabilizationEnabled) {
             val session = stabilizationSession
-            if (!stabilizationSessionStarted) {
-                stabilizationSessionStarted = session?.start() == true
-            }
-            if (stabilizationSessionStarted) {
-                val completedFrame = if (previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
-                    livePhotoRecorder == null
-                ) {
-                    session?.dequeueLatestFrame()
-                } else {
-                    session?.dequeueFrame()
+            val sessionGeneration = stabilizationSessionGeneration
+            if (session != null &&
+                sessionGeneration == cameraFrameGeneration &&
+                cameraGeneration == cameraFrameGeneration
+            ) {
+                if (!stabilizationSessionStarted) {
+                    stabilizationSessionStarted = session.start()
                 }
-                if (completedFrame != null) {
-                    val holdPreviousPhotoPreviewFrame =
-                        previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
-                            completedFrame.transform == null &&
-                            currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D
-                    if (holdPreviousPhotoPreviewFrame) {
-                        // A dropped photo-preview frame has no pose. Showing it with an identity
-                        // transform would make the view jump for one frame; retain the last fully
-                        // stabilized texture until a frame with matching metadata is available.
-                        completedFrame.image.close()
+                if (stabilizationSessionStarted) {
+                    val completedFrame = if (previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
+                        livePhotoRecorder == null
+                    ) {
+                        session.dequeueLatestFrame()
                     } else {
-                        renderMgcEisFrame(completedFrame)?.let { rendered ->
-                            currentCameraTextureSource = PreviewColorTextureSource.TEXTURE_2D
-                            stabilizationOutputAvailable = true
-                            currentCameraTextureTarget = GLES30.GL_TEXTURE_2D
-                            currentCameraTextureId = rendered.textureId
-                            currentCameraTextureMatrix = mgcEisPresentationTransform.matrix
-                            currentFrameTimestampNs = rendered.timestampNs
-                            cameraFrameUpdated = true
+                        session.dequeueFrame()
+                    }
+                    if (completedFrame != null) {
+                        val isCurrentGeneration = cameraGeneration == cameraFrameGeneration &&
+                            stabilizationSessionGeneration == sessionGeneration &&
+                            stabilizationSession === session
+                        if (!isCurrentGeneration) {
+                            // A session may finish a queued frame just as the active camera changes.
+                            // Never pass that old camera's image or pose into the new preview.
+                            completedFrame.image.close()
+                            PLog.d(
+                                TAG,
+                                "Discarded stale stabilization frame: frameGeneration=$sessionGeneration, " +
+                                    "activeGeneration=$cameraGeneration",
+                            )
+                        } else {
+                            val holdPreviousPhotoPreviewFrame =
+                                previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
+                                    completedFrame.transform == null &&
+                                    currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D
+                            if (holdPreviousPhotoPreviewFrame) {
+                                // A dropped photo-preview frame has no pose. Showing it with an identity
+                                // transform would make the view jump for one frame; retain the last fully
+                                // stabilized texture until a frame with matching metadata is available.
+                                completedFrame.image.close()
+                            } else {
+                                renderMgcEisFrame(completedFrame)?.let { rendered ->
+                                    currentCameraTextureSource = PreviewColorTextureSource.TEXTURE_2D
+                                    stabilizationOutputAvailable = true
+                                    currentCameraTextureTarget = GLES30.GL_TEXTURE_2D
+                                    currentCameraTextureId = rendered.textureId
+                                    currentCameraTextureMatrix = mgcEisPresentationTransform.matrix
+                                    currentFrameTimestampNs = rendered.timestampNs
+                                    cameraFrameUpdated = true
+                                }
+                            }
                         }
                     }
+                    if (session.pendingResultCount() > 0 &&
+                        cameraGeneration == cameraFrameGeneration
+                    ) {
+                        onRequestRender?.invoke()
+                    }
                 }
-                if ((session?.pendingResultCount() ?: 0) > 0) {
-                    onRequestRender?.invoke()
-                }
+            } else if (session != null) {
+                PLog.d(
+                    TAG,
+                    "Skipped stabilization session from stale camera generation: " +
+                        "sessionGeneration=$sessionGeneration, activeGeneration=$cameraGeneration",
+                )
             }
             if (currentCameraTextureSource != PreviewColorTextureSource.TEXTURE_2D) {
                 // Keep showing the real Camera2 preview while EIS+ waits for its first
@@ -1518,16 +1570,42 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         currentFrameTimestampNs = surfaceTexture?.timestamp ?: 0L
     }
 
-    private fun acquireLatestCameraFrame(): Boolean {
+    private fun acquireLatestCameraFrame(
+        delayedStabilizationEnabled: Boolean,
+        frameGeneration: Long,
+        expectedGeneration: Long,
+    ): Boolean {
+        if (frameGeneration != expectedGeneration || frameGeneration != cameraGeneration) {
+            PLog.d(
+                TAG,
+                "Discarded stale OES frame: frameGeneration=$frameGeneration, activeGeneration=$cameraGeneration",
+            )
+            return false
+        }
         return try {
             val texture = surfaceTexture ?: return false
             texture.updateTexImage()
+            // A camera switch can invalidate this callback while updateTexImage is in flight.
+            if (frameGeneration != cameraGeneration) return false
             texture.getTransformMatrix(stMatrix)
             applyPendingModeSwitchGeometryForFrame(texture.timestamp)
-            if (previewStabilizationUseCase != null &&
-                !mgcEisPresentationTransform.captureFromOes(stMatrix)
+            if (delayedStabilizationEnabled &&
+                frameGeneration == pendingPresentationCaptureGeneration &&
+                frameGeneration == cameraGeneration
             ) {
-                PLog.w(TAG, "MGC cannot derive a cardinal presentation orientation yet")
+                if (mgcEisPresentationTransform.captureFromOes(stMatrix)) {
+                    pendingPresentationCaptureGeneration = -1L
+                    PLog.d(
+                        TAG,
+                        "Captured first OES presentation transform: cameraId=${currentCameraId ?: "unknown"}, " +
+                            "lensFacing=$lensFacing, sensorOrientation=$sensorOrientation, " +
+                            "stMatrix=${previewMatrixSummary(stMatrix)}, " +
+                            "capturedMatrix=${previewMatrixSummary(mgcEisPresentationTransform.matrix)}, " +
+                            "textureSource=$currentCameraTextureSource, generation=$frameGeneration",
+                    )
+                } else {
+                    PLog.w(TAG, "MGC cannot derive a cardinal presentation orientation yet")
+                }
             }
             true
         } catch (error: RuntimeException) {
@@ -2982,10 +3060,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         recreatePreviewStabilizationSession()
     }
 
-    private fun recreatePreviewStabilizationSession() {
+    private fun recreatePreviewStabilizationSession(resetPresentationTransform: Boolean = true) {
+        val sessionGeneration = cameraGeneration
         stabilizationSession?.stop()
         stabilizationOutputAvailable = false
-        mgcEisPresentationTransform.reset()
+        if (resetPresentationTransform) {
+            mgcEisPresentationTransform.reset()
+        }
+        pendingPresentationCaptureGeneration = sessionGeneration
+        stabilizationSessionGeneration = sessionGeneration
         stabilizationSession = previewStabilizationUseCase?.let { useCase ->
             stabilizationCoordinator?.createSession(
                 useCase = useCase,
@@ -2993,7 +3076,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 frameWidth = stabilizationInputWidth,
                 frameHeight = stabilizationInputHeight,
                 lookaheadFrames = previewStabilizationLookahead,
-                onFrameAvailable = { onRequestRender?.invoke() },
+                onFrameAvailable = {
+                    if (cameraGeneration == sessionGeneration) {
+                        onRequestRender?.invoke()
+                    }
+                },
             )
         }
         stabilizationSessionStarted = stabilizationSession?.start() == true
@@ -3047,14 +3134,50 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     /**
+     * Supplies the Camera2 ID used in camera-switch diagnostics.
+     */
+    fun setCameraId(cameraId: String?) {
+        currentCameraId = cameraId?.takeIf { it.isNotBlank() }
+    }
+
+    /**
      * 设置传感器方向 (硬件属性)
      */
+    @Synchronized
     fun setSensorOrientation(orientation: Int) {
         if (sensorOrientation != orientation) {
             sensorOrientation = orientation
+            handlePreviewCameraKeyChange()
             updateMVPMatrix()
             updateCaptureSize()
         }
+    }
+
+    private fun handlePreviewCameraKeyChange() {
+        val nextKey = MgcEisCameraKey(sensorOrientation, lensFacing)
+        val capturedMatrixBeforeReset = mgcEisPresentationTransform.matrix.copyOf()
+        if (!previewCameraKeyTracker.update(nextKey)) return
+
+        val generation = cameraGeneration
+        frameAvailableGeneration.set(-1L)
+        stabilizationOutputAvailable = false
+        pendingPresentationCaptureGeneration = generation
+        recreatePreviewStabilizationSession(resetPresentationTransform = false)
+
+        PLog.d(
+            TAG,
+            "Preview camera switch: cameraId=${currentCameraId ?: "unknown"}, " +
+                "lensFacing=$lensFacing, sensorOrientation=$sensorOrientation, " +
+                "generation=$generation, stMatrix=${previewMatrixSummary(stMatrix)}, " +
+                "capturedMatrixBeforeReset=${previewMatrixSummary(capturedMatrixBeforeReset)}, " +
+                "capturedMatrixAfterReset=${previewMatrixSummary(mgcEisPresentationTransform.matrix)}, " +
+                "textureSource=$currentCameraTextureSource",
+        )
+    }
+
+    private fun previewMatrixSummary(matrix: FloatArray): String {
+        if (matrix.size < 16) return "invalid"
+        return "[${matrix[0]}, ${matrix[1]}, ${matrix[4]}, ${matrix[5]}, ${matrix[12]}, ${matrix[13]}]"
     }
 
     /**
@@ -3094,9 +3217,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     /**
      * 设置镜头朝向
      */
+    @Synchronized
     fun setLensFacing(facing: Int) {
         if (lensFacing != facing) {
             lensFacing = facing
+            handlePreviewCameraKeyChange()
             updateMVPMatrix()
             updateCaptureSize()
         }
@@ -3899,7 +4024,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         // Release the Camera2 preview SurfaceTexture.
         surfaceTexture?.release()
         surfaceTexture = null
-        frameAvailable.set(false)
+        frameAvailableGeneration.set(-1L)
 
         // 重置状态
         surfaceReady = false
