@@ -125,6 +125,10 @@ object Shaders {
      * Live camera quick-menu glass. This is a display-only pass over the existing preview
      * texture (no second camera stream and no CPU bitmap readback).
      */
+    /**
+     * Final live-menu glass composite. The blurred backdrop is produced by two
+     * separable Gaussian GPU passes from the same camera frame.
+     */
     val FRAGMENT_SHADER_QUICK_MENU_GLASS = """
         #version 300 es
         precision highp float;
@@ -133,23 +137,14 @@ object Shaders {
         out vec4 fragColor;
 
         uniform sampler2D uCameraTexture;
-        uniform vec2 uTexelSize;
+        uniform sampler2D uBlurredTexture;
         uniform vec4 uGlassRectPx; // left, bottom, right, top in GL viewport pixels
-        uniform float uBlurRadiusPx;
         uniform float uCornerRadiusPx;
-
-        // A normalized 5-tap Gaussian kernel. Its 2D product gives the same soft,
-        // isotropic diffusion as the OppoCam RenderEffect backdrop blur.
-        const float GAUSSIAN_WEIGHTS[5] = float[](
-            0.0544887,
-            0.2442013,
-            0.4026199,
-            0.2442013,
-            0.0544887
-        );
 
         void main() {
             vec4 original = texture(uCameraTexture, vTexCoord);
+            vec4 blurred = texture(uBlurredTexture, vTexCoord);
+
             vec2 halfSize = (uGlassRectPx.zw - uGlassRectPx.xy) * 0.5;
             vec2 center = (uGlassRectPx.xy + uGlassRectPx.zw) * 0.5;
             vec2 point = gl_FragCoord.xy - center;
@@ -165,26 +160,53 @@ object Shaders {
                 cornerRadius;
             float mask = 1.0 - smoothstep(-1.25, 1.25, distanceToRoundedRect);
 
-            float radius = clamp(uBlurRadiusPx, 0.0, 160.0);
-            if (mask <= 0.001 || radius <= 0.01) {
-                fragColor = original;
-                return;
+            fragColor = vec4(mix(original.rgb, blurred.rgb, mask), original.a);
+        }
+    """.trimIndent()
+
+    /**
+     * One axis of a normalized 9-tap Gaussian blur. Pair offsets use bilinear
+     * filtering to combine adjacent taps, reducing the pass to nine texture reads.
+     * Run once horizontally and once vertically on the same GL camera frame.
+     */
+    val FRAGMENT_SHADER_QUICK_MENU_GAUSSIAN = """
+        #version 300 es
+        precision highp float;
+
+        in vec2 vTexCoord;
+        out vec4 fragColor;
+
+        uniform sampler2D uInputTexture;
+        uniform vec2 uTexelSize;
+        uniform vec2 uDirection;
+        uniform float uBlurRadiusPx;
+
+        const float WEIGHTS[5] = float[](
+            0.2270270270,
+            0.1945945946,
+            0.1216216216,
+            0.0540540541,
+            0.0162162162
+        );
+        const float OFFSETS[4] = float[](
+            1.3846153846,
+            3.2307692308,
+            5.0769230769,
+            6.9230769231
+        );
+
+        void main() {
+            float radius = max(uBlurRadiusPx, 0.0) / 3.0;
+            vec2 stepVector = uTexelSize * uDirection * radius;
+            vec4 result = texture(uInputTexture, vTexCoord) * WEIGHTS[0];
+
+            for (int i = 0; i < 4; ++i) {
+                vec2 offset = stepVector * OFFSETS[i];
+                result += texture(uInputTexture, vTexCoord + offset) * WEIGHTS[i + 1];
+                result += texture(uInputTexture, vTexCoord - offset) * WEIGHTS[i + 1];
             }
 
-            // Blur strength is already mapped using OppoCam's 2.2x factor by CameraScreen.
-            // Samples stay on the existing camera texture; no second stream or readback is used.
-            vec2 sampleStep = uTexelSize * radius;
-            vec3 blurred = vec3(0.0);
-            for (int y = -2; y <= 2; ++y) {
-                float wy = GAUSSIAN_WEIGHTS[y + 2];
-                for (int x = -2; x <= 2; ++x) {
-                    float weight = wy * GAUSSIAN_WEIGHTS[x + 2];
-                    vec2 offset = vec2(float(x), float(y)) * sampleStep;
-                    blurred += texture(uCameraTexture, vTexCoord + offset).rgb * weight;
-                }
-            }
-
-            fragColor = vec4(mix(original.rgb, blurred, mask), original.a);
+            fragColor = result;
         }
     """.trimIndent()
 
