@@ -2038,9 +2038,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var multipleExposureState by mutableStateOf(MultipleExposureSessionState())
         private set
 
-    private var burstSettings: CaptureSettingsSnapshot? = null
+    @Volatile private var burstSettings: CaptureSettingsSnapshot? = null
     private var livePhotoIndicatorJob: Job? = null
-    private var burstPhotoId: String? = null
+    @Volatile private var burstPhotoId: String? = null
     var burstImageCount by mutableStateOf(0)
         private set
 
@@ -2164,6 +2164,49 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     }
                     _imageSavedEvent.emit(photoId)
+                }
+            }
+        }
+        cameraController.onBurstJpegCaptured = { frame, captureInfo ->
+            val photoId = burstPhotoId
+            val settings = burstSettings
+            if (photoId != null && settings != null) {
+                burstImageCount = maxOf(burstImageCount, frame.frameIndex)
+                CaptureProcessingQueue.enqueue(emptyList()) {
+                    val context = getApplication<Application>()
+                    if (GalleryManager.loadMetadata(context, photoId) == null) {
+                        prepareBurst(
+                            context = context,
+                            photoId = photoId,
+                            imageWidth = frame.width,
+                            imageHeight = frame.height,
+                            isRawCapture = false,
+                            captureInfo = captureInfo,
+                            settings = settings,
+                        )
+                    }
+                    GalleryManager.saveBurstJpegPhoto(
+                        context = context,
+                        photoId = photoId,
+                        jpegBytes = frame.jpegBytes,
+                        frameIndex = frame.frameIndex,
+                        timestampMs = frame.timestampMs,
+                        shouldAutoSave = settings.preferences.autoSaveAfterCapture,
+                        photoProcessor = contentRepository.photoProcessor,
+                        photoQuality = settings.preferences.photoQuality,
+                    )
+                    _imageSavedEvent.emit(photoId)
+                }
+            }
+        }
+        cameraController.onBurstCaptureCompleted = {
+            val completedPhotoId = burstPhotoId
+            CaptureProcessingQueue.enqueue(emptyList()) {
+                if (completedPhotoId != null) _imageSavedEvent.emit(completedPhotoId)
+                if (burstPhotoId == completedPhotoId) {
+                    burstPhotoId = null
+                    burstSettings = null
+                    burstImageCount = 0
                 }
             }
         }
@@ -3865,10 +3908,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun stopContinuousCapture() {
         if (state.value.useRaw && state.value.isRawSupported) return
+        val usesOppoContinuousPath =
+            cameraController.isOppoBurstCaptureInProgress || cameraController.isOppoContinuousBurstAvailable
         cameraController.stopBurstCapture()
         shutterSoundPlayer.stopBurst()
-        viewModelScope.launch {
-            _imageSavedEvent.emit(burstPhotoId)
+        if (!usesOppoContinuousPath) {
+            viewModelScope.launch {
+                _imageSavedEvent.emit(burstPhotoId)
+            }
         }
     }
 
@@ -7093,13 +7140,36 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    private suspend fun prepareBurst(context: Context, photoId: String, image: SafeImage, captureInfo: CaptureInfo, settings: CaptureSettingsSnapshot) {
+    private suspend fun prepareBurst(
+        context: Context,
+        photoId: String,
+        image: SafeImage,
+        captureInfo: CaptureInfo,
+        settings: CaptureSettingsSnapshot,
+    ) = prepareBurst(
+        context = context,
+        photoId = photoId,
+        imageWidth = image.width,
+        imageHeight = image.height,
+        isRawCapture = isRawCaptureFormat(image.format),
+        captureInfo = captureInfo,
+        settings = settings,
+    )
+
+    private suspend fun prepareBurst(
+        context: Context,
+        photoId: String,
+        imageWidth: Int,
+        imageHeight: Int,
+        isRawCapture: Boolean,
+        captureInfo: CaptureInfo,
+        settings: CaptureSettingsSnapshot,
+    ) {
         // 保存当前配置信息
         val lutIdToSave = settings.lutId
         val aspectRatio = settings.state.aspectRatio
         val frameIdToSave = settings.frameId
         val userPrefs: UserPreferences? = settings.preferences
-        val isRawCapture = isRawCaptureFormat(image.format)
         val sharpeningValue = resolveCaptureSharpening(
             isRawCapture = isRawCapture,
             userPrefs = userPrefs,
@@ -7194,8 +7264,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
             spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
             spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
-            width = image.width,
-            height = image.height,
+            width = imageWidth,
+            height = imageHeight,
             ratio = aspectRatio,
             rotation = rotation,
             deviceModel = DeviceUtil.model,

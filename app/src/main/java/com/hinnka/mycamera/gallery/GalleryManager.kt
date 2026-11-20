@@ -4767,6 +4767,94 @@ object GalleryManager {
         360,
     )
 
+    /**
+     * Saves an OppoCam-style pre-encoded YUV burst frame into Photon's existing burst album.
+     * The first captured frame remains the main photo; later frames are kept as selectable
+     * burst members without re-running the normal still-capture pipeline.
+     */
+    suspend fun saveBurstJpegPhoto(
+        context: Context,
+        photoId: String,
+        jpegBytes: ByteArray,
+        frameIndex: Int,
+        timestampMs: Long,
+        shouldAutoSave: Boolean = true,
+        photoProcessor: PhotoProcessor,
+        photoQuality: Int = 95,
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val photoDir = getPhotoDir(context, photoId, true)
+            val mainPhotoFile = File(photoDir, PHOTO_FILE)
+            val burstDir = File(photoDir, BURST_DIR)
+            if (!burstDir.exists() && !burstDir.mkdirs()) {
+                throw IOException("Unable to create burst directory: ${burstDir.absolutePath}")
+            }
+            val metadata = loadMetadata(context, photoId) ?: return@withContext
+            val safeIndex = frameIndex.coerceAtLeast(1)
+            val photoFile = File(
+                burstDir,
+                "${timestampMs}_${safeIndex.toString().padStart(5, '0')}.jpg",
+            )
+
+            val needsTransform = metadata.rotation % 360 != 0 || metadata.isMirrored
+            val encodedBytes = if (needsTransform) {
+                val source = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+                if (source != null) {
+                    val matrix = Matrix().apply {
+                        if (metadata.rotation % 360 != 0) postRotate(metadata.rotation.toFloat())
+                        if (metadata.isMirrored) postScale(-1f, 1f)
+                    }
+                    val transformed = Bitmap.createBitmap(
+                        source, 0, 0, source.width, source.height, matrix, true,
+                    )
+                    val output = java.io.ByteArrayOutputStream()
+                    transformed.compress(
+                        Bitmap.CompressFormat.JPEG,
+                        95,
+                        output,
+                    )
+                    if (transformed !== source) source.recycle()
+                    transformed.recycle()
+                    output.toByteArray()
+                } else {
+                    jpegBytes
+                }
+            } else {
+                jpegBytes
+            }
+
+            FileOutputStream(photoFile).use { output ->
+                output.write(encodedBytes)
+                output.flush()
+            }
+            photoFile.setLastModified(timestampMs)
+
+            // Worker completion order can differ from capture order. Never let a later
+            // frame permanently replace frame 1 as the burst cover.
+            val shouldUpdateMain = safeIndex == 1 || !mainPhotoFile.exists() || mainPhotoFile.length() == 0L
+            if (shouldUpdateMain) {
+                photoFile.copyTo(mainPhotoFile, overwrite = true)
+                mainPhotoFile.setLastModified(timestampMs)
+                updateThumbnail(context, photoId, photoProcessor, metadata)
+                if (shouldAutoSave) {
+                    exportPhoto(
+                        context,
+                        photoId,
+                        null,
+                        photoProcessor,
+                        metadata,
+                        metadata.sharpening ?: 0f,
+                        metadata.noiseReduction ?: 0f,
+                        metadata.chromaNoiseReduction ?: 0f,
+                        photoQuality,
+                    )
+                }
+            }
+        } catch (error: Exception) {
+            PLog.e(TAG, "Failed to save encoded burst frame: photoId=$photoId index=$frameIndex", error)
+        }
+    }
+
     suspend fun saveBitmapBurstPhoto(
         context: Context,
         photoId: String,

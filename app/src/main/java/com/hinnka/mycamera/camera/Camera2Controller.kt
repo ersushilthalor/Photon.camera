@@ -352,6 +352,10 @@ class Camera2Controller(private val context: Context) {
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
     private val burstGyroRecorder = BurstGyroRecorder(context)
+    private val oppoContinuousBurstEngine = OppoContinuousBurstEngine(::dispatchOppoBurstJpegFrame)
+    @Volatile private var isOppoBurstYuvSession = false
+    private var burstCaptureStateSnapshot: CameraState? = null
+    private var burstCaptureCharacteristics: CameraCharacteristics? = null
 
     private val cameraCharacteristicsCache = ConcurrentHashMap<String, CameraCharacteristics>()
     private var cachedCharacteristics: CameraCharacteristics? = null
@@ -592,6 +596,11 @@ class Camera2Controller(private val context: Context) {
 
     // 图片拍摄回调（携带 CaptureInfo, CameraCharacteristics 和 CaptureResult 用于 RAW 处理）
     var onImageCaptured: ((SafeImage, CaptureInfo, CameraCharacteristics?, CaptureResult?, CapturedFrameMetadata?) -> Unit)? = null
+    var onBurstJpegCaptured: ((OppoBurstJpegFrame, CaptureInfo) -> Unit)? = null
+    var onBurstCaptureCompleted: (() -> Unit)? = null
+    val isOppoBurstCaptureInProgress: Boolean get() = isOppoBurstYuvSession
+    val isOppoContinuousBurstAvailable: Boolean
+        get() = imageReader?.imageFormat == ImageFormat.YUV_420_888 && !_state.value.useRaw
     var onPhotoCaptureReady: ((CapturedPhoto) -> Unit)? = null
     var onPhotoCaptureCompleted: ((Long, CaptureInfo) -> Unit)? = null
     var onPhotoCaptureFailed: ((Long) -> Unit)? = null
@@ -2213,6 +2222,10 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun clearCameraSessionState(reason: String, closeImageReader: Boolean = true) {
+        if (isOppoBurstYuvSession || oppoContinuousBurstEngine.isActive()) {
+            oppoContinuousBurstEngine.stop()
+        }
+        // Keep the reader in drain mode until all accepted workers and trailing HAL buffers finish.
         burstCapturing = false
         _state.update { it.copy(burstCapturing = false) }
         photoCaptures.values.toList().forEach {
@@ -3237,6 +3250,19 @@ class Camera2Controller(private val context: Context) {
                     readerMaxImages
                 ).apply {
                     setOnImageAvailableListener({ reader ->
+                        if (isOppoBurstYuvSession) {
+                            if (oppoContinuousBurstEngine.isActive()) {
+                                oppoContinuousBurstEngine.onImageAvailable(reader)
+                            } else {
+                                // The repeating target has been detached; drain any trailing HAL buffers.
+                                try {
+                                    reader.acquireLatestImage()?.close()
+                                } catch (error: Exception) {
+                                    PLog.w(TAG, "Unable to drain trailing burst frame: ${error.message}")
+                                }
+                            }
+                            return@setOnImageAvailableListener
+                        }
                         try {
                             while (canAcquireImage("Too many open images")) {
                                 val image = trackImage(reader.acquireNextImage()) ?: break
@@ -11268,6 +11294,7 @@ class Camera2Controller(private val context: Context) {
             closeCamera()
         }
         burstGyroRecorder.release()
+        oppoContinuousBurstEngine.release()
         videoRecorder.release()
         spatialVideoRecorder.release()
         stopBackgroundThread()
@@ -11321,6 +11348,136 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private fun dispatchOppoBurstJpegFrame(frame: OppoBurstJpegFrame) {
+        val captureState = burstCaptureStateSnapshot ?: _state.value
+        val captureInfo = rebuildCaptureInfo(
+            result = lastCaptureResult,
+            imageWidth = frame.width,
+            imageHeight = frame.height,
+            latitude = captureState.latitude,
+            longitude = captureState.longitude,
+            effectiveCharacteristics = burstCaptureCharacteristics,
+            captureState = captureState,
+            captureTime = frame.timestampMs,
+            exposureCompensationStep = captureState.getExposureCompensationStep(),
+        )
+        try {
+            onBurstJpegCaptured?.invoke(frame, captureInfo)
+        } catch (error: Exception) {
+            PLog.e(TAG, "Burst JPEG delivery failed: frame=${frame.frameIndex}", error)
+        }
+    }
+
+    private fun finishOppoContinuousBurst() {
+        val finish = {
+            // The workers are drained. Drop final HAL buffers before ordinary still pairing resumes.
+            try {
+                imageReader?.acquireLatestImage()?.close()
+            } catch (error: Exception) {
+                PLog.w(TAG, "Final burst reader drain failed: ${error.message}")
+            }
+            isOppoBurstYuvSession = false
+            burstCaptureStateSnapshot = null
+            burstCaptureCharacteristics = null
+            burstCapturing = false
+            _state.update { it.copy(burstCapturing = false, isCapturing = false) }
+            try {
+                onBurstCaptureCompleted?.invoke()
+            } catch (error: Exception) {
+                PLog.e(TAG, "Burst completion notification failed", error)
+            }
+        }
+        val handler = cameraHandler
+        if (handler != null) {
+            // Keep draining any callbacks already queued by ImageReader after the repeating target is removed.
+            handler.postDelayed({ finish() }, 120L)
+        } else {
+            finish()
+        }
+    }
+
+    private fun startOppoContinuousBurstCapture(
+        session: CameraCaptureSession,
+        builder: CaptureRequest.Builder,
+        reader: ImageReader,
+        onAccepted: (() -> Unit)?,
+    ) {
+        if (isOppoBurstYuvSession || oppoContinuousBurstEngine.isActive()) return
+        if (_state.value.isCapturing || photoCaptures.values.any { it.continuousBurst }) return
+
+        val captureState = _state.value.copy(burstCapturing = true, isCapturing = true)
+        burstCaptureStateSnapshot = captureState
+        burstCaptureCharacteristics = activeOutputPhysicalCameraId
+            ?.let { getCameraCharacteristicsOrNull(it, "burst capture snapshot") }
+            ?: getActiveOpenCameraCharacteristics()
+        livePhotoVideoStartTimestampUs = null
+        burstCapturing = true
+        isOppoBurstYuvSession = true
+        _state.update { it.copy(burstCapturing = true, isCapturing = true) }
+
+        if (!oppoContinuousBurstEngine.start(fastShutterTargetFps) {
+                finishOppoContinuousBurst()
+            }
+        ) {
+            isOppoBurstYuvSession = false
+            burstCapturing = false
+            burstCaptureStateSnapshot = null
+            burstCaptureCharacteristics = null
+            _state.update { it.copy(burstCapturing = false, isCapturing = false) }
+            return
+        }
+
+        try {
+            // The YUV ImageReader is already part of this Camera2 session. Attaching it to the
+            // repeating preview request produces real sensor frames without repeated still captures.
+            builder.addTarget(reader.surface)
+            session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            onAccepted?.invoke()
+            PLog.i(
+                TAG,
+                "Oppo-style continuous burst started: fps=${fastShutterTargetFps}, " +
+                    "source=${reader.width}x${reader.height}, format=YUV_420_888",
+            )
+        } catch (error: Exception) {
+            PLog.e(TAG, "Unable to attach YUV reader for continuous burst", error)
+            try {
+                builder.removeTarget(reader.surface)
+                session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            } catch (restoreError: Exception) {
+                PLog.w(TAG, "Unable to restore preview after burst start failure", restoreError)
+            }
+            burstCapturing = false
+            _state.update { it.copy(burstCapturing = false, isCapturing = false) }
+            oppoContinuousBurstEngine.stop()
+        }
+    }
+
+    private fun stopOppoContinuousBurstCapture() {
+        val session = captureSession
+        val builder = previewRequestBuilder
+        val reader = imageReader
+        burstCapturing = false
+        _state.update { it.copy(burstCapturing = false, isCapturing = false) }
+
+        if (session != null && builder != null && reader != null) {
+            try {
+                builder.removeTarget(reader.surface)
+                session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+                PLog.i(TAG, "Oppo-style burst stopped: YUV target detached; queued JPEG work is draining")
+            } catch (error: CameraAccessException) {
+                PLog.w(TAG, "Camera inaccessible while detaching burst YUV target", error)
+                invalidateCaptureSession(session, "camera inaccessible while stopping continuous burst")
+            } catch (error: IllegalStateException) {
+                PLog.w(TAG, "Capture session closed while detaching burst YUV target", error)
+                invalidateCaptureSession(session, "session closed while stopping continuous burst")
+            } catch (error: IllegalArgumentException) {
+                PLog.w(TAG, "Burst YUV target was not active during detach", error)
+            }
+        }
+        // Do not call abortCaptures(): already accepted frames must finish JPEG encoding and saving.
+        oppoContinuousBurstEngine.stop()
+    }
+
     /**
      * 启动连拍
      */
@@ -11334,6 +11491,10 @@ class Camera2Controller(private val context: Context) {
         val session = captureSession ?: return
         val builder = previewRequestBuilder ?: return
         val reader = imageReader ?: return
+        if (reader.imageFormat == ImageFormat.YUV_420_888 && !_state.value.useRaw) {
+            startOppoContinuousBurstCapture(session, builder, reader, onAccepted)
+            return
+        }
         val isStartingNewBurst = !_state.value.burstCapturing
         if (isStartingNewBurst && (_state.value.isCapturing || photoCaptures.values.any { it.continuousBurst })) return
         if (!isStartingNewBurst && onAccepted != null) return
@@ -11469,6 +11630,10 @@ class Camera2Controller(private val context: Context) {
         }
         if (!_state.value.burstCapturing) return
         PLog.d(TAG, "Stop Burst Capture")
+        if (isOppoBurstYuvSession) {
+            stopOppoContinuousBurstCapture()
+            return
+        }
         val session = captureSession
         // Disable continuation before aborting; completion callbacks must not queue another batch.
         burstCapturing = false
