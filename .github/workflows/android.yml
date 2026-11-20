@@ -52,6 +52,9 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
+      - name: Run preview orientation regression tests
+        run: ./gradlew --no-daemon :app:testDebugUnitTest --stacktrace
+
       - name: Build Minified Debug APK (R8 + Resource Shrinking)
         run: ./gradlew --no-daemon :app:assembleDebug --stacktrace
 
