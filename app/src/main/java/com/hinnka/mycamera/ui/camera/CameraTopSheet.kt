@@ -2085,14 +2085,14 @@ private val VideoMenuCard = Color(0x55242429)
 private val VideoMenuRaisedCard = Color(0x77303036)
 
 
+@Suppress("UNUSED_PARAMETER")
 private fun Modifier.menuCardSurface(
     shape: RoundedCornerShape = RoundedCornerShape(9.dp),
     background: Color = CameraMenuCard,
     elevation: Dp = 3.dp
 ): Modifier = this
-    .shadow(elevation = elevation, shape = shape, clip = false)
     .clip(shape)
-    .background(background)
+    // Menu tiles stay visually transparent; only the subtle outline separates them.
     .border(0.75.dp, Color.White.copy(alpha = 0.13f), shape)
 
 @OptIn(ExperimentalLayoutApi::class)
