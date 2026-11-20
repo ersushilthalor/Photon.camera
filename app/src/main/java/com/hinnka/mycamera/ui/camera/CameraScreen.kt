@@ -3292,6 +3292,10 @@ private fun CaptureModeSwitcher(
             modifier = Modifier
                 .width(171.dp)
                 .height(CameraControlsLayoutDefaults.ModeSwitcherHeight)
+                // Match the outer track height to Prismal's full-height selected pill.
+                // The library's built-in track is intentionally inset by 6.dp vertically.
+                .clip(CircleShape)
+                .background(Color(0xFF787880).copy(alpha = 0.36f))
                 .onGloballyPositioned { coordinates ->
                     val bounds = coordinates.boundsInRoot()
                     onVideoPillBoundsChanged(Rect(bounds.left, bounds.top, bounds.left + bounds.width / 2f, bounds.bottom))
@@ -3336,7 +3340,7 @@ private fun CaptureModeSwitcher(
                     letterSpacing = 0.sp
                 ),
                 textColor = Color.White,
-                trackColor = Color(0xFF787880).copy(alpha = 0.36f),
+                trackColor = Color.Transparent,
                 thumbColor = Color.White.copy(alpha = 0.28f),
                 height = CameraControlsLayoutDefaults.ModeSwitcherHeight,
                 hapticFeedback = enabled
