@@ -9759,7 +9759,13 @@ class Camera2Controller(private val context: Context) {
             // 只有在【自动曝光 + 单次闪光】时才使用预闪流程
             // 手动曝光模式下，AE_PRECAPTURE_TRIGGER 不生效（因为 AE_MODE=OFF），直接拍照
             val currentState = _state.value
-            if (currentState.requiresMultiFrameCaptureSequence) {
+            if (
+                currentState.requiresMultiFrameCaptureSequence ||
+                (currentState.autoHdrEnabled &&
+                    currentState.captureMode == CaptureMode.PHOTO &&
+                    !currentState.useRaw)
+            ) {
+                // Auto HDR needs exposure-synchronised gyro windows for OppoCam's alignment prior.
                 burstGyroRecorder.start(cameraHandler)
             }
             prepareCaptureLighting(device, reader, baseExposureResult)
@@ -10353,18 +10359,22 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
-     * OppoCam-style histogram planner. Percentiles are normalized to [0, 1] rather than
-     * relying on a broad histogram-range threshold that brackets flat or ordinary scenes.
+     * OppoCam Auto-HDR scene planner.
+     *
+     * Reconstructs the same P1/P5/P18/P50/P95/P99 decision inputs from Photon's live
+     * 256-bin histogram, then selects single, highlight-only, or full highlight+shadow capture.
+     * Flat scenes stay single-frame; slow shutter scenes never add a long shadow exposure.
      */
     private fun resolveAutoHdrBracketEvOffsets(state: CameraState): List<Float> {
         if (state.flashMode != 0) return emptyList()
         val histogram = state.histogram ?: return emptyList()
         if (histogram.size < 256) return emptyList()
+
         val total = histogram.sumOf { it.coerceAtLeast(0).toLong() }
         if (total <= 0L) return emptyList()
 
         fun percentile(normalizedTarget: Double): Float {
-            val threshold = (total * normalizedTarget).toLong().coerceAtLeast(1L)
+            val threshold = (total.toDouble() * normalizedTarget).toLong().coerceAtLeast(1L)
             var accumulated = 0L
             for (index in histogram.indices) {
                 accumulated += histogram[index].coerceAtLeast(0).toLong()
@@ -10377,20 +10387,52 @@ class Camera2Controller(private val context: Context) {
 
         val p1 = percentile(0.01)
         val p5 = percentile(0.05)
+        val p18 = percentile(0.18)
+        val p50 = percentile(0.50)
         val p95 = percentile(0.95)
         val p99 = percentile(0.99)
-        val dynamicRange = p99 - p1
-        val hasBlownHighlights = p99 >= 0.91f || (p95 >= 0.86f && p5 <= 0.22f)
-        val hasDeepShadows = p5 <= 0.09f && p95 >= 0.65f
-        if (!hasBlownHighlights) return emptyList()
+        val dynamicRange = (p99 - p1).coerceIn(0f, 1f)
 
-        val isVerySlowShutter = state.shutterSpeed > 66_666_666L
-        return if (hasDeepShadows && !isVerySlowShutter && dynamicRange >= 0.70f) {
+        // Match OppoCam FrameLuminanceAnalyzer scene labels using the same percentiles.
+        val isHighContrast = (p95 > 0.82f && p18 < 0.28f) ||
+            (p99 > 0.90f && p5 < 0.15f) ||
+            dynamicRange > 0.72f
+        val isOutdoorSky = (p95 > 0.85f && p50 < 0.36f) ||
+            (p99 > 0.92f && p18 < 0.22f)
+
+        val hasBlownHighlights = p99 >= 0.91f ||
+            (p95 >= 0.86f && p5 <= 0.22f) ||
+            isOutdoorSky
+        val hasDeepShadows = p5 <= 0.09f && p95 >= 0.65f
+        if (!hasBlownHighlights) {
+            PLog.d(
+                TAG,
+                "Oppo Auto HDR: single frame (P1=$p1 P5=$p5 P95=$p95 P99=$p99)",
+            )
+            return emptyList()
+        }
+
+        val actualExposureNs = lastCaptureResult
+            ?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+            ?.takeIf { it > 0L }
+            ?: state.shutterSpeed
+        val isVerySlowShutter = actualExposureNs > 66_666_666L
+
+        val useFullBracket = hasDeepShadows && !isVerySlowShutter &&
+            (dynamicRange >= 0.70f || isOutdoorSky || isHighContrast)
+        val plan = if (useFullBracket) {
             listOf(0f, -1.7f, 1.4f)
         } else {
-            // Highlight-only bracket avoids adding a blurred long exposure in low light.
             listOf(0f, -1.7f)
         }
+        PLog.d(
+            TAG,
+            "Oppo Auto HDR: ${if (useFullBracket) "3-frame" else "2-frame"} " +
+                "P1=$p1 P5=$p5 P18=$p18 P50=$p50 P95=$p95 P99=$p99 " +
+                "DR=$dynamicRange slowShutter=$isVerySlowShutter " +
+                "highContrast=$isHighContrast outdoorSky=$isOutdoorSky",
+        )
+        return plan
     }
 
     private fun shouldUseMultiFrameTorch(state: CameraState): Boolean {

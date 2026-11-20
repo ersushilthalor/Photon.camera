@@ -586,12 +586,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val image: SafeImage,
         val captureResult: CaptureResult?,
         val originalIndex: Int,
-        val timestamp: Long
+        val timestamp: Long,
+        val frameMetadata: com.hinnka.mycamera.camera.CapturedFrameMetadata?,
     )
 
     private data class HdrBracketFrameOrder(
         val images: List<SafeImage>,
-        val captureResults: List<CaptureResult?>
+        val captureResults: List<CaptureResult?>,
+        val frameMetadata: List<com.hinnka.mycamera.camera.CapturedFrameMetadata?>,
     )
 
     private val cameraController = Camera2Controller(application)
@@ -3727,6 +3729,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             processHdrBracket(
                 images = photo.frames.map { it.image },
                 captureResults = photo.frames.map { it.captureResult },
+                frameMetadata = photo.frames.map { it.frameMetadata },
                 expectedFrameCount = photo.frames.size,
                 captureInfo = baseFrame.captureInfo,
                 characteristics = baseFrame.characteristics,
@@ -6875,15 +6878,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun processHdrBracket(
         images: List<SafeImage>,
         captureResults: List<CaptureResult?>,
+        frameMetadata: List<com.hinnka.mycamera.camera.CapturedFrameMetadata?>,
         expectedFrameCount: Int,
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult?,
         settings: CaptureSettingsSnapshot,
     ) {
-        val orderedFrames = orderHdrBracketFramesByTimestamp(images, captureResults)
+        val orderedFrames = orderHdrBracketFramesByTimestamp(images, captureResults, frameMetadata)
         val orderedImages = orderedFrames.images
         val orderedCaptureResults = orderedFrames.captureResults
+        val orderedFrameMetadata = orderedFrames.frameMetadata
         var imagesHandedToGallery = false
         var fusedBitmap: Bitmap? = null
         try {
@@ -6942,11 +6947,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     2 -> 1.4f
                     else -> 0f
                 }
+                val gyroWindow = orderedFrameMetadata.getOrNull(index)?.gyroWindow
+                val gyroDurationSeconds = gyroWindow?.let {
+                    (it.endTimestampNs - it.startTimestampNs).toDouble() / 1_000_000_000.0
+                } ?: 0.0
+                val gyroCoverageUsable = gyroWindow != null &&
+                    gyroWindow.coverageRatio >= 0.25f &&
+                    gyroWindow.integratedRotationRad.size >= 3 &&
+                    gyroDurationSeconds > 0.0
+                val gyroYawSpeed = if (gyroCoverageUsable) {
+                    (gyroWindow!!.integratedRotationRad[1] / gyroDurationSeconds).toFloat()
+                } else 0f
+                val gyroPitchSpeed = if (gyroCoverageUsable) {
+                    (gyroWindow!!.integratedRotationRad[0] / gyroDurationSeconds).toFloat()
+                } else 0f
                 OppoHdrInputFrame(
                     image = image,
                     captureResult = result,
                     role = role,
                     evOffset = evOffset,
+                    gyroYawSpeed = gyroYawSpeed,
+                    gyroPitchSpeed = gyroPitchSpeed,
                 )
             }
 
@@ -7032,7 +7053,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun orderHdrBracketFramesByTimestamp(
         images: List<SafeImage>,
-        captureResults: List<CaptureResult?>
+        captureResults: List<CaptureResult?>,
+        frameMetadata: List<com.hinnka.mycamera.camera.CapturedFrameMetadata?>,
     ): HdrBracketFrameOrder {
         val frames = images.mapIndexed { index, image ->
             val result = captureResults.getOrNull(index)
@@ -7040,7 +7062,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 image = image,
                 captureResult = result,
                 originalIndex = index,
-                timestamp = result?.get(CaptureResult.SENSOR_TIMESTAMP) ?: image.timestamp
+                timestamp = result?.get(CaptureResult.SENSOR_TIMESTAMP) ?: image.timestamp,
+                frameMetadata = frameMetadata.getOrNull(index),
             )
         }
         val sortedFrames = frames.sortedWith(
@@ -7058,7 +7081,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         return HdrBracketFrameOrder(
             images = sortedFrames.map { it.image },
-            captureResults = sortedFrames.map { it.captureResult }
+            captureResults = sortedFrames.map { it.captureResult },
+            frameMetadata = sortedFrames.map { it.frameMetadata },
         )
     }
 

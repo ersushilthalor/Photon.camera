@@ -30,6 +30,9 @@ data class OppoHdrInputFrame(
     val captureResult: CaptureResult?,
     val role: OppoHdrFrameRole,
     val evOffset: Float,
+    /** Exposure-averaged gyroscope angular velocity, radians/second. */
+    val gyroYawSpeed: Float = 0f,
+    val gyroPitchSpeed: Float = 0f,
 )
 
 private data class OppoHdrAlignment(
@@ -327,7 +330,15 @@ object OppoPhotoHdrEngine {
                 (baseFrame.captureResult?.get(CaptureResult.SENSOR_TIMESTAMP)
                     ?: baseFrame.image.timestamp)).toFloat() / 1_000_000_000f
             ).coerceIn(-0.3f, 0.3f)
-        val alignment = alignLuminance(referenceLuma, targetLuma, width, height, deltaSeconds)
+        val alignment = alignLuminance(
+            reference = referenceLuma,
+            target = targetLuma,
+            fullWidth = width,
+            fullHeight = height,
+            deltaSeconds = deltaSeconds,
+            targetGyroYawSpeed = frame.gyroYawSpeed,
+            targetGyroPitchSpeed = frame.gyroPitchSpeed,
+        )
         val baseProduct = exposureProduct(baseFrame)
         val frameProduct = exposureProduct(frame)
         val exposureRatio = if (baseProduct > 0.0 && frameProduct > 0.0) {
@@ -362,12 +373,20 @@ object OppoPhotoHdrEngine {
         fullWidth: Int,
         fullHeight: Int,
         deltaSeconds: Float,
+        targetGyroYawSpeed: Float,
+        targetGyroPitchSpeed: Float,
     ): OppoHdrAlignment {
         val tileWidth = ALIGN_W / MESH_COLS
         val tileHeight = ALIGN_H / MESH_ROWS
+        // OppoCam seeds the coarse image search with gyro-predicted displacement, then
+        // refines it against image luminance so gyro drift cannot become the final alignment.
+        val seedX = (-targetGyroYawSpeed * deltaSeconds * ALIGN_W * 0.85f)
+            .roundToInt().coerceIn(-ALIGN_SEARCH_RADIUS / 2, ALIGN_SEARCH_RADIUS / 2)
+        val seedY = (-targetGyroPitchSpeed * deltaSeconds * ALIGN_H * 0.85f)
+            .roundToInt().coerceIn(-ALIGN_SEARCH_RADIUS / 2, ALIGN_SEARCH_RADIUS / 2)
         var minMad = Float.MAX_VALUE
-        var bestDx = 0
-        var bestDy = 0
+        var bestDx = seedX
+        var bestDy = seedY
         val costGrid = Array(ALIGN_SEARCH_RADIUS * 2 + 1) {
             FloatArray(ALIGN_SEARCH_RADIUS * 2 + 1) { Float.MAX_VALUE }
         }
@@ -375,8 +394,12 @@ object OppoPhotoHdrEngine {
         val activeWidth = ALIGN_W - 2 * border
         val activeHeight = ALIGN_H - 2 * border
 
-        for (dy in -ALIGN_SEARCH_RADIUS..ALIGN_SEARCH_RADIUS) {
-            for (dx in -ALIGN_SEARCH_RADIUS..ALIGN_SEARCH_RADIUS) {
+        for (dyOffset in -ALIGN_SEARCH_RADIUS..ALIGN_SEARCH_RADIUS) {
+            val dy = seedY + dyOffset
+            if (dy !in -ALIGN_SEARCH_RADIUS..ALIGN_SEARCH_RADIUS) continue
+            for (dxOffset in -ALIGN_SEARCH_RADIUS..ALIGN_SEARCH_RADIUS) {
+                val dx = seedX + dxOffset
+                if (dx !in -ALIGN_SEARCH_RADIUS..ALIGN_SEARCH_RADIUS) continue
                 var diff = 0f
                 var count = 0
                 for (y in border until border + activeHeight step 2) {
