@@ -3199,7 +3199,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     fun setCalibrationOffset(offset: Int) {
         if (calibrationOffset != offset) {
             calibrationOffset = offset
-            updateMVPMatrix()
+            // This offset belongs to capture/Live Photo orientation only. The live
+            // Camera2 preview already carries its producer transform in SurfaceTexture.
             updateCaptureSize()
         }
     }
@@ -3303,7 +3304,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             return matrix
         }
 
-        val isSwapped = (sensorOrientation + calibrationOffset) % 180 != 0
+        // SurfaceTexture already presents the active Camera2 stream in its native
+        // preview orientation. Do not apply per-camera capture calibration here:
+        // doing so adds a second rotation after a front/back camera handoff.
+        val isSwapped = Math.floorMod(sensorOrientation, 180) != 0
         val cropWidth = (cropRect[2] - cropRect[0]).coerceAtLeast(0.05f)
         val cropHeight = (cropRect[3] - cropRect[1]).coerceAtLeast(0.05f)
         val previewAspect = if (isSwapped) {
@@ -3313,10 +3317,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         val viewAspect = viewAspectOverride?.takeIf { it.isFinite() && it > 0f }
             ?: (targetWidth.toFloat() / targetHeight.toFloat())
-
-        if (calibrationOffset != 0) {
-            Matrix.rotateM(matrix, 0, (-calibrationOffset).toFloat(), 0f, 0f, 1f)
-        }
 
         if (previewAspect != viewAspect) {
             val scaleX: Float
