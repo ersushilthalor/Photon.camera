@@ -229,6 +229,8 @@ class RealtimeVideoRenderer(
         sensorOrientationDegrees: Int = currentCameraSensorOrientationDegrees,
     ) {
         if (size.width <= 0 || size.height <= 0) return
+        val cameraInputChanged = currentCameraInputSize != size ||
+            currentCameraSensorOrientationDegrees != sensorOrientationDegrees
         currentCameraInputSize = size
         currentCameraSensorOrientationDegrees = sensorOrientationDegrees
         cameraSensorOrientationFallbackApplied = false
@@ -236,6 +238,15 @@ class RealtimeVideoRenderer(
         // The next frame may carry a different transform even when its axes have not swapped.
         // Force crop geometry to be recalculated against the new camera's input dimensions.
         cameraTransformAxesSwapped = null
+        if (enhancedStabilizationEnabled && cameraInputChanged) {
+            // The stabilized YUV texture is an independent producer. Refresh its presentation
+            // matrix from the replacement camera's metadata, never from a possibly stale OES frame.
+            mgcEisPresentationTransform.reset()
+            check(mgcEisPresentationTransform.captureFromSensorOrientation(sensorOrientationDegrees)) {
+                "Camera reported non-cardinal sensor orientation $sensorOrientationDegrees"
+            }
+            updateCameraTransformGeometry(mgcEisPresentationTransform.matrix)
+        }
         PLog.i(
             TAG,
             "Camera input geometry refreshed: input=${size.width}x${size.height}, " +
@@ -627,11 +638,6 @@ class RealtimeVideoRenderer(
         return try {
             surfaceTexture.updateTexImage()
             surfaceTexture.getTransformMatrix(stMatrix)
-            if (enhancedStabilizationEnabled &&
-                !mgcEisPresentationTransform.captureFromOes(stMatrix)
-            ) {
-                PLog.w(TAG, "MGC cannot derive a cardinal presentation orientation yet")
-            }
             updateCameraTransformGeometry(
                 if (enhancedStabilizationEnabled) {
                     mgcEisPresentationTransform.matrix
