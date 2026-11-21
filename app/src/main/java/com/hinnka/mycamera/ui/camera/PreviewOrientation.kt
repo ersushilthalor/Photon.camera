@@ -16,8 +16,8 @@ internal fun resolvePreviewOrientationOffset(
     val rearOrientation = rearSensorOrientation ?: return 0
     val relativeRotation = Math.floorMod(sensorOrientation - rearOrientation, 360)
 
-    // The live front SurfaceTexture has its own presentation transform. Applying
-    // a second 180-degree turn in the GL preview produces the reported top/bottom
-    // inversion on opposite-mounted front sensors. Keep quarter-turn corrections.
-    return if (relativeRotation == 180) 0 else relativeRotation
+    // SurfaceTexture normalizes producer-buffer coordinates; it does not replace
+    // the sensor-mount alignment required by this shared GL viewfinder. In
+    // particular, opposite-mounted front sensors need the full 180-degree turn.
+    return relativeRotation
 }
