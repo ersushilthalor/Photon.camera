@@ -3,62 +3,137 @@ package com.hinnka.mycamera.lut
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MgcEisPresentationTransformTest {
 
     @Test
-    fun cameraKeyChangeResetsAndRecapturesOesPresentationTransform() {
+    fun sensorOrientationProducesCorrectImageReaderPresentationForAllCardinalAngles() {
         val transform = MgcEisPresentationTransform()
-        val cameraKeyTracker = MgcEisCameraKeyTracker(
-            initialKey = MgcEisCameraKey(sensorOrientation = 270, lensFacing = 1),
+
+        val cases = listOf(
+            0 to matrix0(),
+            90 to matrix90(),
+            180 to matrix180(),
+            270 to matrix270(),
+        )
+
+        cases.forEach { (orientation, expected) ->
+            transform.reset()
+            assertTrue("orientation=$orientation", transform.captureFromSensorOrientation(orientation))
+            assertArrayEquals("orientation=$orientation", expected, transform.matrix, 0f)
+        }
+    }
+
+    @Test
+    fun cameraSwitchResetsTransformAndUsesNewCameraSensorOrientation() {
+        val transform = MgcEisPresentationTransform()
+        val tracker = MgcEisCameraKeyTracker(
+            initialKey = MgcEisCameraKey(
+                sensorOrientation = 270,
+                lensFacing = 1,
+                cameraId = "rear",
+            ),
             presentationTransform = transform,
         )
 
-        assertTrue(transform.captureFromOes(oesMatrix270()))
-        val captured270 = transform.matrix.copyOf()
-        assertEquals(1f, captured270[4], 0f)
-        assertEquals(1f, captured270[1], 0f)
+        assertTrue(transform.captureFromSensorOrientation(270))
+        assertArrayEquals(matrix270(), transform.matrix, 0f)
 
         assertTrue(
-            cameraKeyTracker.update(
-                MgcEisCameraKey(sensorOrientation = 90, lensFacing = 1),
+            tracker.update(
+                MgcEisCameraKey(
+                    sensorOrientation = 90,
+                    lensFacing = 0,
+                    cameraId = "front",
+                ),
             ),
         )
-        assertEquals(1L, cameraKeyTracker.generation)
-        assertArrayEquals(identityMatrix(), transform.matrix, 0.0001f)
+        assertEquals(1L, tracker.generation)
+        assertArrayEquals(identityMatrix(), transform.matrix, 0f)
 
-        assertTrue(transform.captureFromOes(oesMatrix90()))
-        assertNotEquals(captured270.toList(), transform.matrix.toList())
-        assertEquals(-1f, transform.matrix[4], 0f)
-        assertEquals(-1f, transform.matrix[1], 0f)
-        assertEquals(1f, transform.matrix[12], 0f)
-        assertEquals(1f, transform.matrix[13], 0f)
+        assertTrue(transform.captureFromSensorOrientation(90))
+        assertArrayEquals(matrix90(), transform.matrix, 0f)
 
         assertFalse(
-            cameraKeyTracker.update(
-                MgcEisCameraKey(sensorOrientation = 90, lensFacing = 1),
+            tracker.update(
+                MgcEisCameraKey(
+                    sensorOrientation = 90,
+                    lensFacing = 0,
+                    cameraId = "front",
+                ),
             ),
         )
-        assertEquals(1L, cameraKeyTracker.generation)
+        assertEquals(1L, tracker.generation)
     }
 
-    private fun oesMatrix270(): FloatArray = FloatArray(16).apply {
-        this[1] = -1f
-        this[4] = 1f
+    @Test
+    fun cameraIdChangeInvalidatesTransformEvenWhenFacingAndOrientationMatch() {
+        val transform = MgcEisPresentationTransform()
+        val tracker = MgcEisCameraKeyTracker(
+            initialKey = MgcEisCameraKey(
+                sensorOrientation = 90,
+                lensFacing = 1,
+                cameraId = "rear-main",
+            ),
+            presentationTransform = transform,
+        )
+
+        assertTrue(transform.captureFromSensorOrientation(90))
+        assertTrue(
+            tracker.update(
+                MgcEisCameraKey(
+                    sensorOrientation = 90,
+                    lensFacing = 1,
+                    cameraId = "rear-telephoto",
+                ),
+            ),
+        )
+        assertEquals(1L, tracker.generation)
+        assertArrayEquals(identityMatrix(), transform.matrix, 0f)
     }
 
-    private fun oesMatrix90(): FloatArray = FloatArray(16).apply {
-        this[1] = 1f
-        this[4] = -1f
+    @Test
+    fun invalidSensorOrientationDoesNotFreezeTheTransform() {
+        val transform = MgcEisPresentationTransform()
+
+        assertFalse(transform.captureFromSensorOrientation(45))
+        assertTrue(transform.captureFromSensorOrientation(180))
+        assertArrayEquals(matrix180(), transform.matrix, 0f)
     }
 
-    private fun identityMatrix(): FloatArray = FloatArray(16).apply {
+    private fun matrix0() = FloatArray(16).apply {
         this[0] = 1f
         this[5] = 1f
         this[10] = 1f
         this[15] = 1f
     }
+
+    private fun matrix90() = FloatArray(16).apply {
+        this[4] = -1f
+        this[1] = 1f
+        this[10] = 1f
+        this[12] = 1f
+        this[15] = 1f
+    }
+
+    private fun matrix180() = FloatArray(16).apply {
+        this[0] = -1f
+        this[5] = -1f
+        this[10] = 1f
+        this[12] = 1f
+        this[13] = 1f
+        this[15] = 1f
+    }
+
+    private fun matrix270() = FloatArray(16).apply {
+        this[4] = 1f
+        this[1] = -1f
+        this[10] = 1f
+        this[13] = 1f
+        this[15] = 1f
+    }
+
+    private fun identityMatrix() = matrix0()
 }
