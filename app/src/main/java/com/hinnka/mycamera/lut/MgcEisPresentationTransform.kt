@@ -1,7 +1,5 @@
 package com.hinnka.mycamera.lut
 
-import android.graphics.SurfaceTexture
-import kotlin.math.abs
 
 private fun setIdentityMatrix(matrix: FloatArray) {
     matrix.fill(0f)
@@ -11,7 +9,7 @@ private fun setIdentityMatrix(matrix: FloatArray) {
     matrix[15] = 1f
 }
 
-/** Retains the cardinal OES orientation for the delayed ImageReader output presentation. */
+/** Retains the active Camera2 sensor orientation for delayed ImageReader output presentation. */
 internal class MgcEisPresentationTransform {
     val matrix = FloatArray(16).also(::setIdentityMatrix)
     private var captured = false
@@ -19,57 +17,17 @@ internal class MgcEisPresentationTransform {
     /**
      * Initializes the ImageReader presentation transform without waiting for an OES frame.
      *
-     * Video EIS+ intentionally does not attach the recorder's OES surface to Camera2: frames are
-     * delivered through the timestamp-matched YUV ImageReader instead. Consequently the recorder
-     * cannot discover the producer transform through [SurfaceTexture.getTransformMatrix]. Camera2
-     * guarantees that SENSOR_ORIENTATION is cardinal, so it is sufficient to rotate the raw YUV
-     * image into the same natural-device orientation used by the normal OES recording path.
+     * The OES preview and ImageReader YUV output are separate Camera2 producers. Their buffer
+     * transforms are not interchangeable, and an OES callback can still be queued by the previous
+     * camera session while a lens switch is in progress. Use the new camera's immutable
+     * SENSOR_ORIENTATION instead of sampling a potentially stale OES transform. Camera2 defines
+     * this value in cardinal 90-degree increments, which is sufficient to orient the raw YUV image
+     * into the same natural-device coordinate space as the live preview.
      */
     fun captureFromSensorOrientation(sensorOrientationDegrees: Int): Boolean {
         if (captured) return true
         val resolved = resolveMgcEisPresentationMatrix(sensorOrientationDegrees) ?: return false
         System.arraycopy(resolved, 0, matrix, 0, matrix.size)
-        captured = true
-        return true
-    }
-
-    /**
-     * Captures the configured stream orientation once. Camera2 may update the
-     * OES crop every frame, whereas its cardinal orientation is a stream
-     * property; freezing it prevents producer-buffer state from leaking into
-     * MGC's independent 2D texture.
-     */
-    fun captureFromOes(oesMatrix: FloatArray): Boolean {
-        if (captured) return true
-        if (oesMatrix.size < 16) return false
-
-        val uAlongX = abs(oesMatrix[0]) >= abs(oesMatrix[1])
-        val vAlongX = abs(oesMatrix[4]) >= abs(oesMatrix[5])
-        val uMagnitude = maxOf(abs(oesMatrix[0]), abs(oesMatrix[1]))
-        val vMagnitude = maxOf(abs(oesMatrix[4]), abs(oesMatrix[5]))
-        if (uAlongX == vAlongX || uMagnitude < 0.5f || vMagnitude < 0.5f) {
-            return false
-        }
-
-        setIdentityMatrix(matrix)
-        if (!uAlongX) {
-            // The OES transform is a cardinal 90° rotation. Convert its
-            // bottom-left OES origin to the regular 2D texture's orientation.
-            // setIdentityM() leaves m00/m11 as one; they must be cleared
-            // before installing the off-diagonal cardinal rotation. Leaving
-            // them in place produces a rotation-plus-shear matrix.
-            matrix[0] = 0f
-            matrix[5] = 0f
-            matrix[4] = if (oesMatrix[4] >= 0f) 1f else -1f
-            matrix[1] = if (oesMatrix[1] >= 0f) -1f else 1f
-            matrix[12] = if (oesMatrix[4] >= 0f) 0f else 1f
-            matrix[13] = if (oesMatrix[1] >= 0f) 1f else 0f
-        } else {
-            matrix[0] = if (oesMatrix[0] >= 0f) 1f else -1f
-            matrix[5] = if (oesMatrix[5] >= 0f) -1f else 1f
-            matrix[12] = if (oesMatrix[0] >= 0f) 0f else 1f
-            matrix[13] = if (oesMatrix[5] >= 0f) 1f else 0f
-        }
         captured = true
         return true
     }
@@ -85,11 +43,13 @@ internal class MgcEisPresentationTransform {
 internal data class MgcEisCameraKey(
     val sensorOrientation: Int,
     val lensFacing: Int,
+    /** Camera2 camera ID: two sensors can share facing and orientation but not stream identity. */
+    val cameraId: String = "",
 )
 
 /**
- * Tracks the active preview camera. A key change invalidates the frozen OES presentation
- * transform and advances the generation before the new stream can be consumed.
+ * Tracks the active Camera2 stream. A key change invalidates the ImageReader presentation
+ * transform and advances the generation before frames from the replacement stream are consumed.
  */
 internal class MgcEisCameraKeyTracker(
     initialKey: MgcEisCameraKey,

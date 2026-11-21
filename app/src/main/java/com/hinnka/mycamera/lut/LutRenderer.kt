@@ -260,8 +260,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Volatile
     private var stabilizationSessionGeneration = 0L
     @Volatile
-    private var pendingPresentationCaptureGeneration = -1L
-    @Volatile
     private var stabilizationOutputAvailable = false
     private var previewStabilizationUseCase: StabilizationUseCase? = null
     private var previewStabilizationStrength = 0f
@@ -524,7 +522,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Volatile
     private var lensFacing: Int = 1 // CameraCharacteristics.LENS_FACING_BACK
     private val previewCameraKeyTracker = MgcEisCameraKeyTracker(
-        initialKey = MgcEisCameraKey(sensorOrientation, lensFacing),
+        initialKey = MgcEisCameraKey(sensorOrientation, lensFacing, cameraId = ""),
         presentationTransform = mgcEisPresentationTransform,
     )
     private val cameraGeneration: Long
@@ -1140,7 +1138,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val oesFrameGeneration = frameAvailableGeneration.getAndSet(-1L)
         val oesFrameUpdated = oesFrameGeneration >= 0L &&
             acquireLatestCameraFrame(
-                delayedStabilizationEnabled = delayedStabilizationEnabled,
                 frameGeneration = oesFrameGeneration,
                 expectedGeneration = cameraFrameGeneration,
             )
@@ -1570,7 +1567,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun acquireLatestCameraFrame(
-        delayedStabilizationEnabled: Boolean,
         frameGeneration: Long,
         expectedGeneration: Long,
     ): Boolean {
@@ -1588,24 +1584,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             if (frameGeneration != cameraGeneration) return false
             texture.getTransformMatrix(stMatrix)
             applyPendingModeSwitchGeometryForFrame(texture.timestamp)
-            if (delayedStabilizationEnabled &&
-                frameGeneration == pendingPresentationCaptureGeneration &&
-                frameGeneration == cameraGeneration
-            ) {
-                if (mgcEisPresentationTransform.captureFromOes(stMatrix)) {
-                    pendingPresentationCaptureGeneration = -1L
-                    PLog.d(
-                        TAG,
-                        "Captured first OES presentation transform: cameraId=${currentCameraId ?: "unknown"}, " +
-                            "lensFacing=$lensFacing, sensorOrientation=$sensorOrientation, " +
-                            "stMatrix=${previewMatrixSummary(stMatrix)}, " +
-                            "capturedMatrix=${previewMatrixSummary(mgcEisPresentationTransform.matrix)}, " +
-                            "textureSource=$currentCameraTextureSource, generation=$frameGeneration",
-                    )
-                } else {
-                    PLog.w(TAG, "MGC cannot derive a cardinal presentation orientation yet")
-                }
-            }
             true
         } catch (error: RuntimeException) {
             PLog.e(
@@ -3066,7 +3044,25 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (resetPresentationTransform) {
             mgcEisPresentationTransform.reset()
         }
-        pendingPresentationCaptureGeneration = sessionGeneration
+        // Resolve the ImageReader transform from the active camera metadata now, before any
+        // queued OES callback can be mistaken for the replacement camera's first frame.
+        if (previewStabilizationUseCase != null) {
+            if (mgcEisPresentationTransform.captureFromSensorOrientation(sensorOrientation)) {
+                PLog.d(
+                    TAG,
+                    "Prepared MGC ImageReader presentation transform: cameraId=${currentCameraId ?: "unknown"}, " +
+                        "lensFacing=$lensFacing, sensorOrientation=$sensorOrientation, " +
+                        "matrix=${previewMatrixSummary(mgcEisPresentationTransform.matrix)}, " +
+                        "generation=$sessionGeneration",
+                )
+            } else {
+                PLog.w(
+                    TAG,
+                    "Cannot prepare MGC ImageReader presentation: cameraId=${currentCameraId ?: "unknown"}, " +
+                        "sensorOrientation=$sensorOrientation",
+                )
+            }
+        }
         stabilizationSessionGeneration = sessionGeneration
         stabilizationSession = previewStabilizationUseCase?.let { useCase ->
             stabilizationCoordinator?.createSession(
@@ -3145,8 +3141,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         orientation: Int,
         facing: Int,
     ) {
-        currentCameraId = cameraId?.takeIf { it.isNotBlank() }
-        val cameraKeyChanged = sensorOrientation != orientation || lensFacing != facing
+        val normalizedCameraId = cameraId?.takeIf { it.isNotBlank() }
+        // Include the physical/logical Camera2 ID, not just facing/orientation. A handoff between
+        // two rear sensors can preserve both values while still invalidating queued frames/metadata.
+        val cameraKeyChanged = currentCameraId != normalizedCameraId ||
+            sensorOrientation != orientation ||
+            lensFacing != facing
+        currentCameraId = normalizedCameraId
         sensorOrientation = orientation
         lensFacing = facing
         if (cameraKeyChanged) {
@@ -3167,14 +3168,17 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun handlePreviewCameraKeyChange() {
-        val nextKey = MgcEisCameraKey(sensorOrientation, lensFacing)
+        val nextKey = MgcEisCameraKey(
+            sensorOrientation = sensorOrientation,
+            lensFacing = lensFacing,
+            cameraId = currentCameraId.orEmpty(),
+        )
         val capturedMatrixBeforeReset = mgcEisPresentationTransform.matrix.copyOf()
         if (!previewCameraKeyTracker.update(nextKey)) return
 
         val generation = cameraGeneration
         frameAvailableGeneration.set(-1L)
         stabilizationOutputAvailable = false
-        pendingPresentationCaptureGeneration = generation
         recreatePreviewStabilizationSession(resetPresentationTransform = false)
 
         PLog.d(
