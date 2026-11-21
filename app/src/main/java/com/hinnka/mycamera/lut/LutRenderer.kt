@@ -71,6 +71,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         // Match MGC's fixed 5% per-edge safety crop while the first timestamp-matched
         // stabilization frame is pending, avoiding a visible crop jump at EIS handoff.
         private const val EIS_OUTPUT_CROP_ZOOM = 1.1111112f
+        // SurfaceTexture and the timestamp-matched ImageReader output share Camera2 SENSOR_TIMESTAMP.
+        // EIS may trail the live OES stream by several lookahead frames.
+        private const val MAX_EIS_ORIENTATION_TIMESTAMP_LEAD_NS = 1_000_000_000L
     }
 
     private val colorProgramCache = PreviewColorProgramCache()
@@ -239,6 +242,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     // SurfaceTexture 变换矩阵
     private val stMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
     private val mgcEisPresentationTransform = MgcEisPresentationTransform()
+    @Volatile
+    private var eisPreviewOrientationGeneration = -1L
+    @Volatile
+    private var eisPreviewOrientationTimestampNs = 0L
+    private var eisOrientationWaitLoggedGeneration = -1L
 
     // MVP 变换矩阵（用于 center crop）；EIS 输出可能使用不同于 OES 预览的输入尺寸。
     private val mvpMatrix = FloatArray(16)
@@ -1130,6 +1138,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             stabilizationSession?.stop()
             stabilizationSessionStarted = false
             mgcEisPresentationTransform.reset()
+            eisPreviewOrientationGeneration = -1L
+            eisPreviewOrientationTimestampNs = 0L
+            eisOrientationWaitLoggedGeneration = -1L
         }
         if (delayedStabilizationEnabled && !stabilizationSessionStarted) {
             stabilizationSessionStarted = stabilizationSession?.start() == true
@@ -1138,6 +1149,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val oesFrameGeneration = frameAvailableGeneration.getAndSet(-1L)
         val oesFrameUpdated = oesFrameGeneration >= 0L &&
             acquireLatestCameraFrame(
+                delayedStabilizationEnabled = delayedStabilizationEnabled,
                 frameGeneration = oesFrameGeneration,
                 expectedGeneration = cameraFrameGeneration,
             )
@@ -1174,6 +1186,27 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                                 "Discarded stale stabilization frame: frameGeneration=$sessionGeneration, " +
                                     "activeGeneration=$cameraGeneration",
                             )
+                        } else if (!isEisPresentationOrientationReady(
+                                frameTimestampNs = completedFrame.timestampNs,
+                                expectedGeneration = cameraFrameGeneration,
+                            )
+                        ) {
+                            // Keep the native Camera2 OES preview visible until this camera
+                            // generation supplies an orientation sample. A queued frame from the
+                            // previous lens cannot authorize the EIS handoff because its timestamp
+                            // will not match/lead the active ImageReader timeline.
+                            completedFrame.image.close()
+                            if (eisOrientationWaitLoggedGeneration != cameraFrameGeneration) {
+                                eisOrientationWaitLoggedGeneration = cameraFrameGeneration
+                                PLog.d(
+                                    TAG,
+                                    "Waiting for active Camera2 OES orientation before EIS handoff: " +
+                                        "cameraGeneration=$cameraFrameGeneration, " +
+                                        "eisTimestampNs=${completedFrame.timestampNs}, " +
+                                        "oesTimestampNs=$eisPreviewOrientationTimestampNs, " +
+                                        "orientationGeneration=$eisPreviewOrientationGeneration",
+                                )
+                            }
                         } else {
                             val holdPreviousPhotoPreviewFrame =
                                 previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
@@ -1558,6 +1591,18 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         return baseMatrix
     }
 
+    private fun isEisPresentationOrientationReady(
+        frameTimestampNs: Long,
+        expectedGeneration: Long,
+    ): Boolean {
+        val oesTimestampNs = eisPreviewOrientationTimestampNs
+        val timestampLeadNs = oesTimestampNs - frameTimestampNs
+        return mgcEisPresentationTransform.isCaptured &&
+            eisPreviewOrientationGeneration == expectedGeneration &&
+            frameTimestampNs > 0L &&
+            timestampLeadNs in 0L..MAX_EIS_ORIENTATION_TIMESTAMP_LEAD_NS
+    }
+
     private fun useCurrentOesFrame() {
         currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
         currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
@@ -1567,6 +1612,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun acquireLatestCameraFrame(
+        delayedStabilizationEnabled: Boolean,
         frameGeneration: Long,
         expectedGeneration: Long,
     ): Boolean {
@@ -1583,7 +1629,18 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             // A camera switch can invalidate this callback while updateTexImage is in flight.
             if (frameGeneration != cameraGeneration) return false
             texture.getTransformMatrix(stMatrix)
-            applyPendingModeSwitchGeometryForFrame(texture.timestamp)
+            val frameTimestampNs = texture.timestamp
+            if (delayedStabilizationEnabled &&
+                frameGeneration == cameraGeneration &&
+                frameTimestampNs > 0L &&
+                mgcEisPresentationTransform.updateFromOes(stMatrix)
+            ) {
+                // Match the EIS ImageReader path to the real Camera2 preview orientation.
+                // updateFromOes copies only rotation/reflection axes, never producer crop or scale.
+                eisPreviewOrientationGeneration = frameGeneration
+                eisPreviewOrientationTimestampNs = frameTimestampNs
+            }
+            applyPendingModeSwitchGeometryForFrame(frameTimestampNs)
             true
         } catch (error: RuntimeException) {
             PLog.e(
@@ -3044,25 +3101,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (resetPresentationTransform) {
             mgcEisPresentationTransform.reset()
         }
-        // Resolve the ImageReader transform from the active camera metadata now, before any
-        // queued OES callback can be mistaken for the replacement camera's first frame.
-        if (previewStabilizationUseCase != null) {
-            if (mgcEisPresentationTransform.captureFromSensorOrientation(sensorOrientation)) {
-                PLog.d(
-                    TAG,
-                    "Prepared MGC ImageReader presentation transform: cameraId=${currentCameraId ?: "unknown"}, " +
-                        "lensFacing=$lensFacing, sensorOrientation=$sensorOrientation, " +
-                        "matrix=${previewMatrixSummary(mgcEisPresentationTransform.matrix)}, " +
-                        "generation=$sessionGeneration",
-                )
-            } else {
-                PLog.w(
-                    TAG,
-                    "Cannot prepare MGC ImageReader presentation: cameraId=${currentCameraId ?: "unknown"}, " +
-                        "sensorOrientation=$sensorOrientation",
-                )
-            }
-        }
+        // Camera2 OES and ImageReader are independent producers. Wait until the active preview
+        // supplies its orientation-only transform instead of guessing from SENSOR_ORIENTATION.
+        eisPreviewOrientationGeneration = -1L
+        eisPreviewOrientationTimestampNs = 0L
+        eisOrientationWaitLoggedGeneration = -1L
         stabilizationSessionGeneration = sessionGeneration
         stabilizationSession = previewStabilizationUseCase?.let { useCase ->
             stabilizationCoordinator?.createSession(
