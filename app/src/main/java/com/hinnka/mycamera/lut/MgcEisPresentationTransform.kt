@@ -9,20 +9,67 @@ private fun setIdentityMatrix(matrix: FloatArray) {
     matrix[15] = 1f
 }
 
-/** Retains the active Camera2 sensor orientation for delayed ImageReader output presentation. */
+/**
+ * Holds the orientation-only transform used to present delayed ImageReader output.
+ *
+ * Video encoding can derive its fixed output orientation from Camera2 sensor metadata.
+ * The live preview instead mirrors the actual Camera2 OES producer transform so the
+ * stabilized ImageReader texture has the same rotation/reflection as the viewfinder.
+ */
 internal class MgcEisPresentationTransform {
     val matrix = FloatArray(16).also(::setIdentityMatrix)
     private var captured = false
 
+    val isCaptured: Boolean
+        get() = captured
+
     /**
-     * Initializes the ImageReader presentation transform without waiting for an OES frame.
+     * Updates only the cardinal rotation/reflection axes from the active Camera2 OES frame.
      *
-     * The OES preview and ImageReader YUV output are separate Camera2 producers. Their buffer
-     * transforms are not interchangeable, and an OES callback can still be queued by the previous
-     * camera session while a lens switch is in progress. Use the new camera's immutable
-     * SENSOR_ORIENTATION instead of sampling a potentially stale OES transform. Camera2 defines
-     * this value in cardinal 90-degree increments, which is sufficient to orient the raw YUV image
-     * into the same natural-device coordinate space as the live preview.
+     * SurfaceTexture's matrix also contains producer crop/scale information. Those values are
+     * intentionally not copied: EIS keeps its existing crop, geometry and stabilization mesh.
+     * Call this only after updateTexImage() accepted a frame for the active camera generation.
+     *
+     * Unlike captureFromSensorOrientation(), this is deliberately refreshable on each OES frame:
+     * after a camera handoff a queued old callback must not permanently freeze the old lens'
+     * front-camera reflection/rotation into the new EIS session.
+     */
+    fun updateFromOes(oesMatrix: FloatArray): Boolean {
+        if (oesMatrix.size < 16) return false
+
+        val uAlongX = abs(oesMatrix[0]) >= abs(oesMatrix[1])
+        val vAlongX = abs(oesMatrix[4]) >= abs(oesMatrix[5])
+        val uMagnitude = maxOf(abs(oesMatrix[0]), abs(oesMatrix[1]))
+        val vMagnitude = maxOf(abs(oesMatrix[4]), abs(oesMatrix[5]))
+        if (uAlongX == vAlongX || uMagnitude < 0.5f || vMagnitude < 0.5f) {
+            return false
+        }
+
+        val resolved = FloatArray(16).also(::setIdentityMatrix)
+        if (!uAlongX) {
+            // The OES transform is a cardinal 90° rotation. Convert its bottom-left
+            // producer origin to the regular 2D texture's orientation.
+            resolved[0] = 0f
+            resolved[5] = 0f
+            resolved[4] = if (oesMatrix[4] >= 0f) 1f else -1f
+            resolved[1] = if (oesMatrix[1] >= 0f) -1f else 1f
+            resolved[12] = if (oesMatrix[4] >= 0f) 0f else 1f
+            resolved[13] = if (oesMatrix[1] >= 0f) 1f else 0f
+        } else {
+            resolved[0] = if (oesMatrix[0] >= 0f) 1f else -1f
+            resolved[5] = if (oesMatrix[5] >= 0f) -1f else 1f
+            resolved[12] = if (oesMatrix[0] >= 0f) 0f else 1f
+            resolved[13] = if (oesMatrix[5] >= 0f) 1f else 0f
+        }
+
+        System.arraycopy(resolved, 0, matrix, 0, matrix.size)
+        captured = true
+        return true
+    }
+
+    /**
+     * Sensor-metadata orientation remains available for the video encoder path, where Camera2's
+     * output orientation is resolved independently of the live OES viewfinder presentation.
      */
     fun captureFromSensorOrientation(sensorOrientationDegrees: Int): Boolean {
         if (captured) return true
