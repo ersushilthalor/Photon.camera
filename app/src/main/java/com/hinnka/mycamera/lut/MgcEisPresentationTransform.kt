@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+import kotlin.math.abs
 
 private fun setIdentityMatrix(matrix: FloatArray) {
     matrix.fill(0f)
