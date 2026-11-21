@@ -1412,21 +1412,6 @@ fun CameraScreen(
                 ) {
                     val currentCameraId = state.currentCameraId
                     val activeCameraInfo = state.getCurrentCameraInfo()
-                    val rearReferenceSensorOrientation = state.availableCameras.firstOrNull {
-                        it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
-                            it.lensType == com.hinnka.mycamera.camera.LensType.BACK_MAIN
-                    }?.sensorOrientation ?: state.availableCameras.firstOrNull {
-                        it.lensFacing == CameraCharacteristics.LENS_FACING_BACK
-                    }?.sensorOrientation
-                    // The same GL viewfinder is used by photo and video. Apply the
-                    // front-camera preview correction in both modes; this is preview-only
-                    // and does not modify captured-photo or recorded-video orientation.
-                    val previewOrientationOffset = resolvePreviewOrientationOffset(
-                        lensFacing = activeCameraInfo?.lensFacing
-                            ?: CameraCharacteristics.LENS_FACING_BACK,
-                        sensorOrientation = activeCameraInfo?.sensorOrientation ?: 0,
-                        rearSensorOrientation = rearReferenceSensorOrientation,
-                    )
                     val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
                         .collectAsState(initial = 0)
                     val eyeFocusActive = eyeFocusEnabled &&
@@ -1448,7 +1433,6 @@ fun CameraScreen(
                             cameraId = activeCameraInfo?.cameraId ?: state.currentCameraId,
                             sensorOrientation = activeCameraInfo?.sensorOrientation ?: 0,
                             lensFacing = if (activeCameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
-                            previewOrientationOffset = previewOrientationOffset,
                             calibrationOffset = calibrationOffset,
                             baselineLut = viewModel.currentBaselineLutConfig,
                             currentLut = viewModel.currentLutConfig,
