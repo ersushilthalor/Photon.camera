@@ -46,24 +46,24 @@ internal class MgcEisPresentationTransform {
             return false
         }
 
-        val resolved = FloatArray(16).also(::setIdentityMatrix)
+        // Reuse the existing array: this can run on every preview frame.
+        setIdentityMatrix(matrix)
         if (!uAlongX) {
             // The OES transform is a cardinal 90° rotation. Convert its bottom-left
             // producer origin to the regular 2D texture's orientation.
-            resolved[0] = 0f
-            resolved[5] = 0f
-            resolved[4] = if (oesMatrix[4] >= 0f) 1f else -1f
-            resolved[1] = if (oesMatrix[1] >= 0f) -1f else 1f
-            resolved[12] = if (oesMatrix[4] >= 0f) 0f else 1f
-            resolved[13] = if (oesMatrix[1] >= 0f) 1f else 0f
+            matrix[0] = 0f
+            matrix[5] = 0f
+            matrix[4] = if (oesMatrix[4] >= 0f) 1f else -1f
+            matrix[1] = if (oesMatrix[1] >= 0f) -1f else 1f
+            matrix[12] = if (oesMatrix[4] >= 0f) 0f else 1f
+            matrix[13] = if (oesMatrix[1] >= 0f) 1f else 0f
         } else {
-            resolved[0] = if (oesMatrix[0] >= 0f) 1f else -1f
-            resolved[5] = if (oesMatrix[5] >= 0f) -1f else 1f
-            resolved[12] = if (oesMatrix[0] >= 0f) 0f else 1f
-            resolved[13] = if (oesMatrix[5] >= 0f) 1f else 0f
+            matrix[0] = if (oesMatrix[0] >= 0f) 1f else -1f
+            matrix[5] = if (oesMatrix[5] >= 0f) -1f else 1f
+            matrix[12] = if (oesMatrix[0] >= 0f) 0f else 1f
+            matrix[13] = if (oesMatrix[5] >= 0f) 1f else 0f
         }
 
-        System.arraycopy(resolved, 0, matrix, 0, matrix.size)
         captured = true
         return true
     }
