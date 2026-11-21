@@ -21,10 +21,12 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.Role
@@ -121,8 +123,7 @@ fun CameraTopBar(
         Row(
             modifier = Modifier
                 .height(36.dp)
-                .clip(CircleShape)
-                .background(Color(0xCC171717))
+                .background(Color(0xCC171717), CircleShape)
                 .padding(horizontal = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -184,16 +185,49 @@ private fun TopBarActionButton(
     contentDescription: String,
     content: @Composable BoxScope.() -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .size(28.dp)
-            .clip(CircleShape)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { this.contentDescription = contentDescription }
-            .autoRotate(),
-        contentAlignment = Alignment.Center,
-        content = content
-    )
+    // Keep the original 28 dp layout footprint, but let the invisible hit target
+    // extend vertically and slightly horizontally for easier tapping.
+    Layout(
+        modifier = Modifier.size(28.dp),
+        content = {
+            Box(
+                modifier = Modifier
+                    .size(width = 30.dp, height = 56.dp)
+                    .clickable(
+                        interactionSource = null,
+                        indication = null,
+                        role = Role.Button,
+                        onClick = onClick
+                    )
+                    .semantics { this.contentDescription = contentDescription },
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .autoRotate(),
+                    contentAlignment = Alignment.Center,
+                    content = content
+                )
+            }
+        }
+    ) { measurables, _ ->
+        val touchWidth = 30.dp.roundToPx()
+        val touchHeight = 56.dp.roundToPx()
+        val visualSize = 28.dp.roundToPx()
+        val touchTarget = measurables.single().measure(
+            Constraints.fixed(width = touchWidth, height = touchHeight)
+        )
+
+        // The child extends outside the measured footprint; this does not change
+        // the Row's spacing or the visible capsule dimensions.
+        layout(visualSize, visualSize) {
+            touchTarget.placeRelative(
+                x = (visualSize - touchWidth) / 2,
+                y = (visualSize - touchHeight) / 2
+            )
+        }
+    }
 }
 
 @Composable
@@ -258,8 +292,7 @@ private fun VideoTopBar(
             Box(
                 modifier = Modifier
                     .height(30.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xCC171717))
+                    .background(Color(0xCC171717), CircleShape)
             ) {
                 Row(
                     modifier = Modifier
@@ -332,8 +365,7 @@ private fun VideoParameterCluster(
     Box(
         modifier = Modifier
             .height(30.dp)
-            .clip(CircleShape)
-            .background(Color(0xCC171717))
+                    .background(Color(0xCC171717), CircleShape)
     ) {
         Row(
             modifier = Modifier
