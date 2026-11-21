@@ -26,13 +26,28 @@ class MgcEisPresentationTransformTest {
     }
 
     @Test
+    fun nativeOesTransformPreserves180DegreeRotation() {
+        val transform = MgcEisPresentationTransform()
+        val oesMatrix = FloatArray(16).apply {
+            this[0] = -1f
+            this[5] = 1f
+            this[10] = 1f
+            this[12] = 1f
+            this[15] = 1f
+        }
+
+        assertTrue(transform.updateFromOes(oesMatrix))
+        assertArrayEquals(matrix180(), transform.matrix, 0f)
+    }
+
+    @Test
     fun nativeOesTransformCanRefreshAfterCameraHandoff() {
         val transform = MgcEisPresentationTransform()
 
         assertTrue(transform.updateFromOes(oesMatrix0()))
         assertArrayEquals(identityMatrix(), transform.matrix, 0f)
 
-        assertTrue(transform.updateFromOes(oesMatrix180()))
+        assertTrue(transform.updateFromOes(oesMatrixFrontMirrored()))
         assertArrayEquals(frontMirrorMatrix(), transform.matrix, 0f)
 
         // A subsequent rear-camera frame replaces the reflection without carrying over
@@ -155,7 +170,7 @@ class MgcEisPresentationTransformTest {
         this[15] = 1f
     }
 
-    private fun oesMatrix180() = FloatArray(16).apply {
+    private fun oesMatrixFrontMirrored() = FloatArray(16).apply {
         this[0] = -1f
         this[5] = -1f
         this[10] = 1f
