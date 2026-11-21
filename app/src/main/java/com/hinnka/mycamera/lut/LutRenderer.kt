@@ -1138,7 +1138,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val oesFrameGeneration = frameAvailableGeneration.getAndSet(-1L)
         val oesFrameUpdated = oesFrameGeneration >= 0L &&
             acquireLatestCameraFrame(
-                delayedStabilizationEnabled = delayedStabilizationEnabled,
                 frameGeneration = oesFrameGeneration,
                 expectedGeneration = cameraFrameGeneration,
             )
@@ -1568,7 +1567,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun acquireLatestCameraFrame(
-        delayedStabilizationEnabled: Boolean,
         frameGeneration: Long,
         expectedGeneration: Long,
     ): Boolean {
