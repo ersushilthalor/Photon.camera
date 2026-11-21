@@ -524,7 +524,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Volatile
     private var lensFacing: Int = 1 // CameraCharacteristics.LENS_FACING_BACK
     private val previewCameraKeyTracker = MgcEisCameraKeyTracker(
-        initialKey = MgcEisCameraKey(sensorOrientation, lensFacing),
+        initialKey = MgcEisCameraKey(sensorOrientation, lensFacing, cameraId = ""),
         presentationTransform = mgcEisPresentationTransform,
     )
     private val cameraGeneration: Long
@@ -1592,18 +1592,26 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 frameGeneration == pendingPresentationCaptureGeneration &&
                 frameGeneration == cameraGeneration
             ) {
-                if (mgcEisPresentationTransform.captureFromOes(stMatrix)) {
+                // ImageReader/YUV frames do not carry the OES producer transform. Resolve their
+                // presentation from the active camera's immutable Camera2 sensor metadata instead.
+                // Never infer it from the first OES callback: that callback can still belong to the
+                // previous Camera2 session during an asynchronous front/back handoff.
+                if (mgcEisPresentationTransform.captureFromSensorOrientation(sensorOrientation)) {
                     pendingPresentationCaptureGeneration = -1L
                     PLog.d(
                         TAG,
-                        "Captured first OES presentation transform: cameraId=${currentCameraId ?: "unknown"}, " +
-                            "lensFacing=$lensFacing, sensorOrientation=$sensorOrientation, " +
-                            "stMatrix=${previewMatrixSummary(stMatrix)}, " +
+                        "Captured MGC ImageReader presentation transform from SENSOR_ORIENTATION: " +
+                            "cameraId=${currentCameraId ?: "unknown"}, lensFacing=$lensFacing, " +
+                            "sensorOrientation=$sensorOrientation, " +
                             "capturedMatrix=${previewMatrixSummary(mgcEisPresentationTransform.matrix)}, " +
-                            "textureSource=$currentCameraTextureSource, generation=$frameGeneration",
+                            "generation=$frameGeneration",
                     )
                 } else {
-                    PLog.w(TAG, "MGC cannot derive a cardinal presentation orientation yet")
+                    PLog.w(
+                        TAG,
+                        "MGC cannot resolve ImageReader presentation: cameraId=${currentCameraId ?: "unknown"}, " +
+                            "sensorOrientation=$sensorOrientation",
+                    )
                 }
             }
             true
@@ -3145,8 +3153,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         orientation: Int,
         facing: Int,
     ) {
-        currentCameraId = cameraId?.takeIf { it.isNotBlank() }
-        val cameraKeyChanged = sensorOrientation != orientation || lensFacing != facing
+        val normalizedCameraId = cameraId?.takeIf { it.isNotBlank() }
+        // Include the physical/logical Camera2 ID, not just facing/orientation. A handoff between
+        // two rear sensors can preserve both values while still invalidating queued frames/metadata.
+        val cameraKeyChanged = currentCameraId != normalizedCameraId ||
+            sensorOrientation != orientation ||
+            lensFacing != facing
+        currentCameraId = normalizedCameraId
         sensorOrientation = orientation
         lensFacing = facing
         if (cameraKeyChanged) {
@@ -3167,7 +3180,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun handlePreviewCameraKeyChange() {
-        val nextKey = MgcEisCameraKey(sensorOrientation, lensFacing)
+        val nextKey = MgcEisCameraKey(
+            sensorOrientation = sensorOrientation,
+            lensFacing = lensFacing,
+            cameraId = currentCameraId.orEmpty(),
+        )
         val capturedMatrixBeforeReset = mgcEisPresentationTransform.matrix.copyOf()
         if (!previewCameraKeyTracker.update(nextKey)) return
 
