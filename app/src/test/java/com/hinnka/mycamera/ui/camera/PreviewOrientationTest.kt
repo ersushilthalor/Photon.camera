@@ -7,13 +7,25 @@ import org.junit.Test
 class PreviewOrientationTest {
 
     @Test
-    fun skipsOppositeMountHalfTurnThatInvertsFrontPreview() {
+    fun appliesHalfTurnWhenFrontSensorIsMountedOppositeToRearSensor() {
         assertEquals(
-            0,
+            180,
             resolvePreviewOrientationOffset(
                 lensFacing = CameraCharacteristics.LENS_FACING_FRONT,
                 sensorOrientation = 270,
                 rearSensorOrientation = 90,
+            ),
+        )
+    }
+
+    @Test
+    fun normalizesOppositeMountHalfTurnInEitherDirection() {
+        assertEquals(
+            180,
+            resolvePreviewOrientationOffset(
+                lensFacing = CameraCharacteristics.LENS_FACING_FRONT,
+                sensorOrientation = 90,
+                rearSensorOrientation = 270,
             ),
         )
     }
