@@ -52,6 +52,7 @@ fun CameraPreviewGL(
     cameraId: String,
     sensorOrientation: Int,
     lensFacing: Int,
+    previewOrientationOffset: Int = 0,
     calibrationOffset: Int,
     baselineLut: LutConfig?,
     currentLut: LutConfig?,
@@ -233,6 +234,7 @@ fun CameraPreviewGL(
                             sensorOrientation = sensorOrientation,
                             lensFacing = lensFacing,
                         )
+                        glSurfaceView.setPreviewOrientationOffset(previewOrientationOffset)
                         glSurfaceView.setDeviceRotation(rotationDegrees.toInt())
                         glSurfaceView.setCalibrationOffset(calibrationOffset)
                         glSurfaceView.setCaptureAspectRatio(aspectRatio)

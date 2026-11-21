@@ -245,6 +245,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val stabilizationMvpMatrix = FloatArray(16)
     private val eisFallbackMvpMatrix = FloatArray(16)
     private val modeSwitchMvpMatrix = FloatArray(16)
+    private val previewOrientationRotationMatrix = FloatArray(16)
+    private val previewOrientationMvpMatrix = FloatArray(16)
+
+    @Volatile
+    private var previewOrientationOffset = 0
 
     @Volatile
     private var modeSwitchPreviewAspectRatio = 0f
@@ -1540,25 +1545,56 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
 
         val animatedAspect = modeSwitchPreviewAspectRatio
-        if (targetWidth == viewportWidth && targetHeight == viewportHeight &&
+        val displayMatrix = if (targetWidth == viewportWidth && targetHeight == viewportHeight &&
             animatedAspect.isFinite() && animatedAspect > 0f
         ) {
             val sourceWidth = if (stabilized) stabilizationInputWidth else previewWidth
             val sourceHeight = if (stabilized) stabilizationInputHeight else previewHeight
-            val matrix = buildMvpMatrix(
+            buildMvpMatrix(
                 targetWidth = targetWidth,
                 targetHeight = targetHeight,
                 sourceWidth = sourceWidth,
                 sourceHeight = sourceHeight,
                 viewAspectOverride = animatedAspect,
                 outMatrix = modeSwitchMvpMatrix,
-            )
-            if (needsEisSafetyCrop) {
-                Matrix.scaleM(matrix, 0, EIS_OUTPUT_CROP_ZOOM, EIS_OUTPUT_CROP_ZOOM, 1f)
+            ).also { matrix ->
+                if (needsEisSafetyCrop) {
+                    Matrix.scaleM(matrix, 0, EIS_OUTPUT_CROP_ZOOM, EIS_OUTPUT_CROP_ZOOM, 1f)
+                }
             }
-            return matrix
+        } else {
+            baseMatrix
         }
-        return baseMatrix
+
+        return applyPreviewOrientationOffset(displayMatrix)
+    }
+
+    /**
+     * Applies the relative sensor-mount correction after the normal preview crop.
+     * This matrix is used only by the live viewfinder draw path, never by capture geometry.
+     */
+    private fun applyPreviewOrientationOffset(baseMatrix: FloatArray): FloatArray {
+        val offset = previewOrientationOffset
+        if (offset == 0) return baseMatrix
+
+        Matrix.setIdentityM(previewOrientationRotationMatrix, 0)
+        Matrix.rotateM(
+            previewOrientationRotationMatrix,
+            0,
+            offset.toFloat(),
+            0f,
+            0f,
+            1f,
+        )
+        Matrix.multiplyMM(
+            previewOrientationMvpMatrix,
+            0,
+            previewOrientationRotationMatrix,
+            0,
+            baseMatrix,
+            0,
+        )
+        return previewOrientationMvpMatrix
     }
 
     private fun useCurrentOesFrame() {
@@ -3160,6 +3196,18 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
      * 设置传感器方向 (硬件属性)
      */
     @Synchronized
+    /**
+     * Applies a sensor-mount correction to the live viewfinder only.
+     * Capture geometry, saved photos, and video orientation metadata remain unchanged.
+     */
+    fun setPreviewOrientationOffset(offset: Int) {
+        val normalizedOffset = Math.floorMod(offset, 360)
+        if (previewOrientationOffset != normalizedOffset) {
+            previewOrientationOffset = normalizedOffset
+            PLog.i(TAG, "Preview-only sensor mount correction=$normalizedOffset degrees")
+        }
+    }
+
     fun setSensorOrientation(orientation: Int) {
         if (sensorOrientation != orientation) {
             setPreviewCameraConfiguration(currentCameraId, orientation, lensFacing)
