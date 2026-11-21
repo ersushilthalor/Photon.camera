@@ -1,7 +1,5 @@
 package com.hinnka.mycamera.lut
 
-import android.graphics.SurfaceTexture
-import kotlin.math.abs
 
 private fun setIdentityMatrix(matrix: FloatArray) {
     matrix.fill(0f)
@@ -33,47 +31,6 @@ internal class MgcEisPresentationTransform {
         return true
     }
 
-    /**
-     * Captures the configured stream orientation once. Camera2 may update the
-     * OES crop every frame, whereas its cardinal orientation is a stream
-     * property; freezing it prevents producer-buffer state from leaking into
-     * MGC's independent 2D texture.
-     */
-    fun captureFromOes(oesMatrix: FloatArray): Boolean {
-        if (captured) return true
-        if (oesMatrix.size < 16) return false
-
-        val uAlongX = abs(oesMatrix[0]) >= abs(oesMatrix[1])
-        val vAlongX = abs(oesMatrix[4]) >= abs(oesMatrix[5])
-        val uMagnitude = maxOf(abs(oesMatrix[0]), abs(oesMatrix[1]))
-        val vMagnitude = maxOf(abs(oesMatrix[4]), abs(oesMatrix[5]))
-        if (uAlongX == vAlongX || uMagnitude < 0.5f || vMagnitude < 0.5f) {
-            return false
-        }
-
-        setIdentityMatrix(matrix)
-        if (!uAlongX) {
-            // The OES transform is a cardinal 90° rotation. Convert its
-            // bottom-left OES origin to the regular 2D texture's orientation.
-            // setIdentityM() leaves m00/m11 as one; they must be cleared
-            // before installing the off-diagonal cardinal rotation. Leaving
-            // them in place produces a rotation-plus-shear matrix.
-            matrix[0] = 0f
-            matrix[5] = 0f
-            matrix[4] = if (oesMatrix[4] >= 0f) 1f else -1f
-            matrix[1] = if (oesMatrix[1] >= 0f) -1f else 1f
-            matrix[12] = if (oesMatrix[4] >= 0f) 0f else 1f
-            matrix[13] = if (oesMatrix[1] >= 0f) 1f else 0f
-        } else {
-            matrix[0] = if (oesMatrix[0] >= 0f) 1f else -1f
-            matrix[5] = if (oesMatrix[5] >= 0f) -1f else 1f
-            matrix[12] = if (oesMatrix[0] >= 0f) 0f else 1f
-            matrix[13] = if (oesMatrix[5] >= 0f) 1f else 0f
-        }
-        captured = true
-        return true
-    }
-
     fun reset() {
         setIdentityMatrix(matrix)
         captured = false
@@ -85,11 +42,13 @@ internal class MgcEisPresentationTransform {
 internal data class MgcEisCameraKey(
     val sensorOrientation: Int,
     val lensFacing: Int,
+    /** Camera2 camera ID: two sensors can share facing and orientation but not stream identity. */
+    val cameraId: String = "",
 )
 
 /**
- * Tracks the active preview camera. A key change invalidates the frozen OES presentation
- * transform and advances the generation before the new stream can be consumed.
+ * Tracks the active Camera2 stream. A key change invalidates the ImageReader presentation
+ * transform and advances the generation before frames from the replacement stream are consumed.
  */
 internal class MgcEisCameraKeyTracker(
     initialKey: MgcEisCameraKey,
