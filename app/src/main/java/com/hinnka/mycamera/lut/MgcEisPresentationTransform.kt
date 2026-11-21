@@ -9,7 +9,7 @@ private fun setIdentityMatrix(matrix: FloatArray) {
     matrix[15] = 1f
 }
 
-/** Retains the cardinal OES orientation for the delayed ImageReader output presentation. */
+/** Retains the active Camera2 sensor orientation for delayed ImageReader output presentation. */
 internal class MgcEisPresentationTransform {
     val matrix = FloatArray(16).also(::setIdentityMatrix)
     private var captured = false
@@ -17,11 +17,12 @@ internal class MgcEisPresentationTransform {
     /**
      * Initializes the ImageReader presentation transform without waiting for an OES frame.
      *
-     * Video EIS+ intentionally does not attach the recorder's OES surface to Camera2: frames are
-     * delivered through the timestamp-matched YUV ImageReader instead. Consequently the recorder
-     * cannot discover the producer transform through [SurfaceTexture.getTransformMatrix]. Camera2
-     * guarantees that SENSOR_ORIENTATION is cardinal, so it is sufficient to rotate the raw YUV
-     * image into the same natural-device orientation used by the normal OES recording path.
+     * The OES preview and ImageReader YUV output are separate Camera2 producers. Their buffer
+     * transforms are not interchangeable, and an OES callback can still be queued by the previous
+     * camera session while a lens switch is in progress. Use the new camera's immutable
+     * SENSOR_ORIENTATION instead of sampling a potentially stale OES transform. Camera2 defines
+     * this value in cardinal 90-degree increments, which is sufficient to orient the raw YUV image
+     * into the same natural-device coordinate space as the live preview.
      */
     fun captureFromSensorOrientation(sensorOrientationDegrees: Int): Boolean {
         if (captured) return true
