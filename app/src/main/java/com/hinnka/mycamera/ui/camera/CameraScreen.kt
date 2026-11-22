@@ -238,12 +238,23 @@ fun CameraScreen(
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
     var dualCaptureEnabled by remember { mutableStateOf(false) }
+    val spatialVideoEnabled by viewModel.spatialVideoEnabledState.collectAsState()
 
     LaunchedEffect(state.captureMode) {
-        if (state.captureMode != CaptureMode.VIDEO && dualCaptureEnabled) {
-            dualCaptureEnabled = false
-            viewModel.setDualCaptureEnabled(false)
+        if (state.captureMode != CaptureMode.VIDEO) {
+            if (dualCaptureEnabled) {
+                dualCaptureEnabled = false
+                viewModel.setDualCaptureEnabled(false)
+            }
+            if (spatialVideoEnabled) {
+                viewModel.setSpatialVideoEnabled(false)
+            }
         }
+    }
+
+    LaunchedEffect(spatialVideoEnabled) {
+        // Special Video owns the rear ultra-wide stream and cannot overlap Dual Capture.
+        if (spatialVideoEnabled) dualCaptureEnabled = false
     }
 
     val uiStyle by viewModel.uiStyle.collectAsState()
@@ -2312,6 +2323,33 @@ fun CameraScreen(
                     dualCaptureEnabled = !dualCaptureEnabled
                     dualCaptureDragOffset = Offset.Zero
                     viewModel.setDualCaptureEnabled(dualCaptureEnabled)
+                }
+            },
+            videoSpecialVideoEnabled = spatialVideoEnabled,
+            videoSpecialVideoAvailable = spatialVideoEnabled || viewModel.isSpatialVideoSupported(),
+            onVideoSpecialVideoClick = {
+                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(R.string.special_video_stop_recording_to_change),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                } else if (!spatialVideoEnabled && !viewModel.isSpatialVideoSupported()) {
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(R.string.special_video_not_supported),
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                } else {
+                    if (!spatialVideoEnabled) {
+                        if (state.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED) {
+                            viewModel.setVideoStabilizationMode(VideoStabilizationMode.OFF)
+                        }
+                        if (state.videoConfig.fps == VideoFpsPreset.FPS_120) {
+                            viewModel.setVideoFps(VideoFpsPreset.FPS_30)
+                        }
+                    }
+                    viewModel.setSpatialVideoEnabled(!spatialVideoEnabled)
                 }
             },
             onVideoEditClick = {
