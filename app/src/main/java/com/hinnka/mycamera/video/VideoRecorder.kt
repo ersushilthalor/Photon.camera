@@ -148,6 +148,7 @@ class VideoRecorder(
     private var requestedDualCapturePipWidthFraction: Float = 0.33f
     private var cameraInputStarted = false
     private var requestedCameraTimestampSource = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
+    private var requestedSharedTimestampClock: SharedVideoTimestampClock? = null
     private var requestedSensorOrientationDegrees = 0
     private var cameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
     private var timelineOriginUs = UNSET_TIMESTAMP
@@ -233,6 +234,7 @@ class VideoRecorder(
         privateOutputFile: File? = null,
         recordAudio: Boolean = true,
         sharedTimelineOriginUs: Long? = null,
+        sharedCameraTimestampClock: SharedVideoTimestampClock? = null,
         dualCaptureInputSize: Size? = null,
         dualCaptureSensorOrientationDegrees: Int = 0,
         dualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE,
@@ -281,6 +283,7 @@ class VideoRecorder(
         }
         requestedColorLayers = colorLayers.toList()
         requestedCameraTimestampSource = cameraTimestampSource
+        requestedSharedTimestampClock = sharedCameraTimestampClock
         requestedSensorOrientationDegrees = sensorOrientationDegrees
         requestedFlipEncodedFrame = flipEncodedFrame
         requestedEnhancedStabilization = enhancedStabilization
@@ -1204,6 +1207,10 @@ class VideoRecorder(
     private fun mapCameraTimestampToBoottimeNs(cameraTimestampNs: Long): Long {
         if (requestedCameraTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
             return cameraTimestampNs
+        }
+
+        requestedSharedTimestampClock?.let { sharedClock ->
+            return sharedClock.toBoottimeNs(cameraTimestampNs)
         }
 
         if (cameraTimestampToBoottimeOffsetNs == UNSET_TIMESTAMP) {
