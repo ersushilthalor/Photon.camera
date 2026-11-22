@@ -2909,6 +2909,9 @@ class Camera2Controller(private val context: Context) {
         )
 
         var previewSize = _state.value.currentPreviewSize
+        // Never carry a low-light shutter cap across a front/back camera reopen.
+        videoExposureTimePriorityActive = false
+        videoExposureTimePriorityFps = 0
         availableCaptureRequestKeyNames = null
 
         try {
