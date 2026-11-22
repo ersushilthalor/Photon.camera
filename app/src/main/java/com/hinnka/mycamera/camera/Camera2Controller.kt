@@ -8677,6 +8677,9 @@ class Camera2Controller(private val context: Context) {
             return
         }
         if (enabled) {
+            // Release Dual Capture's concurrent camera before Spatial Video claims the
+            // rear logical camera's 1x and ultra-wide physical outputs.
+            if (dualCaptureEnabled) setDualCaptureEnabled(false)
             if (_state.value.captureMode != CaptureMode.VIDEO) {
                 onCameraError?.invoke(-1, "Special Video is only available in Video mode.", false)
                 return
