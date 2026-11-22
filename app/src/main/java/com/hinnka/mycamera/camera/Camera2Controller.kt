@@ -5294,17 +5294,19 @@ class Camera2Controller(private val context: Context) {
 
         // Camera2 only accepts FPS ranges advertised by this camera. A fabricated
         // [targetFps, targetFps] range can make the repeating request fail entirely.
-        // Prefer an exact fixed range. If unavailable, choose the containing range
-        // with the highest minimum FPS (then the lowest maximum), rather than widening
-        // the AE range and needlessly allowing low-light metering to drop further.
+        // Prefer an exact fixed range. If unavailable, prefer a containing range
+        // whose upper bound is the selected FPS, then the highest lower bound. This
+        // avoids permitting a slower cadence or a higher cadence when a tighter
+        // advertised range exists for this sensor.
         val exactRange = availableRanges.firstOrNull {
             it.lower == targetFps && it.upper == targetFps
         }
         val containingRange = availableRanges
             .filter { it.lower <= targetFps && it.upper >= targetFps }
             .sortedWith(
-                compareByDescending<Range<Int>> { it.lower }
+                compareBy<Range<Int>> { if (it.upper == targetFps) 0 else 1 }
                     .thenBy { it.upper }
+                    .thenByDescending { it.lower }
             )
             .firstOrNull()
         val resolvedRange = exactRange ?: containingRange ?: availableRanges.minByOrNull { range ->
