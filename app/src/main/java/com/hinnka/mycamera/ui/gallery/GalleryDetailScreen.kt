@@ -19,6 +19,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -64,6 +65,9 @@ import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -114,24 +118,52 @@ private val GalleryToolbarButton = Color(0xFF242424)
 private val GalleryToolbarContent = Color(0xFFF2F2F2)
 private val GallerySheetSurface = Color(0xFF171717)
 
+private const val SPATIAL_VIDEO_LENS_SWITCH_DURATION_MS = 300L
+
+private suspend fun awaitVideoPlayerReady(
+    player: ExoPlayer,
+    timeoutMs: Long = 3_500L,
+): Boolean {
+    if (player.playbackState == Player.STATE_READY) return true
+
+    val ready = CompletableDeferred<Boolean>()
+    val listener = object : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            when (playbackState) {
+                Player.STATE_READY -> ready.complete(true)
+                Player.STATE_IDLE -> if (player.playerError != null) ready.complete(false)
+            }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            ready.complete(false)
+        }
+    }
+    player.addListener(listener)
+    if (player.playbackState == Player.STATE_READY) ready.complete(true)
+
+    return try {
+        withTimeoutOrNull(timeoutMs) { ready.await() } ?: false
+    } finally {
+        player.removeListener(listener)
+    }
+}
+
 private class VideoPreviewHandle {
-    private var activeLease: Lease? = null
+    private val activeLeases = linkedSetOf<Lease>()
 
     fun attach(player: ExoPlayer): Lease {
-        release()
-        return Lease(player).also { activeLease = it }
+        return Lease(player).also { activeLeases += it }
     }
 
     fun release(lease: Lease) {
-        if (activeLease === lease) {
-            activeLease = null
-        }
+        activeLeases.remove(lease)
         lease.release()
     }
 
     fun release() {
-        activeLease?.release()
-        activeLease = null
+        activeLeases.toList().forEach(Lease::release)
+        activeLeases.clear()
     }
 
     class Lease(private val player: ExoPlayer) {
@@ -2354,7 +2386,11 @@ private fun VideoDetailPlayer(
         PLog.d("VideoDetailPlayer", "Instantiating new VideoLutEffect.")
         VideoLutEffect(lutConfig, recipeParams)
     }
+    val alternateVideoLutEffect = remember(photo.id, mediaUri) {
+        VideoLutEffect(lutConfig, recipeParams)
+    }
     val videoOutputSize by videoLutEffect.outputSize.collectAsState()
+    val alternateVideoOutputSize by alternateVideoLutEffect.outputSize.collectAsState()
     LaunchedEffect(videoOutputSize) {
         videoOutputSize?.let { size ->
             PLog.d("VideoDetailPlayer", "Effect output size: photo=${photo.id}, size=${size.width}x${size.height}")
@@ -2365,74 +2401,143 @@ private fun VideoDetailPlayer(
     LaunchedEffect(lutConfig, recipeParams) {
         PLog.d("VideoDetailPlayer", "Updating VideoLutEffect params. lut: ${lutConfig?.title}, recipe: ${recipeParams != null}")
         videoLutEffect.update(lutConfig, recipeParams)
+        alternateVideoLutEffect.update(lutConfig, recipeParams)
     }
 
     val exoPlayer = remember(photo.id, mediaUri, isActive) {
         if (!isActive) return@remember null
-        PLog.d("VideoDetailPlayer", "Creating ExoPlayer for detail video.")
+        PLog.d("VideoDetailPlayer", "Creating main ExoPlayer for detail video.")
         ExoPlayer.Builder(context).build().apply {
             repeatMode = Player.REPEAT_MODE_OFF
             setVideoEffects(listOf(videoLutEffect))
-
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) {
-                    PLog.d("VideoDetailPlayer", "ExoPlayer state changed: $state")
+                    PLog.d("VideoDetailPlayer", "Main ExoPlayer state changed: $state")
                 }
-                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    PLog.w("VideoDetailPlayer", "ExoPlayer encountered error!", error)
+                override fun onPlayerError(error: PlaybackException) {
+                    PLog.w("VideoDetailPlayer", "Main ExoPlayer encountered error!", error)
                 }
             })
         }
     }
+    val alternateExoPlayer = remember(photo.id, mediaUri, isActive) {
+        if (!isActive) return@remember null
+        ExoPlayer.Builder(context).build().apply {
+            repeatMode = Player.REPEAT_MODE_OFF
+            setVideoEffects(listOf(alternateVideoLutEffect))
+            addListener(object : Player.Listener {
+                override fun onPlayerError(error: PlaybackException) {
+                    PLog.w("VideoDetailPlayer", "Alternate spatial ExoPlayer encountered error!", error)
+                }
+            })
+        }
+    }
+    var activePlayerSlot by rememberSaveable(photo.id) { mutableIntStateOf(0) }
+    var isSpatialLensSwitching by remember(photo.id, mediaUri) { mutableStateOf(false) }
 
     val playerView = rememberVideoPlayerView(exoPlayer)
+    val alternatePlayerView = rememberVideoPlayerView(alternateExoPlayer)
+    val switchScope = rememberCoroutineScope()
 
-    DisposableEffect(exoPlayer, previewHandle) {
-        val previewLease = exoPlayer?.let(previewHandle::attach)
+    DisposableEffect(exoPlayer, alternateExoPlayer, previewHandle) {
+        val leases = listOfNotNull(exoPlayer, alternateExoPlayer).map(previewHandle::attach)
         onDispose {
-            if (previewLease != null) {
-                PLog.d("VideoDetailPlayer", "Disposing ExoPlayer.")
-                previewHandle.release(previewLease)
-            }
+            leases.forEach(previewHandle::release)
         }
     }
 
-    LaunchedEffect(exoPlayer, isActive, lifecycle) {
-        PLog.d("VideoDetailPlayer", "VideoDetailPlayer isActive changed: $isActive, player: $exoPlayer")
-        if (exoPlayer != null && isActive) {
+    LaunchedEffect(exoPlayer, alternateExoPlayer, isActive, lifecycle) {
+        if (exoPlayer != null && alternateExoPlayer != null && isActive) {
             isUltraWideSelected = false
-            delay(150) // Wait for transitions to complete and EGL surface to be fully ready
-            PLog.d("VideoDetailPlayer", "Preparing and starting ExoPlayer.")
+            activePlayerSlot = 0
+            isSpatialLensSwitching = false
+            alternateExoPlayer.stop()
+            delay(150)
+            PLog.d("VideoDetailPlayer", "Preparing main 1x ExoPlayer.")
             exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri))
             exoPlayer.prepare()
             exoPlayer.playWhenReady = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         }
     }
 
-    if (exoPlayer != null) {
-        Box(modifier = modifier.autoRotate(matchParentSize = true)) {
-        AndroidView(
-            factory = {
-                PLog.d("VideoDetailPlayer", "Creating PlayerView factory.")
-                playerView
-            },
-            update = {
-                PLog.d("VideoDetailPlayer", "Updating PlayerView with player.")
-                it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                // With effects, Player.videoSize may remain UNKNOWN. Fit the Surface itself
-                // to the effect output so a paused/ended buffer has no baked-in letterboxing
-                // that would be stretched when autoRotate swaps the container dimensions.
-                videoOutputSize?.let { size ->
-                    it.findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)
-                        .setAspectRatio(size.width.toFloat() / size.height)
+    val switchSpatialLens: (Boolean) -> Unit = { useUltraWide ->
+        if (
+            useUltraWide != isUltraWideSelected &&
+            !isSpatialLensSwitching &&
+            exoPlayer != null &&
+            alternateExoPlayer != null &&
+            hasSpatialUltraWide
+        ) {
+            switchScope.launch {
+                val outgoingSlot = activePlayerSlot
+                val outgoing = if (outgoingSlot == 0) exoPlayer else alternateExoPlayer
+                val incoming = if (outgoingSlot == 0) alternateExoPlayer else exoPlayer
+                val targetUri = if (useUltraWide) Uri.fromFile(ultraWideFile) else mediaUri
+                val shouldResume = outgoing.playWhenReady &&
+                    lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+
+                isSpatialLensSwitching = true
+                incoming.stop()
+                incoming.setMediaItem(MediaItem.fromUri(targetUri))
+                incoming.prepare()
+
+                val ready = awaitVideoPlayerReady(incoming)
+                if (ready) {
+                    // Keep the outgoing player running during preparation. Sample its live
+                    // playhead only after the incoming decoder is ready, then align before fade.
+                    val syncPositionMs = outgoing.currentPosition.coerceAtLeast(0L)
+                    val durationMs = incoming.duration
+                    val safePositionMs = if (durationMs > 0L) {
+                        syncPositionMs.coerceAtMost((durationMs - 60L).coerceAtLeast(0L))
+                    } else {
+                        syncPositionMs
+                    }
+                    incoming.seekTo(safePositionMs)
+                    incoming.playWhenReady = shouldResume
+                    if (shouldResume) incoming.play() else incoming.pause()
+
+                    activePlayerSlot = 1 - outgoingSlot
+                    isUltraWideSelected = useUltraWide
+                    delay(SPATIAL_VIDEO_LENS_SWITCH_DURATION_MS + 80L)
+
+                    outgoing.pause()
+                    outgoing.playWhenReady = false
+                    outgoing.stop()
+                } else {
+                    incoming.stop()
+                    Toast.makeText(context, "Unable to prepare the selected camera video.", Toast.LENGTH_SHORT).show()
                 }
-                it.useController = true
-                it.controllerAutoShow = false
-                it.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                it.isVisible = true
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+                isSpatialLensSwitching = false
+            }
+        }
+    }
+
+    if (exoPlayer != null && alternateExoPlayer != null) {
+        Box(modifier = modifier.autoRotate(matchParentSize = true)) {
+            Crossfade(
+                targetState = activePlayerSlot,
+                animationSpec = tween(durationMillis = SPATIAL_VIDEO_LENS_SWITCH_DURATION_MS.toInt()),
+                modifier = Modifier.fillMaxSize(),
+                label = "spatial-video-lens-switch",
+            ) { playerSlot ->
+                val selectedView = if (playerSlot == 0) playerView else alternatePlayerView
+                val selectedOutputSize = if (playerSlot == 0) videoOutputSize else alternateVideoOutputSize
+                AndroidView(
+                    factory = { selectedView!! },
+                    update = {
+                        it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        selectedOutputSize?.let { size ->
+                            it.findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)
+                                .setAspectRatio(size.width.toFloat() / size.height)
+                        }
+                        it.useController = playerSlot == activePlayerSlot
+                        it.controllerAutoShow = false
+                        it.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                        it.isVisible = true
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         if (hasSpatialUltraWide) {
             Row(
                 modifier = Modifier
@@ -2444,29 +2549,19 @@ private fun VideoDetailPlayer(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TextButton(
-                    onClick = {
-                        val wasPlaying = exoPlayer.playWhenReady
-                        val position = exoPlayer.currentPosition.coerceAtLeast(0L)
-                        exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(ultraWideFile)), position)
-                        exoPlayer.prepare()
-                        exoPlayer.playWhenReady = wasPlaying
-                        isUltraWideSelected = true
-                    },
+                    enabled = !isSpatialLensSwitching,
+                    onClick = { switchSpatialLens(true) },
                     colors = ButtonDefaults.textButtonColors(
-                        contentColor = if (isUltraWideSelected) AccentColor else Color.White
+                        contentColor = if (isUltraWideSelected) AccentColor else Color.White,
+                        disabledContentColor = Color.White.copy(alpha = 0.42f),
                     )
                 ) { Text("0.5x", fontWeight = FontWeight.SemiBold) }
                 TextButton(
-                    onClick = {
-                        val wasPlaying = exoPlayer.playWhenReady
-                        val position = exoPlayer.currentPosition.coerceAtLeast(0L)
-                        exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri), position)
-                        exoPlayer.prepare()
-                        exoPlayer.playWhenReady = wasPlaying
-                        isUltraWideSelected = false
-                    },
+                    enabled = !isSpatialLensSwitching,
+                    onClick = { switchSpatialLens(false) },
                     colors = ButtonDefaults.textButtonColors(
-                        contentColor = if (!isUltraWideSelected) AccentColor else Color.White
+                        contentColor = if (!isUltraWideSelected) AccentColor else Color.White,
+                        disabledContentColor = Color.White.copy(alpha = 0.42f),
                     )
                 ) { Text("1x", fontWeight = FontWeight.SemiBold) }
                 TextButton(
