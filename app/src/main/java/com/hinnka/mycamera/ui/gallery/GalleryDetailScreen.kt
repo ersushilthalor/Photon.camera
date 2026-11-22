@@ -66,7 +66,6 @@ import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.await
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.media3.exoplayer.ExoPlayer
