@@ -3523,6 +3523,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val dualCaptureStreamSize = cameraController.dualCaptureStreamSize
     val dualCaptureSource = cameraController.dualCaptureSource
     val dualCaptureSensorOrientationDegrees = cameraController.dualCaptureSensorOrientationDegrees
+    val spatialVideoEnabledState = cameraController.spatialVideoEnabledState
 
     fun isDualCaptureSupported(): Boolean = cameraController.isDualCaptureSupported()
 
