@@ -1714,37 +1714,61 @@ fun CameraScreen(
                                             dualCaptureStreamSize,
                                             dualCaptureSensorOrientationDegrees,
                                         )
-                                        textureView.setOnClickListener {
-                                            if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
+
+                                    },
+                                )
+                                IconButton(
+                                    onClick = {
+                                        if (state.videoRecordingState.isRecording ||
+                                            state.videoRecordingState.isProcessing
+                                        ) {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                context.getString(R.string.dual_capture_stop_recording_to_change),
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        } else {
+                                            val nextSource = if (dualCaptureSource == DualCaptureSource.FRONT) {
+                                                DualCaptureSource.ULTRA_WIDE
+                                            } else {
+                                                DualCaptureSource.FRONT
+                                            }
+                                            if (!viewModel.isDualCaptureSourceSupported(nextSource)) {
                                                 android.widget.Toast.makeText(
                                                     context,
-                                                    context.getString(R.string.dual_capture_stop_recording_to_change),
+                                                    if (nextSource == DualCaptureSource.FRONT) {
+                                                        "Front camera is not available with this rear camera."
+                                                    } else {
+                                                        "Rear ultra-wide is not available with this camera."
+                                                    },
                                                     android.widget.Toast.LENGTH_SHORT,
                                                 ).show()
                                             } else {
-                                                val nextSource = if (dualCaptureSource == DualCaptureSource.FRONT) {
-                                                    DualCaptureSource.ULTRA_WIDE
-                                                } else {
-                                                    DualCaptureSource.FRONT
-                                                }
-                                                if (!viewModel.isDualCaptureSourceSupported(nextSource)) {
-                                                    android.widget.Toast.makeText(
-                                                        context,
-                                                        if (nextSource == DualCaptureSource.FRONT) {
-                                                            "Front camera is not available with this rear camera."
-                                                        } else {
-                                                            "Rear ultra-wide is not available with this camera."
-                                                        },
-                                                        android.widget.Toast.LENGTH_SHORT,
-                                                    ).show()
-                                                } else {
-                                                    dualCaptureDragOffset = Offset.Zero
-                                                    viewModel.setDualCaptureSource(nextSource)
-                                                }
+                                                dualCaptureDragOffset = Offset.Zero
+                                                viewModel.setDualCaptureSource(nextSource)
                                             }
                                         }
                                     },
-                                )
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(8.dp)
+                                        .size(40.dp)
+                                        .background(
+                                            Color.Black.copy(alpha = 0.58f),
+                                            CircleShape,
+                                        ),
+                                ) {
+                                    Icon(
+                                        imageVector = AppIcons.Cameraswitch,
+                                        contentDescription = if (dualCaptureSource == DualCaptureSource.FRONT) {
+                                            "Switch inset to rear ultra-wide camera"
+                                        } else {
+                                            "Switch inset to front camera"
+                                        },
+                                        tint = Color.White,
+                                        modifier = Modifier.size(21.dp),
+                                    )
+                                }
                             }
                         }
                     }
