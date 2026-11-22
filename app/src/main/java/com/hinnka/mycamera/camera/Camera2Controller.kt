@@ -66,6 +66,7 @@ import com.hinnka.mycamera.video.DualCaptureLayout
 import com.hinnka.mycamera.video.DualCaptureSource
 import com.hinnka.mycamera.video.VideoRecorder
 import com.hinnka.mycamera.video.SpatialVideoStore
+import com.hinnka.mycamera.video.SharedVideoTimestampClock
 import com.hinnka.mycamera.video.SpatialVideoPhysicalCameraCandidate
 import com.hinnka.mycamera.video.resolveSpatialVideoPhysicalCameraPair
 import com.hinnka.mycamera.video.VideoRecordingPath
@@ -304,6 +305,8 @@ class Camera2Controller(private val context: Context) {
     private var previewSurfaceTexture: SurfaceTexture? = null
     private var dualCaptureEnabled = false
     private var spatialVideoEnabled = false
+    private val _spatialVideoEnabledState = MutableStateFlow(false)
+    val spatialVideoEnabledState: StateFlow<Boolean> = _spatialVideoEnabledState.asStateFlow()
     private var spatialVideoMainPhysicalCameraId: String? = null
     private var spatialVideoUltraWidePhysicalCameraId: String? = null
     @Volatile private var spatialPrimaryFinishedUri: Uri? = null
@@ -8691,6 +8694,7 @@ class Camera2Controller(private val context: Context) {
             spatialVideoMainPhysicalCameraId = mainPhysicalCameraId
             spatialVideoUltraWidePhysicalCameraId = ultraWidePhysicalCameraId
             spatialVideoEnabled = true
+            _spatialVideoEnabledState.value = true
             dualCaptureEnabled = false
             activeOutputPhysicalCameraId = spatialVideoMainPhysicalCameraId
             logicalMultiCameraAutoSwitchActive = false
@@ -8699,6 +8703,7 @@ class Camera2Controller(private val context: Context) {
             previewSurfaceTexture?.let { createPreviewSession(openGeneration = cameraOpenGeneration) }
         } else {
             spatialVideoEnabled = false
+            _spatialVideoEnabledState.value = false
             spatialVideoRecorder.forceStop()
             spatialVideoMainPhysicalCameraId = null
             spatialVideoUltraWidePhysicalCameraId = null
@@ -9516,6 +9521,9 @@ class Camera2Controller(private val context: Context) {
                 "cameraInputHlg10=${cameraInputIsHlg10}"
         )
         val spatialTimelineOriginUs = if (spatialVideoEnabled) SystemClock.elapsedRealtimeNanos() / 1_000L else null
+        // Both physical outputs belong to the same logical sensor clock. Share the first
+        // unknown-source clock calibration so independent encoders cannot start milliseconds apart.
+        val spatialTimestampClock = if (spatialVideoEnabled) SharedVideoTimestampClock() else null
         val started = videoRecorder.startRecording(
             size = outputSize,
             cameraInputSize = cameraInputSize,
@@ -9549,6 +9557,7 @@ class Camera2Controller(private val context: Context) {
             recordingPath = _state.value.videoConfig.recordingPath,
             recordingTreeUri = _state.value.videoConfig.recordingTreeUri,
             sharedTimelineOriginUs = spatialTimelineOriginUs,
+            sharedCameraTimestampClock = spatialTimestampClock,
             dualCaptureInputSize = if (dualCaptureEnabled) dualCaptureInputSize else null,
             dualCaptureSensorOrientationDegrees = if (dualCaptureEnabled) {
                 _dualCaptureSensorOrientationDegrees.value
@@ -9635,6 +9644,7 @@ class Camera2Controller(private val context: Context) {
                 privateOutputFile = wideFile,
                 recordAudio = false,
                 sharedTimelineOriginUs = spatialTimelineOriginUs,
+            sharedCameraTimestampClock = spatialTimestampClock,
                 onError = { message ->
                     PLog.e(TAG, "Special Video ultra-wide recorder error: $message")
                     onCameraError?.invoke(-1, message, false)
