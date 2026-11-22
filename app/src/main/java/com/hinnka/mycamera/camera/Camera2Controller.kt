@@ -9072,6 +9072,7 @@ class Camera2Controller(private val context: Context) {
         previewTexture: SurfaceTexture,
         targetCameraId: String,
     ) {
+        val handler = cameraHandler ?: return
         if (cameraDevice == null || cameraDeviceLifecycle != CameraDeviceLifecycle.OPEN) return
         val targetSize = resolveDualCaptureInputSize(targetCameraId)
         if (targetSize == null) {
@@ -9168,7 +9169,7 @@ class Camera2Controller(private val context: Context) {
                         }
                     }
                 },
-                cameraHandler,
+                handler,
             )
         } catch (error: Exception) {
             PLog.e(TAG, "Failed to open concurrent rear ultra-wide camera", error)
@@ -9290,15 +9291,15 @@ class Camera2Controller(private val context: Context) {
                             session.setRepeatingRequest(request.build(), null, handler)
                             PLog.i(
                                 TAG,
-                                "Dual Capture front stream active: preview=${dualCaptureInputSize}, " +
+                                "Dual Capture secondary stream active: preview=${dualCaptureInputSize}, " +
                                     "encoder=${recordSurface != null}, layout=${dualCaptureLayout.name}",
                             )
                         } catch (error: Exception) {
-                            PLog.e(TAG, "Unable to start front-camera repeating request", error)
+                            PLog.e(TAG, "Unable to start secondary-camera repeating request", error)
                             safeCloseCaptureSession(session, "dual capture repeating request failed")
                             dualCaptureSession = null
                             if (recordSurface != null) {
-                                onCameraError?.invoke(-1, "Front-camera recording stream failed.", false)
+                                onCameraError?.invoke(-1, "Secondary-camera recording stream failed.", false)
                                 stopVideoRecording()
                             }
                         }
@@ -9313,12 +9314,12 @@ class Camera2Controller(private val context: Context) {
                         if (recordSurface != null) {
                             onCameraError?.invoke(
                                 -1,
-                                "The front camera cannot provide the selected Dual Capture recording stream.",
+                                "The selected secondary camera cannot provide the Dual Capture recording stream.",
                                 false,
                             )
                             stopVideoRecording()
                         } else {
-                            onCameraError?.invoke(-1, "Front-camera preview could not be configured.", false)
+                            onCameraError?.invoke(-1, "Secondary-camera preview could not be configured.", false)
                         }
                     }
 
@@ -9329,9 +9330,9 @@ class Camera2Controller(private val context: Context) {
                 handler,
             )
         } catch (error: Exception) {
-            PLog.e(TAG, "Failed to configure Dual Capture front session", error)
+            PLog.e(TAG, "Failed to configure Dual Capture secondary session", error)
             if (recordSurface != null) {
-                onCameraError?.invoke(-1, "Front-camera recording stream setup failed.", false)
+                onCameraError?.invoke(-1, "Secondary-camera recording stream setup failed.", false)
                 stopVideoRecording()
             }
         }
