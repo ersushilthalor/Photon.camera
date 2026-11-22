@@ -367,10 +367,9 @@ fun CameraTopSheet(
                             onClick = {
                                 val enabled = !oppoPhotoSettings.refocusEnabled
                                 onOppoPhotoSettingsChange(
-                                    oppoPhotoSettings.copy(
-                                        refocusEnabled = enabled,
-                                        autoHdrEnabled = if (enabled) false else oppoPhotoSettings.autoHdrEnabled
-                                    )
+                                    // Refocus takes precedence for this shutter only. Keep the user's
+                                    // Auto HDR preference intact so it resumes when Refocus is turned off.
+                                    oppoPhotoSettings.copy(refocusEnabled = enabled)
                                 )
                             },
                             modifier = itemModifier
@@ -887,12 +886,30 @@ private fun OppoPhotoPipelineSheet(
                         title = stringResource(label),
                         selected = settings.pipelineProfile == profile,
                         onClick = {
-                            onSettingsChange(settings.copy(
-                                pipelineProfile = profile,
-                                customPipelineEnabled = true,
-                            ))
+                            onSettingsChange(settings.withPhotoProfile(profile))
                         },
                     )
+                }
+            }
+            if (settings.pipelineProfile == "CUSTOM") {
+                Spacer(Modifier.height(8.dp))
+                SectionLabel(title = "Custom 3×3 Color Matrix")
+                val matrixLabels = listOf(
+                    "Red from red", "Red from green", "Red from blue",
+                    "Green from red", "Green from green", "Green from blue",
+                    "Blue from red", "Blue from green", "Blue from blue",
+                )
+                settings.customColorMatrix.forEachIndexed { index, value ->
+                    OppoPipelineSliderLabel(matrixLabels[index], value, -1f..2f) { next ->
+                        val matrix = settings.customColorMatrix.toMutableList().also { it[index] = next }
+                        onSettingsChange(
+                            settings.copy(
+                                customColorMatrix = matrix,
+                                customPipelineEnabled = true,
+                                pipelineProfile = "CUSTOM",
+                            )
+                        )
+                    }
                 }
             }
             OppoPipelineSlider(R.string.oppo_pipeline_exposure, settings.exposure, -2f..2f) {
@@ -906,6 +923,21 @@ private fun OppoPhotoPipelineSheet(
             }
             OppoPipelineSlider(R.string.oppo_pipeline_shadows, settings.shadows, -100f..100f) {
                 onSettingsChange(settings.copy(shadows = it, customPipelineEnabled = true, pipelineProfile = "CUSTOM"))
+            }
+            OppoPipelineSliderLabel("Whites", settings.whites, -100f..100f) {
+                onSettingsChange(settings.copy(whites = it, customPipelineEnabled = true, pipelineProfile = "CUSTOM"))
+            }
+            OppoPipelineSliderLabel("Blacks", settings.blacks, -100f..100f) {
+                onSettingsChange(settings.copy(blacks = it, customPipelineEnabled = true, pipelineProfile = "CUSTOM"))
+            }
+            OppoPipelineSliderLabel("Highlight roll-off", settings.highlightRollOff, 0f..100f) {
+                onSettingsChange(settings.copy(highlightRollOff = it, customPipelineEnabled = true, pipelineProfile = "CUSTOM"))
+            }
+            OppoPipelineSliderLabel("Shadow recovery", settings.shadowRecovery, 0f..100f) {
+                onSettingsChange(settings.copy(shadowRecovery = it, customPipelineEnabled = true, pipelineProfile = "CUSTOM"))
+            }
+            OppoPipelineSliderLabel("Local tone mapping", settings.localToneMapping, 0f..100f) {
+                onSettingsChange(settings.copy(localToneMapping = it, customPipelineEnabled = true, pipelineProfile = "CUSTOM"))
             }
             OppoPipelineSlider(R.string.oppo_pipeline_saturation, settings.saturation, -100f..100f) {
                 onSettingsChange(settings.copy(saturation = it, customPipelineEnabled = true, pipelineProfile = "CUSTOM"))
@@ -921,6 +953,9 @@ private fun OppoPhotoPipelineSheet(
             }
             OppoPipelineSlider(R.string.oppo_pipeline_sharpness, settings.sharpness, 0f..100f) {
                 onSettingsChange(settings.copy(sharpness = it, customPipelineEnabled = true, pipelineProfile = "CUSTOM"))
+            }
+            OppoPipelineSliderLabel("Micro contrast", settings.microContrast, -100f..100f) {
+                onSettingsChange(settings.copy(microContrast = it, customPipelineEnabled = true, pipelineProfile = "CUSTOM"))
             }
             OppoPipelineSlider(R.string.oppo_pipeline_texture, settings.texture, -100f..100f) {
                 onSettingsChange(settings.copy(texture = it, customPipelineEnabled = true, pipelineProfile = "CUSTOM"))
@@ -946,6 +981,32 @@ private fun OppoPipelineSlider(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = stringResource(titleRes),
+                color = Color.White.copy(alpha = 0.88f),
+                fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = String.format("%.2f", value),
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Slider(value = value, onValueChange = onValueChange, valueRange = range)
+    }
+}
+
+@Composable
+private fun OppoPipelineSliderLabel(
+    title: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = title,
                 color = Color.White.copy(alpha = 0.88f),
                 fontSize = 12.sp,
                 modifier = Modifier.weight(1f),
