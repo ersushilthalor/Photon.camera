@@ -324,6 +324,9 @@ class Camera2Controller(private val context: Context) {
     private var dualCaptureCameraId: String? = null
     private var dualCapturePhysicalCameraId: String? = null
     private var dualCaptureMainPhysicalCameraId: String? = null
+    // True when rear ultra-wide is opened as a second concurrent CameraDevice instead
+    // of being routed as a physical output of the primary logical CameraDevice.
+    private var dualCaptureUsesConcurrentUltraWideCamera = false
     private var dualCaptureSavedPrimaryCameraState: DualCapturePrimaryCameraState? = null
     private var dualCaptureInputSize: Size? = null
     private var dualCaptureSessionGeneration = 0L
@@ -8473,9 +8476,70 @@ class Camera2Controller(private val context: Context) {
         return main.first to ultraWide.first
     }
 
+    /**
+     * Some devices expose the rear ultra-wide as an independent public Camera2 ID rather
+     * than as a physical member of the active logical camera. Use it only when Android
+     * explicitly advertises the active rear camera + ultra-wide pair as concurrent.
+     */
+    private fun resolveConcurrentDualCaptureUltraWideCameraId(): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val state = _state.value
+        val current = state.getCurrentCameraInfo() ?: return null
+        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK) return null
+
+        val primaryId = activeOpenCameraId.takeIf { it.isNotBlank() }
+            ?: runCatching { current.getOpenCameraId() }.getOrNull()
+            ?: current.cameraId
+        val publicCameraIds = runCatching { cameraManager.cameraIdList.toSet() }
+            .getOrDefault(emptySet())
+        if (primaryId !in publicCameraIds) return null
+
+        val concurrentPairs = runCatching { cameraManager.concurrentCameraIds }
+            .getOrDefault(emptySet())
+        if (concurrentPairs.isEmpty()) return null
+
+        return state.availableCameras.asSequence()
+            .filter {
+                it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                    !it.isVirtualIszLens &&
+                    !it.isCustomLensId &&
+                    (
+                        it.lensType == LensType.BACK_ULTRA_WIDE ||
+                            (it.intrinsicZoomRatio.isFinite() &&
+                                it.intrinsicZoomRatio in 0.2f..0.85f)
+                    )
+            }
+            .mapNotNull { info ->
+                val openId = runCatching { info.getOpenCameraId() }.getOrNull()
+                    ?: return@mapNotNull null
+                if (openId == primaryId || openId !in publicCameraIds) {
+                    return@mapNotNull null
+                }
+                info to openId
+            }
+            .filter { (_, openId) ->
+                concurrentPairs.any { ids -> primaryId in ids && openId in ids }
+            }
+            .minByOrNull { (info, _) ->
+                info.intrinsicZoomRatio.takeIf { it.isFinite() && it > 0f } ?: Float.MAX_VALUE
+            }
+            ?.second
+            ?.also { cameraId ->
+                PLog.i(
+                    TAG,
+                    "Dual Capture rear ultra-wide concurrent camera resolved: " +
+                        "primary=$primaryId, ultraWide=$cameraId"
+                )
+            }
+    }
+
+    private fun isDualCaptureUltraWideSupported(): Boolean =
+        resolveDualCapturePhysicalCameraPair() != null ||
+            resolveConcurrentDualCaptureUltraWideCameraId() != null
+
     fun isDualCaptureSourceSupported(source: DualCaptureSource): Boolean = when (source) {
         DualCaptureSource.FRONT -> isDualCaptureFrontSupported()
-        DualCaptureSource.ULTRA_WIDE -> resolveDualCapturePhysicalCameraPair() != null
+        DualCaptureSource.ULTRA_WIDE -> isDualCaptureUltraWideSupported()
     }
 
     /**
@@ -8747,7 +8811,7 @@ class Camera2Controller(private val context: Context) {
         if (!isDualCaptureSourceSupported(source)) {
             val message = when (source) {
                 DualCaptureSource.FRONT -> "The front camera cannot run concurrently with the selected rear camera."
-                DualCaptureSource.ULTRA_WIDE -> "The selected rear camera does not expose simultaneous 1x and ultra-wide physical outputs."
+                DualCaptureSource.ULTRA_WIDE -> "The selected rear camera does not advertise a simultaneous ultra-wide stream."
             }
             onCameraError?.invoke(-1, message, false)
             return
@@ -8796,7 +8860,10 @@ class Camera2Controller(private val context: Context) {
         }
         if (dualCapturePreviewSurfaceTexture === surfaceTexture) return
 
-        if (dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE) {
+        if (dualCaptureEnabled &&
+            _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE &&
+            !dualCaptureUsesConcurrentUltraWideCamera
+        ) {
             val oldSurface = dualCapturePreviewSurface
             dualCapturePreviewSurface = null
             dualCapturePreviewSurfaceTexture = surfaceTexture
@@ -8887,7 +8954,21 @@ class Camera2Controller(private val context: Context) {
         if (cameraDevice == null || cameraDeviceLifecycle != CameraDeviceLifecycle.OPEN) return
         val previewTexture = dualCapturePreviewSurfaceTexture ?: return
         if (_dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE) {
-            startDualCaptureUltraWideCamera(previewTexture)
+            if (resolveDualCapturePhysicalCameraPair() != null) {
+                dualCaptureUsesConcurrentUltraWideCamera = false
+                startDualCaptureUltraWideCamera(previewTexture)
+            } else {
+                val ultraWideCameraId = resolveConcurrentDualCaptureUltraWideCameraId()
+                if (ultraWideCameraId == null) {
+                    onCameraError?.invoke(
+                        -1,
+                        "This device does not advertise simultaneous rear main + ultra-wide camera access.",
+                        false,
+                    )
+                    return
+                }
+                startDualCaptureConcurrentUltraWideCamera(previewTexture, ultraWideCameraId)
+            }
             return
         }
         val targetCameraId = resolveDualCaptureCameraId()
@@ -8978,6 +9059,125 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Failed to open concurrent front camera", error)
             stopDualCaptureCamera()
             onCameraError?.invoke(-1, "Cannot start front-camera Dual Capture: ${error.localizedMessage}", false)
+        }
+    }
+
+    /**
+     * Opens an independently exposed rear ultra-wide Camera2 ID alongside the primary rear
+     * camera. This uses the same inset preview and encoder surfaces as the concurrent front
+     * camera path; the primary viewfinder remains on its original CameraDevice.
+     */
+    @SuppressLint("MissingPermission")
+    private fun startDualCaptureConcurrentUltraWideCamera(
+        previewTexture: SurfaceTexture,
+        targetCameraId: String,
+    ) {
+        if (cameraDevice == null || cameraDeviceLifecycle != CameraDeviceLifecycle.OPEN) return
+        val targetSize = resolveDualCaptureInputSize(targetCameraId)
+        if (targetSize == null) {
+            onCameraError?.invoke(
+                -1,
+                "The rear ultra-wide camera has no compatible inset preview stream.",
+                false,
+            )
+            return
+        }
+
+        if (dualCaptureCameraDevice != null &&
+            dualCaptureCameraId == targetCameraId &&
+            dualCaptureInputSize == targetSize
+        ) {
+            dualCaptureUsesConcurrentUltraWideCamera = true
+            if (dualCapturePreviewSurface == null) {
+                previewTexture.setDefaultBufferSize(targetSize.width, targetSize.height)
+                dualCapturePreviewSurface = Surface(previewTexture)
+            }
+            createDualCaptureSession()
+            return
+        }
+
+        stopDualCaptureCamera()
+        try {
+            previewTexture.setDefaultBufferSize(targetSize.width, targetSize.height)
+            dualCapturePreviewSurface = Surface(previewTexture)
+            dualCaptureInputSize = targetSize
+            dualCaptureCameraId = targetCameraId
+            dualCaptureUsesConcurrentUltraWideCamera = true
+            _dualCaptureStreamSize.value = targetSize
+            _dualCaptureSensorOrientationDegrees.value = runCatching {
+                cameraManager.getCameraCharacteristics(targetCameraId)
+                    .get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            }.getOrDefault(0)
+
+            val generation = ++dualCaptureSessionGeneration
+            PLog.i(
+                TAG,
+                "Opening concurrent rear ultra-wide for Dual Capture: id=$targetCameraId, " +
+                    "stream=${targetSize.width}x${targetSize.height}, primary=$activeOpenCameraId",
+            )
+            cameraManager.openCamera(
+                targetCameraId,
+                object : CameraDevice.StateCallback() {
+                    override fun onOpened(camera: CameraDevice) {
+                        if (generation != dualCaptureSessionGeneration ||
+                            !dualCaptureEnabled ||
+                            _dualCaptureSource.value != DualCaptureSource.ULTRA_WIDE ||
+                            dualCapturePreviewSurfaceTexture !== previewTexture
+                        ) {
+                            camera.close()
+                            return
+                        }
+                        dualCaptureCameraDevice = camera
+                        createDualCaptureSession()
+                    }
+
+                    override fun onDisconnected(camera: CameraDevice) {
+                        PLog.w(TAG, "Concurrent rear ultra-wide camera disconnected")
+                        if (dualCaptureCameraDevice === camera) {
+                            stopDualCaptureCamera()
+                        } else {
+                            camera.close()
+                        }
+                        if (videoRecorder.isRecording()) stopVideoRecording()
+                        onCameraError?.invoke(
+                            -1,
+                            "Rear ultra-wide camera disconnected during Dual Capture.",
+                            false,
+                        )
+                    }
+
+                    override fun onError(camera: CameraDevice, error: Int) {
+                        PLog.e(TAG, "Concurrent rear ultra-wide camera open error: $error")
+                        if (dualCaptureCameraDevice === camera) {
+                            stopDualCaptureCamera()
+                        } else {
+                            camera.close()
+                        }
+                        if (videoRecorder.isRecording()) stopVideoRecording()
+                        onCameraError?.invoke(
+                            -1,
+                            "Cannot open rear ultra-wide camera for Dual Capture ($error).",
+                            false,
+                        )
+                    }
+
+                    override fun onClosed(camera: CameraDevice) {
+                        if (dualCaptureCameraDevice === camera) {
+                            dualCaptureCameraDevice = null
+                            dualCaptureSession = null
+                        }
+                    }
+                },
+                cameraHandler,
+            )
+        } catch (error: Exception) {
+            PLog.e(TAG, "Failed to open concurrent rear ultra-wide camera", error)
+            stopDualCaptureCamera()
+            onCameraError?.invoke(
+                -1,
+                "Cannot start rear ultra-wide Dual Capture: ${error.localizedMessage}",
+                false,
+            )
         }
     }
 
@@ -9165,6 +9365,7 @@ class Camera2Controller(private val context: Context) {
         dualCaptureCameraId = null
         dualCapturePhysicalCameraId = null
         dualCaptureMainPhysicalCameraId = null
+        dualCaptureUsesConcurrentUltraWideCamera = false
         dualCaptureInputSize = null
         _dualCaptureStreamSize.value = null
         _dualCaptureSensorOrientationDegrees.value = 0
@@ -9179,7 +9380,9 @@ class Camera2Controller(private val context: Context) {
             spatialVideoRecorder.forceStop()
             return
         }
-        if (_dualCaptureSource.value != DualCaptureSource.ULTRA_WIDE) {
+        if (_dualCaptureSource.value != DualCaptureSource.ULTRA_WIDE ||
+            dualCaptureUsesConcurrentUltraWideCamera
+        ) {
             createDualCaptureSession()
         }
     }
@@ -9205,8 +9408,12 @@ class Camera2Controller(private val context: Context) {
 
         val dualCaptureReady = when (_dualCaptureSource.value) {
             DualCaptureSource.FRONT -> dualCaptureCameraDevice != null && dualCaptureSession != null
-            DualCaptureSource.ULTRA_WIDE -> dualCapturePhysicalCameraId != null &&
-                dualCaptureMainPhysicalCameraId != null && captureSession != null
+            DualCaptureSource.ULTRA_WIDE -> if (dualCaptureUsesConcurrentUltraWideCamera) {
+                dualCaptureCameraDevice != null && dualCaptureSession != null
+            } else {
+                dualCapturePhysicalCameraId != null &&
+                    dualCaptureMainPhysicalCameraId != null && captureSession != null
+            }
         }
         if (dualCaptureEnabled && !dualCaptureReady) {
             onCameraError?.invoke(
