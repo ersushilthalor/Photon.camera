@@ -402,6 +402,10 @@ class Camera2Controller(private val context: Context) {
     private var availableCaptureRequestKeyNames: Set<String>? = null
     private var availableAeModes: IntArray = intArrayOf()
     private var availableAwbModes: IntArray = intArrayOf()
+    // API 36 AE exposure-time priority is enabled only when low-light AE tries to
+    // exceed the selected video's frame interval. AE continues controlling ISO.
+    private var videoExposureTimePriorityActive = false
+    private var videoExposureTimePriorityFps = 0
     private var videoCaptureStatsWindowStartMs: Long = 0L
     private var videoCaptureStatsFrames: Int = 0
     private var videoCaptureStatsFirstTimestampNs: Long = 0L
@@ -1252,6 +1256,7 @@ class Camera2Controller(private val context: Context) {
             lastCaptureResult = result
             logVideoCaptureStats(result)
             if (session === captureSession) {
+                updateVideoExposureTimePriorityFromResult(result)
                 updateEnginePreviewSource(result)
                 updateOppoVideoProfileForFrame(result)
             }
@@ -5177,6 +5182,7 @@ class Camera2Controller(private val context: Context) {
         }
 
         builder.set(CaptureRequest.CONTROL_AE_MODE, aeMode)
+        applyVideoExposureTimePrioritySettings(builder, state, aeMode)
 
         // 如果是全自动曝光，设置曝光补偿
         if (state.isIsoAuto && state.isShutterSpeedAuto) {
@@ -5284,17 +5290,20 @@ class Camera2Controller(private val context: Context) {
         }
 
         // Camera2 only accepts FPS ranges advertised by this camera. A fabricated
-        // [targetFps, targetFps] range can make the repeating request fail entirely,
-        // which is especially visible with Open Gate's demanding full-sensor stream.
-        // Prefer a fixed exact match; otherwise use a supported range containing the
-        // target. When several ranges contain it, prefer the widest range so AE/HAL
-        // can adapt instead of being unnecessarily pinned to a fixed cadence.
+        // [targetFps, targetFps] range can make the repeating request fail entirely.
+        // Prefer an exact fixed range. If unavailable, choose the containing range
+        // with the highest minimum FPS (then the lowest maximum), rather than widening
+        // the AE range and needlessly allowing low-light metering to drop further.
         val exactRange = availableRanges.firstOrNull {
             it.lower == targetFps && it.upper == targetFps
         }
         val containingRange = availableRanges
             .filter { it.lower <= targetFps && it.upper >= targetFps }
-            .maxByOrNull { it.upper - it.lower }
+            .sortedWith(
+                compareByDescending<Range<Int>> { it.lower }
+                    .thenBy { it.upper }
+            )
+            .firstOrNull()
         val resolvedRange = exactRange ?: containingRange ?: availableRanges.minByOrNull { range ->
             when {
                 targetFps < range.lower -> range.lower - targetFps
@@ -5311,6 +5320,146 @@ class Camera2Controller(private val context: Context) {
             )
         }
         builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, resolvedRange)
+    }
+
+    /**
+     * Apply an AE shutter-time limit only on Android 16+ cameras that advertise
+     * CONTROL_AE_PRIORITY_MODE. Exposure time is held to one frame interval while
+     * AE remains enabled and can adjust sensitivity/frame duration as needed.
+     */
+    private fun applyVideoExposureTimePrioritySettings(
+        builder: CaptureRequest.Builder,
+        state: CameraState,
+        aeMode: Int,
+    ) {
+        if (Build.VERSION.SDK_INT < 36 ||
+            !isCaptureRequestKeyAvailable(CaptureRequest.CONTROL_AE_PRIORITY_MODE.name)
+        ) {
+            videoExposureTimePriorityActive = false
+            videoExposureTimePriorityFps = 0
+            return
+        }
+
+        val canPrioritizeVideoShutter = state.captureMode == CaptureMode.VIDEO &&
+            state.isIsoAuto &&
+            state.isShutterSpeedAuto &&
+            aeMode == CaptureRequest.CONTROL_AE_MODE_ON
+        if (!canPrioritizeVideoShutter) {
+            builder.set(
+                CaptureRequest.CONTROL_AE_PRIORITY_MODE,
+                CameraMetadata.CONTROL_AE_PRIORITY_MODE_OFF,
+            )
+            videoExposureTimePriorityActive = false
+            videoExposureTimePriorityFps = 0
+            return
+        }
+
+        if (videoExposureTimePriorityActive) {
+            val targetFps = state.videoConfig.fps.fps.coerceAtLeast(1)
+            val maximumExposureTimeNs = 1_000_000_000L / targetFps
+            builder.set(
+                CaptureRequest.CONTROL_AE_PRIORITY_MODE,
+                CameraMetadata.CONTROL_AE_PRIORITY_MODE_SENSOR_EXPOSURE_TIME_PRIORITY,
+            )
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, maximumExposureTimeNs)
+            videoExposureTimePriorityFps = targetFps
+        } else {
+            builder.set(
+                CaptureRequest.CONTROL_AE_PRIORITY_MODE,
+                CameraMetadata.CONTROL_AE_PRIORITY_MODE_OFF,
+            )
+            videoExposureTimePriorityFps = 0
+        }
+    }
+
+    /**
+     * When automatic video AE asks for an exposure longer than one selected frame,
+     * temporarily prioritize exposure time. This prevents low-light AE from slowing
+     * the sensor; the camera keeps AE enabled and can raise ISO to retain brightness.
+     * Release the cap once AE is converged near minimum ISO, avoiding a permanent
+     * 1/FPS shutter in bright scenes.
+     */
+    private fun updateVideoExposureTimePriorityFromResult(result: TotalCaptureResult) {
+        if (Build.VERSION.SDK_INT < 36 ||
+            !isCaptureRequestKeyAvailable(CaptureRequest.CONTROL_AE_PRIORITY_MODE.name)
+        ) {
+            return
+        }
+
+        val state = _state.value
+        val builder = previewRequestBuilder ?: return
+        val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
+        val isAutomaticVideoExposure = state.captureMode == CaptureMode.VIDEO &&
+            state.isIsoAuto &&
+            state.isShutterSpeedAuto &&
+            aeMode == CaptureResult.CONTROL_AE_MODE_ON &&
+            result.get(CaptureResult.CONTROL_AE_LOCK) != true
+        if (!isAutomaticVideoExposure) {
+            if (videoExposureTimePriorityActive) {
+                videoExposureTimePriorityActive = false
+                videoExposureTimePriorityFps = 0
+                applyVideoExposureTimePrioritySettings(
+                    builder,
+                    state,
+                    aeMode ?: CaptureRequest.CONTROL_AE_MODE_OFF,
+                )
+                updatePreview()
+            }
+            return
+        }
+
+        val targetFps = state.videoConfig.fps.fps.coerceAtLeast(1)
+        val maximumExposureTimeNs = 1_000_000_000L / targetFps
+        val actualExposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: return
+        if (!videoExposureTimePriorityActive) {
+            if (actualExposureTimeNs > maximumExposureTimeNs) {
+                videoExposureTimePriorityActive = true
+                videoExposureTimePriorityFps = targetFps
+                applyVideoExposureTimePrioritySettings(
+                    builder,
+                    state,
+                    CaptureRequest.CONTROL_AE_MODE_ON,
+                )
+                PLog.i(
+                    TAG,
+                    "Video low-light shutter capped: requested=" +
+                        "${targetFps}fps, AE exposure=${actualExposureTimeNs}ns, " +
+                        "cap=${maximumExposureTimeNs}ns; AE remains enabled",
+                )
+                updatePreview()
+            }
+            return
+        }
+
+        if (videoExposureTimePriorityFps != targetFps) {
+            applyVideoExposureTimePrioritySettings(
+                builder,
+                state,
+                CaptureRequest.CONTROL_AE_MODE_ON,
+            )
+            updatePreview()
+            return
+        }
+
+        val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: return
+        val minimumIso = state.getIsoRange().lower
+        val releaseIsoThreshold = minimumIso + (minimumIso / 10).coerceAtLeast(1)
+        val aeConverged = result.get(CaptureResult.CONTROL_AE_STATE) ==
+            CaptureResult.CONTROL_AE_STATE_CONVERGED
+        if (aeConverged && actualIso <= releaseIsoThreshold) {
+            videoExposureTimePriorityActive = false
+            videoExposureTimePriorityFps = 0
+            applyVideoExposureTimePrioritySettings(
+                builder,
+                state,
+                CaptureRequest.CONTROL_AE_MODE_ON,
+            )
+            PLog.i(
+                TAG,
+                "Video low-light shutter cap released: AE converged at ISO=${actualIso}",
+            )
+            updatePreview()
+        }
     }
 
     /**
