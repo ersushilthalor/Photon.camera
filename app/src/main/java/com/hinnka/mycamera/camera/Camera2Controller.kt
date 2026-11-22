@@ -5333,7 +5333,9 @@ class Camera2Controller(private val context: Context) {
         aeMode: Int,
     ) {
         if (Build.VERSION.SDK_INT < 36 ||
-            !isCaptureRequestKeyAvailable(CaptureRequest.CONTROL_AE_PRIORITY_MODE.name)
+            !isCaptureRequestKeyAvailable(CaptureRequest.CONTROL_AE_PRIORITY_MODE.name) ||
+            // Constrained-high-speed sessions have a restricted request-key set.
+            state.videoConfig.fps == VideoFpsPreset.FPS_120
         ) {
             videoExposureTimePriorityActive = false
             videoExposureTimePriorityFps = 0
@@ -5390,6 +5392,7 @@ class Camera2Controller(private val context: Context) {
         val builder = previewRequestBuilder ?: return
         val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
         val isAutomaticVideoExposure = state.captureMode == CaptureMode.VIDEO &&
+            state.videoConfig.fps != VideoFpsPreset.FPS_120 &&
             state.isIsoAuto &&
             state.isShutterSpeedAuto &&
             aeMode == CaptureResult.CONTROL_AE_MODE_ON &&
