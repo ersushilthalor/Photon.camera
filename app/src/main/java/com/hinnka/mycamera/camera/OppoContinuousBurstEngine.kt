@@ -39,10 +39,10 @@ class OppoContinuousBurstEngine(
 ) {
     companion object {
         private const val TAG = "OppoContinuousBurst"
-        private const val MAX_OUTPUT_PIXELS = 3_000_000L
+        private const val MAX_OUTPUT_PIXELS = 12_000_000L
         private const val JPEG_QUALITY = 95
         private const val WORKER_COUNT = 2
-        private const val QUEUE_CAPACITY = 6
+        private const val QUEUE_CAPACITY = 4
         private const val MAX_BUFFERS_PER_SIZE = WORKER_COUNT + QUEUE_CAPACITY
         private const val MIN_FREE_MEMORY_BYTES = 64L * 1024L * 1024L
     }
@@ -140,7 +140,7 @@ class OppoContinuousBurstEngine(
 
     /**
      * Called only by the ImageReader's camera-handler listener.
-     * Acquires the newest YUV frame, samples it down to at most 3MP, copies to NV21,
+     * Acquires the newest YUV frame, preserves native resolution up to 12MP, copies to NV21,
      * and closes the camera-owned Image before submitting the worker task.
      */
     fun onImageAvailable(reader: ImageReader) {

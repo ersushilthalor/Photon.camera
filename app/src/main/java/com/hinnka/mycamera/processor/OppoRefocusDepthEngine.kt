@@ -42,11 +42,13 @@ object OppoRefocusDepthEngine {
                     if (bitmap.width != width || bitmap.height != height) return false
                     val pixels = IntArray(width * height)
                     bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+                    // Match Oppo's focus-energy scale (0..255) so the confidence threshold
+                    // remains independent of Bitmap color normalization.
                     val luma = FloatArray(pixels.size) { index ->
                         val c = pixels[index]
-                        (0.2126f * ((c shr 16) and 0xFF) +
-                            0.7152f * ((c shr 8) and 0xFF) +
-                            0.0722f * (c and 0xFF)) / 255f
+                        0.299f * ((c shr 16) and 0xFF) +
+                            0.587f * ((c shr 8) and 0xFF) +
+                            0.114f * (c and 0xFF)
                     }
                     val energy = FloatArray(pixels.size)
                     for (y in 1 until height - 1) {
@@ -66,7 +68,7 @@ object OppoRefocusDepthEngine {
                 }
             }
 
-            val depth = IntArray(width * height)
+            val depth = FloatArray(width * height) { 0.5f }
             val planeCount = energyPlanes.size
             for (index in depth.indices) {
                 var bestPlane = planeCount / 2
@@ -78,20 +80,25 @@ object OppoRefocusDepthEngine {
                         bestPlane = plane
                     }
                 }
-                depth[index] = if (bestEnergy > 0.012f) {
-                    (bestPlane.toFloat() / (planeCount - 1).coerceAtLeast(1) * 255f).toInt()
+                depth[index] = if (bestEnergy > 1.5f) {
+                    bestPlane.toFloat() / (planeCount - 1).coerceAtLeast(1)
                 } else {
-                    128
+                    0.5f
                 }
             }
 
+            // Spatial smoothing removes isolated focus-energy winners without ever blending
+            // the captured planes themselves. This keeps the saved reference image untouched.
+            val smoothedDepth = smoothDepthMap(depth, width, height)
+            val depthPixels = IntArray(smoothedDepth.size)
+
             val depthBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             try {
-                for (i in depth.indices) {
-                    val value = depth[i].coerceIn(0, 255)
-                    depth[i] = Color.rgb(value, value, value)
+                for (i in smoothedDepth.indices) {
+                    val value = (smoothedDepth[i] * 255f).toInt().coerceIn(0, 255)
+                    depthPixels[i] = Color.rgb(value, value, value)
                 }
-                depthBitmap.setPixels(depth, 0, width, 0, 0, width, height)
+                depthBitmap.setPixels(depthPixels, 0, width, 0, 0, width, height)
                 destination.parentFile?.mkdirs()
                 FileOutputStream(destination).use {
                     if (!depthBitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) return false
@@ -103,5 +110,28 @@ object OppoRefocusDepthEngine {
         } catch (_: Exception) {
             return false
         }
+    }
+
+    private fun smoothDepthMap(depth: FloatArray, width: Int, height: Int): FloatArray {
+        val smoothed = FloatArray(depth.size)
+        for (y in 0 until height) {
+            val y0 = (y - 1).coerceAtLeast(0)
+            val y1 = (y + 1).coerceAtMost(height - 1)
+            for (x in 0 until width) {
+                val x0 = (x - 1).coerceAtLeast(0)
+                val x1 = (x + 1).coerceAtMost(width - 1)
+                var sum = 0f
+                var count = 0
+                for (ny in y0..y1) {
+                    val row = ny * width
+                    for (nx in x0..x1) {
+                        sum += depth[row + nx]
+                        count++
+                    }
+                }
+                smoothed[y * width + x] = sum / count.coerceAtLeast(1)
+            }
+        }
+        return smoothed
     }
 }

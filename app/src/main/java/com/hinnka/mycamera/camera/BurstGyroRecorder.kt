@@ -6,6 +6,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
+import android.os.SystemClock
 import com.hinnka.mycamera.utils.PLog
 import java.util.ArrayDeque
 
@@ -45,14 +46,45 @@ class BurstGyroRecorder(context: Context) {
             return false
         }
         synchronized(lock) { samples.clear() }
-        recording = sensorManager.registerListener(
-            listener,
-            gyro,
-            SensorManager.SENSOR_DELAY_FASTEST,
-            handler,
-        )
+        recording = try {
+            sensorManager.registerListener(
+                listener,
+                gyro,
+                SensorManager.SENSOR_DELAY_GAME,
+                handler,
+            )
+        } catch (error: SecurityException) {
+            PLog.w(TAG, "Gyro registration denied at game rate; falling back to UI rate: ${error.message}")
+            runCatching {
+                sensorManager.registerListener(
+                    listener,
+                    gyro,
+                    SensorManager.SENSOR_DELAY_UI,
+                    handler,
+                )
+            }.getOrDefault(false)
+        } catch (error: RuntimeException) {
+            PLog.w(TAG, "Gyro registration failed: ${error.message}")
+            false
+        }
         if (!recording) PLog.w(TAG, "Failed to register burst Gyro listener")
         return recording
+    }
+
+    /**
+     * RMS angular velocity over the recent preview interval. Sensor timestamps share the
+     * elapsed-realtime clock, so this remains aligned with Camera2 and avoids a second sensor path.
+     */
+    fun recentRmsMotion(windowNs: Long = 300_000_000L): Float {
+        val cutoffNs = (SystemClock.elapsedRealtimeNanos() - windowNs).coerceAtLeast(0L)
+        val recent = synchronized(lock) { samples.filter { it.timestampNs >= cutoffNs } }
+        if (recent.size < 3) return 0f
+        val energy = recent.sumOf { sample ->
+            sample.x.toDouble() * sample.x.toDouble() +
+                sample.y.toDouble() * sample.y.toDouble() +
+                sample.z.toDouble() * sample.z.toDouble()
+        }
+        return kotlin.math.sqrt(energy / recent.size).toFloat()
     }
 
     fun stop() {

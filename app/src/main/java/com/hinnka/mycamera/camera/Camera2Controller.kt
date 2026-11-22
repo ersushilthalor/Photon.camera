@@ -733,7 +733,6 @@ class Camera2Controller(private val context: Context) {
         if (shot.failed) settleFailedPhotoCapture(shot)
         if (activePhotoCapture === shot) {
             activePhotoCapture = null
-            burstGyroRecorder.stop()
             _state.update {
                 it.copy(isCapturing = false, hdrBracketCapturing = false, hdrBracketFrameCount = 0, refocusCapturing = false)
             }
@@ -3444,6 +3443,11 @@ class Camera2Controller(private val context: Context) {
         if (openGeneration != cameraOpenGeneration) {
             PLog.w(TAG, "Skipping stale preview session creation")
             return
+        }
+        if (_state.value.captureMode == CaptureMode.PHOTO) {
+            burstGyroRecorder.start(handler)
+        } else {
+            burstGyroRecorder.stop()
         }
         val device = cameraDevice ?: return
         val surface = previewSurface ?: return
@@ -10165,7 +10169,6 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Failed to capture", e)
             PLog.e(TAG, "拍照失败", e)
             _state.value = _state.value.copy(isCapturing = false)
-            burstGyroRecorder.stop()
             resetPreviewAfterCapture()
         }
     }
@@ -10300,7 +10303,6 @@ class Camera2Controller(private val context: Context) {
                 hdrBracketCapturing = false,
                 hdrBracketFrameCount = 0
             )
-            burstGyroRecorder.stop()
             onHdrBracketCaptureFailed?.invoke()
             resetPreviewAfterCapture()
         }
@@ -10784,6 +10786,12 @@ class Camera2Controller(private val context: Context) {
         val p99 = percentile(0.99)
         val dynamicRange = (p99 - p1).coerceIn(0f, 1f)
 
+        val motionRms = burstGyroRecorder.recentRmsMotion()
+        if (motionRms > 0.38f) {
+            PLog.d(TAG, "Oppo Auto HDR: single frame due to high motion (RMS=$motionRms rad/s)")
+            return emptyList()
+        }
+
         // Match OppoCam FrameLuminanceAnalyzer scene labels using the same percentiles.
         val isHighContrast = (p95 > 0.82f && p18 < 0.28f) ||
             (p99 > 0.90f && p5 < 0.15f) ||
@@ -11071,7 +11079,6 @@ class Camera2Controller(private val context: Context) {
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to perform capture", e)
             _state.value = _state.value.copy(isCapturing = false)
-            burstGyroRecorder.stop()
             resetPreviewAfterCapture()
         }
     }
