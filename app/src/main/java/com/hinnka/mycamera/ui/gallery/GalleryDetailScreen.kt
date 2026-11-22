@@ -2450,6 +2450,8 @@ private fun VideoDetailPlayer(
             isUltraWideSelected = false
             activePlayerSlot = 0
             isSpatialLensSwitching = false
+            exoPlayer.volume = 1f
+            alternateExoPlayer.volume = 0f
             alternateExoPlayer.stop()
             delay(150)
             PLog.d("VideoDetailPlayer", "Preparing main 1x ExoPlayer.")
@@ -2476,6 +2478,9 @@ private fun VideoDetailPlayer(
                     lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
 
                 isSpatialLensSwitching = true
+                // Keep one audio source audible during the visual crossfade; both clips
+                // carry the same primary AAC track, so playing both would double the sound.
+                incoming.volume = 0f
                 incoming.stop()
                 incoming.setMediaItem(MediaItem.fromUri(targetUri))
                 incoming.prepare()
@@ -2499,6 +2504,8 @@ private fun VideoDetailPlayer(
                     isUltraWideSelected = useUltraWide
                     delay(SPATIAL_VIDEO_LENS_SWITCH_DURATION_MS + 80L)
 
+                    outgoing.volume = 0f
+                    incoming.volume = 1f
                     outgoing.pause()
                     outgoing.playWhenReady = false
                     outgoing.stop()
