@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("native-tool")
 
-# Video-only build: only the native code the video path uses
-# (MGC EIS stabilization, hardware-buffer GL import, GPU timer, LUT resampler, OpenMP runtime).
+# Camera, photo-processing, and video native modules.
 set(
     MGC_EIS_RECONSTRUCTION_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/mgc_eis_reconstruction"
@@ -21,6 +20,9 @@ add_library(my-native-lib SHARED
     gles_gpu_timer_query_jni.cpp
     gles_hardware_buffer_jni.cpp
     lut_processor.cpp
+    direct_buffer_allocator_jni.cpp
+    yuv_processor_jni.cpp
+    raw_capture_jni.cpp
     mgc_eis_reconstruction_jni.cpp
     "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_eis_reconstruction.cpp"
     "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_type18_engine.cpp"
