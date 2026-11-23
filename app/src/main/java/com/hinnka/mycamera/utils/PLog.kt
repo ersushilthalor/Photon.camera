@@ -117,6 +117,9 @@ object PLog {
             tag,
             if (throwable == null) message else "$message\n${Log.getStackTraceString(throwable)}",
         )
+        runCatching {
+            PhotoCaptureCrashLogger.recordLog(entry.timestamp, level.name, tag, message, throwable)
+        }.onFailure { Log.w(TAG, "Unable to persist active photo-capture log", it) }
 
         // 如果超过最大数量，移除最早的日志
         while (logQueue.size > MAX_LOG_SIZE) {
