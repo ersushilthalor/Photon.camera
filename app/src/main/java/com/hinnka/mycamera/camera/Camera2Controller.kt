@@ -2450,6 +2450,7 @@ class Camera2Controller(private val context: Context) {
         message: String,
         error: Exception
     ) {
+        spatialVideoPrimaryReopenInProgress = false
         cameraOpenGeneration++
         PLog.e(TAG, "Camera open failed for $cameraId: $message", error)
         val device = cameraDevice
@@ -2459,7 +2460,13 @@ class Camera2Controller(private val context: Context) {
         } else {
             cameraDeviceLifecycle = CameraDeviceLifecycle.CLOSED
         }
-        clearCameraRuntimeState("open failure: $cameraId")
+        if (spatialVideoEnabled) {
+            clearCameraSessionState("Special Video primary open failure: $cameraId")
+            clearSpecialVideoRuntimeState("primary CameraDevice open failure: $cameraId")
+            clearCameraCapabilityCache()
+        } else {
+            clearCameraRuntimeState("open failure: $cameraId")
+        }
         livePhotoRecorder.stopRecording()
         setCameraInactive(resetVideoState = true)
         onCameraError?.invoke(errorCode, message, true)
