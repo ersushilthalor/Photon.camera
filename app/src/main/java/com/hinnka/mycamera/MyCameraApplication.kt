@@ -14,6 +14,7 @@ import com.hinnka.mycamera.update.AppUpdateManager
 import com.hinnka.mycamera.utils.BuglyHelper
 import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.PLog
+import com.hinnka.mycamera.utils.PhotoCaptureCrashLogger
 import com.hinnka.mycamera.utils.StartupTrace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
@@ -27,6 +28,7 @@ class MyCameraApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        PhotoCaptureCrashLogger.install(this)
         StartupTrace.mark("Application.onCreate start")
         instance = this
         applicationScope.launch(Dispatchers.IO) {
