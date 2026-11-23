@@ -93,6 +93,7 @@ import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.ui.components.*
 import com.hinnka.mycamera.utils.OrientationObserver
+import com.hinnka.mycamera.utils.PhotoCaptureCrashLogger
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.video.CaptureMode
@@ -237,6 +238,13 @@ fun CameraScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
+    val pendingPhotoCrashReport by PhotoCaptureCrashLogger.pendingCrashReport.collectAsState()
+    pendingPhotoCrashReport?.let { report ->
+        PhotoCaptureCrashDialog(
+            report = report,
+            onDismiss = { PhotoCaptureCrashLogger.dismissPendingReport() },
+        )
+    }
     var dualCaptureEnabled by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.captureMode) {
