@@ -8887,18 +8887,12 @@ class Camera2Controller(private val context: Context) {
                 it.cameraId == mainPhysicalId ||
                     it.outputPhysicalCameraId == mainPhysicalId ||
                     it.physicalCameras.any { physical -> physical.cameraId == mainPhysicalId }
-            } ?: state.availableCameras
-                .filter { it.lensFacing == CameraCharacteristics.LENS_FACING_BACK }
-                .minByOrNull { abs(it.intrinsicZoomRatio - 1f) }
-                ?: current
+            } ?: current
             val ultraWideInfo = state.availableCameras.firstOrNull {
                 it.cameraId == ultraWidePhysicalId ||
                     it.outputPhysicalCameraId == ultraWidePhysicalId ||
                     it.physicalCameras.any { physical -> physical.cameraId == ultraWidePhysicalId }
-            } ?: state.availableCameras
-                .filter { it.lensFacing == CameraCharacteristics.LENS_FACING_BACK }
-                .filter { it.intrinsicZoomRatio.isFinite() && it.intrinsicZoomRatio > 0f }
-                .minByOrNull { abs(it.intrinsicZoomRatio - 0.5f) }
+            }
             val mainOpenId = runCatching { mainInfo.getOpenCameraId() }.getOrDefault(logicalId)
             val wideOpenId = ultraWideInfo?.let {
                 runCatching { it.getOpenCameraId() }.getOrDefault(logicalId)
