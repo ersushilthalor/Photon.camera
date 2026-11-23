@@ -2426,7 +2426,11 @@ class Camera2Controller(private val context: Context) {
         cameraOpenGeneration++
         videoRecorder.forceStop()
         spatialVideoRecorder.forceStop()
-        stopSpatialVideoStandbyCamera("primary camera unavailable: $reason")
+        if (spatialVideoEnabled) {
+            clearSpecialVideoRuntimeState("primary camera unavailable: $reason")
+        } else {
+            stopSpatialVideoStandbyCamera("primary camera unavailable: $reason")
+        }
         stopVideoRecordingTicker()
         clearCameraSessionState(reason)
         closeCameraDeviceAndAwait(camera, reason)
@@ -2474,8 +2478,10 @@ class Camera2Controller(private val context: Context) {
         if (videoRecorder.isRecording()) {
             videoRecorder.forceStop()
             spatialVideoRecorder.forceStop()
-            stopSpatialVideoStandbyCamera("primary preview session failed: $reason")
             stopVideoRecordingTicker()
+        }
+        if (spatialVideoEnabled) {
+            clearSpecialVideoRuntimeState("primary preview session failed: $reason")
         }
         val device = cameraDevice
         if (device != null) {
@@ -8970,26 +8976,8 @@ class Camera2Controller(private val context: Context) {
                 startSpatialVideoStandbyCamera(pair.ultraWideCameraId)
             }
         } else {
-            spatialVideoEnabled = false
-            _spatialVideoEnabled.value = false
             spatialVideoRecorder.forceStop()
-            stopSpatialVideoStandbyCamera("Special Video disabled")
-            spatialVideoMainPhysicalCameraId = null
-            spatialVideoUltraWidePhysicalCameraId = null
-            spatialVideoPrimaryCameraId = null
-            spatialVideoStreamingMode = null
-            spatialVideoStandbyInputSize = null
-            spatialPrimaryFinishedUri = null
-            spatialUltraWideFinishedFile = null
-            spatialVideoCompanionFile?.delete()
-            spatialVideoCompanionFile = null
-            spatialVideoStandbyRepeatingRequest = null
-            spatialVideoPrimarySessionAwaitingStandby = false
-            specialVideoRecordingTimeline.reset()
-            activeOutputPhysicalCameraId = resolveRequestedPhysicalCameraId(
-                _state.value,
-                _state.value.getCurrentCameraInfo()
-            )
+            clearSpecialVideoRuntimeState("Special Video disabled")
             previewSurfaceTexture?.let { createPreviewSession(openGeneration = cameraOpenGeneration) }
         }
     }
@@ -9319,6 +9307,42 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    /**
+     * Clears the Special Video mode and any unpublished companion output after a
+     * camera/session failure or explicit disable. Published gallery companions are not
+     * deleted: spatialVideoCompanionFile is only held while a recording is unfinished.
+     */
+    private fun clearSpecialVideoRuntimeState(reason: String) {
+        spatialVideoEnabled = false
+        _spatialVideoEnabled.value = false
+        spatialVideoMainPhysicalCameraId = null
+        spatialVideoUltraWidePhysicalCameraId = null
+        spatialVideoPrimaryCameraId = null
+        spatialVideoStreamingMode = null
+        spatialVideoStandbyInputSize = null
+        spatialPrimaryFinishedUri = null
+        spatialUltraWideFinishedFile = null
+        spatialVideoStandbyRepeatingRequest = null
+        spatialVideoPrimarySessionAwaitingStandby = false
+        specialVideoRecordingTimeline.reset()
+        stopSpatialVideoStandbyCamera(reason)
+        spatialVideoCompanionFile?.let { file ->
+            runCatching {
+                if (file.exists() && !file.delete()) {
+                    PLog.w(TAG, "Could not delete failed Special Video companion: ${file.absolutePath}")
+                }
+            }.onFailure {
+                PLog.w(TAG, "Could not delete failed Special Video companion: ${file.absolutePath}", it)
+            }
+        }
+        spatialVideoCompanionFile = null
+        activeOutputPhysicalCameraId = resolveRequestedPhysicalCameraId(
+            _state.value,
+            _state.value.getCurrentCameraInfo()
+        )
+        PLog.i(TAG, "Special Video runtime cleared: reason=$reason")
+    }
+
     private fun stopSpatialVideoStandbyCamera(reason: String) {
         spatialVideoStandbySessionGeneration++
         spatialVideoStandbyOpeningCameraId = null
@@ -9337,32 +9361,12 @@ class Camera2Controller(private val context: Context) {
 
     private fun failSpatialVideoStandby(reason: String) {
         PLog.e(TAG, "Special Video pipeline failure: $reason")
-        spatialVideoEnabled = false
-        _spatialVideoEnabled.value = false
-        spatialVideoMainPhysicalCameraId = null
-        spatialVideoUltraWidePhysicalCameraId = null
-        spatialVideoPrimaryCameraId = null
-        spatialVideoStreamingMode = null
-        stopSpatialVideoStandbyCamera(reason)
         spatialVideoRecorder.forceStop()
         videoRecorder.forceStop()
-        spatialVideoCompanionFile?.let { file ->
-            runCatching { file.delete() }
-                .onFailure { PLog.w(TAG, "Could not remove failed Special Video companion: ${file.absolutePath}", it) }
-        }
-        spatialVideoCompanionFile = null
-        spatialPrimaryFinishedUri = null
-        spatialUltraWideFinishedFile = null
-        specialVideoRecordingTimeline.reset()
-        spatialVideoStandbyRepeatingRequest = null
-        spatialVideoPrimarySessionAwaitingStandby = false
+        clearSpecialVideoRuntimeState(reason)
         stopVideoRecordingTicker()
         videoCameraHlg10InputActive = false
         _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
-        activeOutputPhysicalCameraId = resolveRequestedPhysicalCameraId(
-            _state.value,
-            _state.value.getCurrentCameraInfo()
-        )
         onCameraError?.invoke(-1, reason, false)
         if (cameraDevice != null && previewSurface != null) {
             createPreviewSession(openGeneration = cameraOpenGeneration)
@@ -12044,7 +12048,15 @@ class Camera2Controller(private val context: Context) {
             val keepVideoRecording = preserveVideoRecording && _state.value.videoRecordingState.isRecording
             if (!keepVideoRecording) {
                 stopDualCaptureCamera()
-                stopSpatialVideoStandbyCamera("primary CameraDevice closing")
+                when {
+                    spatialVideoEnabled &&
+                        !_state.value.videoRecordingState.isRecording &&
+                        !_state.value.videoRecordingState.isProcessing ->
+                        clearSpecialVideoRuntimeState("primary CameraDevice closing")
+                    !spatialVideoEnabled ->
+                        stopSpatialVideoStandbyCamera("primary CameraDevice closing")
+                    else -> Unit // stopVideoRecording() owns the paired recorder/session teardown below.
+                }
             }
             if (keepVideoRecording) {
                 PLog.d(TAG, "Closing camera while keeping active video recording")
