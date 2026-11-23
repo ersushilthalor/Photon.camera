@@ -2876,6 +2876,12 @@ class Camera2Controller(private val context: Context) {
                 if (dualCaptureEnabled && captureMode == CaptureMode.VIDEO) {
                     startDualCaptureCamera()
                 }
+                if (
+                    spatialVideoEnabled &&
+                    spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+                ) {
+                    spatialVideoUltraWidePhysicalCameraId?.let { startSpatialVideoStandbyCamera(it) }
+                }
                 val pendingReconfigure = pendingCaptureModeReconfigureRequest
                 if (captureMode != _state.value.captureMode ||
                     pendingReconfigure?.targetCaptureMode?.let { it != captureMode } == true
@@ -12053,6 +12059,8 @@ class Camera2Controller(private val context: Context) {
                         !_state.value.videoRecordingState.isRecording &&
                         !_state.value.videoRecordingState.isProcessing ->
                         clearSpecialVideoRuntimeState("primary CameraDevice closing")
+                    spatialVideoEnabled && _state.value.videoRecordingState.isProcessing ->
+                        stopSpatialVideoStandbyCamera("primary CameraDevice closing during finalization")
                     !spatialVideoEnabled ->
                         stopSpatialVideoStandbyCamera("primary CameraDevice closing")
                     else -> Unit // stopVideoRecording() owns the paired recorder/session teardown below.
