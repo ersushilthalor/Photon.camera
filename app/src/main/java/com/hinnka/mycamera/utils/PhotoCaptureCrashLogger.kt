@@ -267,10 +267,11 @@ object PhotoCaptureCrashLogger {
             if (file.length() > MAX_TRACE_BYTES) {
                 val bytes = file.readBytes()
                 val start = (bytes.size - MAX_TRACE_BYTES).coerceAtLeast(0)
-                val nextLine = bytes.indexOf('\n'.code.toByte(), start)
+                val nextLine = (start until bytes.size)
+                    .firstOrNull { bytes[it] == '\n'.code.toByte() } ?: -1
                 val tail = if (nextLine >= 0) bytes.copyOfRange(nextLine + 1, bytes.size)
                     else bytes.copyOfRange(start, bytes.size)
-                file.writeBytes(String(tail, Charsets.UTF_8))
+                file.writeBytes(tail)
             }
         }.onFailure { Log.w(TAG, "Unable to append photo capture trace", it) }
     }
