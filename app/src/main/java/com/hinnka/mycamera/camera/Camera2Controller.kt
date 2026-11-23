@@ -10239,8 +10239,14 @@ class Camera2Controller(private val context: Context) {
                 return
             }
             val wideFile = SpatialVideoStore.ultraWideFile(context, primaryUri)
-            val logicalParentId = spatialVideoPrimaryCameraId.takeIf {
-                spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+            if (wideFile.exists() && !wideFile.delete()) {
+                videoRecorder.forceStop()
+                onCameraError?.invoke(
+                    -1,
+                    "The previous ultra-wide companion file could not be cleared.",
+                    false
+                )
+                return
             }
             val wideInputSize = resolveSpatialVideoInputSize(wideId, cameraInputSize)
             if (wideInputSize == null) {
