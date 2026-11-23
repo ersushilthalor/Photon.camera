@@ -32,46 +32,53 @@ object PhotoCaptureCrashLogger {
     val pendingCrashReport: StateFlow<String?> = _pendingCrashReport.asStateFlow()
 
     @Volatile private var app: Application? = null
-    private var handlerInstalled = false
+    private var installedHandler: Thread.UncaughtExceptionHandler? = null
 
-    /** Install once, before the camera or other app components start logging. */
+    /**
+     * Install before camera startup and call again after third-party crash SDK initialization
+     * so this capture-aware handler remains the outermost uncaught-exception handler.
+     */
     fun install(application: Application) {
         synchronized(lock) {
-            if (app != null) return
-            app = application
-
-            if (!handlerInstalled) {
-                val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
-                Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-                    val hasActiveCapture = synchronized(lock) {
-                        activeCaptureIds.isNotEmpty() || activeMarkerFile()?.exists() == true
-                    }
-                    if (hasActiveCapture) {
-                        runCatching {
-                            synchronized(lock) {
-                                writeCrashReportLocked(
-                                    cause = "Uncaught ${error.javaClass.name}: ${error.message}",
-                                    threadName = thread.name,
-                                    throwable = error,
-                                    exitDetails = null,
-                                )
-                            }
-                        }.onFailure { loggingError ->
-                            Log.e(TAG, "Could not persist photo crash report", loggingError)
-                        }
-                    }
-                    previousHandler?.uncaughtException(thread, error)
+            if (app == null) {
+                app = application
+                recoverInterruptedCaptureLocked()
+                if (_pendingCrashReport.value == null) {
+                    _pendingCrashReport.value = reportFile()?.takeIf { it.isFile }
+                        ?.let { runCatching { it.readText(Charsets.UTF_8) }.getOrNull() }
+                        ?.takeIf { it.isNotBlank() }
                 }
-                handlerInstalled = true
             }
-
-            recoverInterruptedCaptureLocked()
-            if (_pendingCrashReport.value == null) {
-                _pendingCrashReport.value = reportFile()?.takeIf { it.isFile }
-                    ?.let { runCatching { it.readText(Charsets.UTF_8) }.getOrNull() }
-                    ?.takeIf { it.isNotBlank() }
-            }
+            installUncaughtExceptionHandlerLocked()
         }
+    }
+
+    private fun installUncaughtExceptionHandlerLocked() {
+        val currentHandler = Thread.getDefaultUncaughtExceptionHandler()
+        if (installedHandler != null && currentHandler === installedHandler) return
+
+        val captureAwareHandler = Thread.UncaughtExceptionHandler { thread, error ->
+            val hasActiveCapture = synchronized(lock) {
+                activeCaptureIds.isNotEmpty() || activeMarkerFile()?.exists() == true
+            }
+            if (hasActiveCapture) {
+                runCatching {
+                    synchronized(lock) {
+                        writeCrashReportLocked(
+                            cause = "Uncaught ${error.javaClass.name}: ${error.message}",
+                            threadName = thread.name,
+                            throwable = error,
+                            exitDetails = null,
+                        )
+                    }
+                }.onFailure { loggingError ->
+                    Log.e(TAG, "Could not persist photo crash report", loggingError)
+                }
+            }
+            currentHandler?.uncaughtException(thread, error)
+        }
+        Thread.setDefaultUncaughtExceptionHandler(captureAwareHandler)
+        installedHandler = captureAwareHandler
     }
 
     /** Begin only after Camera2 accepts and reserves the photo request. */
