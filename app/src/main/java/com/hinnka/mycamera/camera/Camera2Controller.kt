@@ -8875,9 +8875,6 @@ class Camera2Controller(private val context: Context) {
         spatialVideoStandbyPreviewSurfaceTexture = surfaceTexture
         if (surfaceTexture != null) {
             val wideId = spatialVideoUltraWidePhysicalCameraId
-            val logicalParentId = spatialVideoPrimaryCameraId.takeIf {
-                spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
-            }
             val targetSize = spatialVideoStandbyInputSize
                 ?: wideId?.let { resolveSpatialVideoInputSize(it, _state.value.currentPreviewSize) }
                 ?: _state.value.currentPreviewSize
