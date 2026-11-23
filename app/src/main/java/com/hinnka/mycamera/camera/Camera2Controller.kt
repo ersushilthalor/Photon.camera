@@ -2926,6 +2926,14 @@ class Camera2Controller(private val context: Context) {
                     closeCameraDeviceAndAwait(camera, "stale camera disconnect", blocksLifecycle = false)
                     return
                 }
+                if (spatialVideoEnabled) {
+                    PLog.e(
+                        TAG,
+                        "Special Video primary disconnected: mode=$spatialVideoStreamingMode " +
+                            "main=$spatialVideoMainPhysicalCameraId ultraWide=$spatialVideoUltraWidePhysicalCameraId " +
+                            "openId=${camera.id} reason=CameraDevice disconnected"
+                    )
+                }
                 PLog.w(TAG, "Camera disconnected: ${camera.id} - 相机被其他应用或系统接管")
                 handleCameraDeviceUnavailable(
                     camera = camera,
@@ -3394,6 +3402,14 @@ class Camera2Controller(private val context: Context) {
                 PLog.i(TAG, "Reusing CameraDevice ${reuseCameraDevice.id} for capture-mode session rebuild")
                 cameraStateCallback.onOpened(reuseCameraDevice)
             } else {
+                if (persistentSpecialVideoPrimary != null) {
+                    val publicIds = cameraManager.cameraIdList.toSet()
+                    if (openCameraId !in publicIds) {
+                        throw IllegalStateException(
+                            "Special Video main physical Camera2 ID $openCameraId is not publicly openable"
+                        )
+                    }
+                }
                 cameraManager.openCamera(openCameraId, cameraStateCallback, cameraHandler)
             }
 
@@ -9138,6 +9154,17 @@ class Camera2Controller(private val context: Context) {
             val primaryNeedsReopen = pair.mode == SpatialVideoStreamingMode.PERSISTENT_DUAL_SESSION &&
                 activeId != pair.primaryCameraId
             val currentPreviewTexture = previewSurfaceTexture
+            if (primaryNeedsReopen && currentPreviewTexture == null) {
+                val reason = "Cannot switch Special Video primary to physical main ID: preview SurfaceTexture is unavailable"
+                PLog.e(
+                    TAG,
+                    "Special Video enable failed: mode=${pair.mode} main=${pair.mainPhysicalCameraId} " +
+                        "ultraWide=${pair.ultraWideCameraId} reason=$reason"
+                )
+                clearSpecialVideoRuntimeState(reason)
+                onCameraError?.invoke(-1, reason, false)
+                return
+            }
             if (primaryNeedsReopen && currentPreviewTexture != null) {
                 PLog.i(
                     TAG,
@@ -9157,9 +9184,24 @@ class Camera2Controller(private val context: Context) {
                 }
             }
         } else {
+            val selectedOpenId = _state.value.getCurrentCameraInfo()
+                ?.let { runCatching { it.getOpenCameraId() }.getOrNull() }
+            val restoreLogicalParent = spatialVideoStreamingMode == SpatialVideoStreamingMode.PERSISTENT_DUAL_SESSION &&
+                selectedOpenId != null && selectedOpenId != activeOpenCameraId
             spatialVideoRecorder.forceStop()
             clearSpecialVideoRuntimeState("Special Video disabled")
-            previewSurfaceTexture?.let { createPreviewSession(openGeneration = cameraOpenGeneration) }
+            previewSurfaceTexture?.let { texture ->
+                if (restoreLogicalParent) {
+                    PLog.i(
+                        TAG,
+                        "Special Video disabled: restoring selected CameraDevice $selectedOpenId " +
+                            "from physical primary $activeOpenCameraId"
+                    )
+                    openCamera(texture)
+                } else {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
         }
     }
 
