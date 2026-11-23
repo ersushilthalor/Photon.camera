@@ -232,15 +232,22 @@ object PhotoCaptureCrashLogger {
             appendLine("========== END REPORT ==========")
         }.take(MAX_REPORT_BYTES)
         val destination = reportFile() ?: return
-        writeDurableText(destination, report)
+        try {
+            writeDurableText(destination, report)
+        } catch (error: Exception) {
+            Log.e(TAG, "Unable to persist photo capture crash report", error)
+            return
+        }
         _pendingCrashReport.value = report
         Log.e(TAG, "Photo capture failure report saved to ${destination.absolutePath}: $cause")
     }
 
     private fun persistActiveMarkerLocked() {
         val marker = activeMarkerFile() ?: return
-        if (activeCaptureIds.isEmpty()) marker.delete()
-        else writeDurableText(marker, activeCaptureIds.joinToString("\n"))
+        runCatching {
+            if (activeCaptureIds.isEmpty()) marker.delete()
+            else writeDurableText(marker, activeCaptureIds.joinToString("\n"))
+        }.onFailure { Log.w(TAG, "Unable to persist active photo marker", it) }
     }
 
     private fun appendTraceLocked(text: String) {
