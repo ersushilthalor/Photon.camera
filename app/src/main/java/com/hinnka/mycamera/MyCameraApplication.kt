@@ -41,6 +41,7 @@ class MyCameraApplication : Application() {
             runCatching {
                 StartupTrace.measure("BuglyHelper.init") {
                     BuglyHelper.init(this@MyCameraApplication)
+                    PhotoCaptureCrashLogger.install(this@MyCameraApplication)
                 }
             }.onFailure { error ->
                 PLog.e(TAG, "Bugly initialization failed", error)
