@@ -107,6 +107,11 @@ fun CameraTopSheet(
     videoActionModeAvailable: Boolean,
     onVideoStabilizationModeChange: (VideoStabilizationMode) -> Unit,
     onVideoDualCaptureClick: () -> Unit,
+    spatialVideoEnabled: Boolean,
+    spatialVideoSupported: Boolean,
+    onVideoSpatialVideoClick: () -> Unit,
+    spatialVideoShowUltraWidePreview: Boolean,
+    onSpatialVideoPreviewToggle: () -> Unit,
     onVideoEditClick: () -> Unit,
     videoCodec: VideoCodec,
     onVideoCodecChange: (VideoCodec) -> Unit,
@@ -608,6 +613,25 @@ fun CameraTopSheet(
                                     }
                                 )
                             },
+                            modifier = itemModifier
+                        )
+                        VideoMenuToggleTile(
+                            title = "SPECIAL VIDEO",
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+                            },
+                            checked = spatialVideoEnabled,
+                            enabled = spatialVideoSupported || spatialVideoEnabled,
+                            onClick = onVideoSpatialVideoClick,
+                            modifier = itemModifier
+                        )
+                        VideoMenuToggleTile(
+                            title = "0.5X PREVIEW",
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+                            },
+                            checked = spatialVideoShowUltraWidePreview,
+                            onClick = onSpatialVideoPreviewToggle,
                             modifier = itemModifier
                         )
                         VideoMenuActionTile(

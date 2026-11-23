@@ -246,11 +246,19 @@ fun CameraScreen(
         )
     }
     var dualCaptureEnabled by remember { mutableStateOf(false) }
+    val spatialVideoEnabled by viewModel.spatialVideoEnabled.collectAsState()
+    val spatialVideoShowUltraWidePreview by viewModel.spatialVideoShowUltraWidePreview.collectAsState()
+    val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
+    val spatialVideoPreviewSensorOrientation by
+        viewModel.spatialVideoPreviewSensorOrientationDegrees.collectAsState()
 
     LaunchedEffect(state.captureMode) {
         if (state.captureMode != CaptureMode.VIDEO && dualCaptureEnabled) {
             dualCaptureEnabled = false
             viewModel.setDualCaptureEnabled(false)
+        }
+        if (state.captureMode != CaptureMode.VIDEO && spatialVideoEnabled) {
+            viewModel.setSpatialVideoEnabled(false)
         }
     }
 
@@ -297,6 +305,8 @@ fun CameraScreen(
     val latestDualCaptureStreamSize = rememberUpdatedState(dualCaptureStreamSize)
     val latestDualCaptureSensorOrientation = rememberUpdatedState(dualCaptureSensorOrientationDegrees)
     val latestDualCaptureSource = rememberUpdatedState(dualCaptureSource)
+    val latestSpatialVideoPreviewSize = rememberUpdatedState(spatialVideoPreviewStreamSize)
+    val latestSpatialVideoPreviewOrientation = rememberUpdatedState(spatialVideoPreviewSensorOrientation)
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
     val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
@@ -1543,6 +1553,84 @@ fun CameraScreen(
                     }
 
 
+                    if (
+                        state.captureMode == CaptureMode.VIDEO &&
+                        spatialVideoEnabled &&
+                        spatialVideoShowUltraWidePreview
+                    ) {
+                        val specialPreviewShape = RoundedCornerShape(12.dp)
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(start = 12.dp, bottom = 104.dp)
+                                .size(width = 112.dp, height = 150.dp)
+                                .clip(specialPreviewShape)
+                                .background(Color.Black)
+                                .border(1.dp, Color.White.copy(alpha = 0.85f), specialPreviewShape)
+                        ) {
+                            AndroidView(
+                                modifier = Modifier.fillMaxSize(),
+                                factory = { viewContext ->
+                                    TextureView(viewContext).apply {
+                                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                            override fun onSurfaceTextureAvailable(
+                                                surface: SurfaceTexture,
+                                                width: Int,
+                                                height: Int,
+                                            ) {
+                                                viewModel.setSpatialVideoPreviewSurfaceTexture(surface)
+                                                this@apply.post {
+                                                    updateDualCaptureTextureTransform(
+                                                        latestSpatialVideoPreviewSize.value,
+                                                        latestSpatialVideoPreviewOrientation.value,
+                                                    )
+                                                }
+                                            }
+
+                                            override fun onSurfaceTextureSizeChanged(
+                                                surface: SurfaceTexture,
+                                                width: Int,
+                                                height: Int,
+                                            ) {
+                                                this@apply.post {
+                                                    updateDualCaptureTextureTransform(
+                                                        latestSpatialVideoPreviewSize.value,
+                                                        latestSpatialVideoPreviewOrientation.value,
+                                                    )
+                                                }
+                                                viewModel.setSpatialVideoPreviewSurfaceTexture(surface)
+                                            }
+
+                                            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                                                viewModel.setSpatialVideoPreviewSurfaceTexture(null)
+                                                return true
+                                            }
+
+                                            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+                                        }
+                                    }
+                                },
+                                update = { textureView ->
+                                    textureView.updateDualCaptureTextureTransform(
+                                        spatialVideoPreviewStreamSize,
+                                        spatialVideoPreviewSensorOrientation,
+                                    )
+                                },
+                            )
+                            Text(
+                                text = "0.5x",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(6.dp)
+                                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
+                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
                     if (state.captureMode == CaptureMode.VIDEO && dualCaptureEnabled) {
                         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                             val insetPadding = 12.dp
@@ -2303,6 +2391,37 @@ fun CameraScreen(
                     !state.videoRecordingState.isRecording &&
                     !state.videoRecordingState.isProcessing,
             onVideoStabilizationModeChange = viewModel::setVideoStabilizationMode,
+            spatialVideoEnabled = spatialVideoEnabled,
+            spatialVideoSupported = spatialVideoEnabled || viewModel.isSpatialVideoSupported(),
+            onVideoSpatialVideoClick = {
+                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Stop recording before changing Special Video.",
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                } else if (!spatialVideoEnabled && !viewModel.isSpatialVideoSupported()) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "No rear 1x and 0.5x Camera2 camera pair was discovered.",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                } else {
+                    viewModel.setSpatialVideoEnabled(!spatialVideoEnabled)
+                }
+            },
+            spatialVideoShowUltraWidePreview = spatialVideoShowUltraWidePreview,
+            onSpatialVideoPreviewToggle = {
+                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Stop recording before changing the 0.5x preview.",
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                } else {
+                    viewModel.setSpatialVideoShowUltraWidePreview(!spatialVideoShowUltraWidePreview)
+                }
+            },
             onVideoDualCaptureClick = {
                 if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
                     android.widget.Toast.makeText(

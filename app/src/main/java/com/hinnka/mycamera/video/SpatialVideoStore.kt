@@ -32,7 +32,11 @@ object SpatialVideoStore {
             .replace(Regex("[^A-Za-z0-9._-]"), "_")
             .take(120)
             .ifBlank { "video" }
-        return File(File(context.filesDir, DIRECTORY_NAME), safeKey + SUFFIX)
+        val directory = File(context.filesDir, DIRECTORY_NAME)
+        if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
+            throw IllegalStateException("Unable to create Special Video companion directory: ${directory.absolutePath}")
+        }
+        return File(directory, safeKey + SUFFIX)
     }
 
     /**

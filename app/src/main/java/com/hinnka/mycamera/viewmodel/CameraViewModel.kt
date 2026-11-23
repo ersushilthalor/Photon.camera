@@ -3547,12 +3547,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val dualCaptureStreamSize = cameraController.dualCaptureStreamSize
     val dualCaptureSource = cameraController.dualCaptureSource
     val dualCaptureSensorOrientationDegrees = cameraController.dualCaptureSensorOrientationDegrees
+    val spatialVideoEnabled = cameraController.spatialVideoEnabledFlow
+    val spatialVideoShowUltraWidePreview = cameraController.spatialVideoShowUltraWidePreview
+    val spatialVideoPreviewStreamSize = cameraController.spatialVideoPreviewStreamSize
+    val spatialVideoPreviewSensorOrientationDegrees =
+        cameraController.spatialVideoPreviewSensorOrientationDegrees
 
     fun isDualCaptureSupported(): Boolean = cameraController.isDualCaptureSupported()
 
     fun isSpatialVideoSupported(): Boolean = cameraController.isSpatialVideoSupported()
 
     fun setSpatialVideoEnabled(enabled: Boolean) = cameraController.setSpatialVideoEnabled(enabled)
+
+    fun setSpatialVideoShowUltraWidePreview(enabled: Boolean) =
+        cameraController.setSpatialVideoShowUltraWidePreview(enabled)
+
+    fun setSpatialVideoPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) =
+        cameraController.setSpatialVideoPreviewSurfaceTexture(surfaceTexture)
     fun isDualCaptureSourceSupported(source: DualCaptureSource): Boolean =
         cameraController.isDualCaptureSourceSupported(source)
     fun setDualCaptureSource(source: DualCaptureSource) {

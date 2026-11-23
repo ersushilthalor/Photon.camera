@@ -591,7 +591,10 @@ class VideoRecorder(
     }
 
     private fun onRealtimeFrameAvailable() {
-        if (!isRecording || stopRequested || isPaused) return
+        // Do not feed the encoder until Camera2 has confirmed that its recording
+        // request is active. Special Video uses this gate to start both independent
+        // camera sessions on the same shared timeline after both sessions are ready.
+        if (!isRecording || stopRequested || isPaused || !cameraInputStarted) return
         statsIncomingFrames += 1
         synchronized(realtimeFrameLock) {
             if (pendingRealtimeFrameCount > 0) {
