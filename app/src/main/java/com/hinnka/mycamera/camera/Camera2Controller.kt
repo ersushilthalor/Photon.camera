@@ -8879,7 +8879,7 @@ class Camera2Controller(private val context: Context) {
                 spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
             }
             val targetSize = spatialVideoStandbyInputSize
-                ?: wideId?.let { resolveSpatialVideoInputSize(it, _state.value.currentPreviewSize, logicalParentId) }
+                ?: wideId?.let { resolveSpatialVideoInputSize(it, _state.value.currentPreviewSize) }
                 ?: _state.value.currentPreviewSize
             runCatching {
                 surfaceTexture.setDefaultBufferSize(targetSize.width, targetSize.height)
@@ -9000,7 +9000,6 @@ class Camera2Controller(private val context: Context) {
     private fun resolveSpatialVideoInputSize(
         physicalCameraId: String,
         preferred: Size,
-        logicalParentCameraId: String? = null,
     ): Size? {
         return runCatching {
             // Camera2 exposes the physical output IDs from the logical parent, but the
@@ -9170,10 +9169,15 @@ class Camera2Controller(private val context: Context) {
         }
 
         try {
-            // Both sessions have completed configuration. Start both renderer inputs, then
-            // submit both repeating requests in the same CameraHandler turn.
-            videoRecorder.onCameraInputStarted()
-            spatialVideoRecorder.onCameraInputStarted()
+            // Both sessions have completed configuration. Both renderer inputs must accept
+            // their Camera2 surfaces before either session starts delivering recording frames.
+            val mainInputStarted = videoRecorder.onCameraInputStarted()
+            val ultraWideInputStarted = spatialVideoRecorder.onCameraInputStarted()
+            if (!mainInputStarted || !ultraWideInputStarted) {
+                throw IllegalStateException(
+                    "Recorder input readiness failed (main=$mainInputStarted, ultraWide=$ultraWideInputStarted)"
+                )
+            }
             submitRepeatingPreviewRequest(mainSession, mainRequest)
             wideSession.setRepeatingRequest(wideRequest, null, handler)
             spatialVideoPrimarySessionAwaitingStandby = false
@@ -10238,7 +10242,7 @@ class Camera2Controller(private val context: Context) {
             val logicalParentId = spatialVideoPrimaryCameraId.takeIf {
                 spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
             }
-            val wideInputSize = resolveSpatialVideoInputSize(wideId, cameraInputSize, logicalParentId)
+            val wideInputSize = resolveSpatialVideoInputSize(wideId, cameraInputSize)
             if (wideInputSize == null) {
                 videoRecorder.stopRecording()
                 onCameraError?.invoke(-1, "The ultra-wide camera does not expose a compatible video stream size.", false)
