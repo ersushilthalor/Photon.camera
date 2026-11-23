@@ -9003,15 +9003,12 @@ class Camera2Controller(private val context: Context) {
         logicalParentCameraId: String? = null,
     ): Size? {
         return runCatching {
-            val characteristics = if (
-                logicalParentCameraId != null &&
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
-            ) {
-                cameraManager.getCameraCharacteristics(logicalParentCameraId)
-                    .getPhysicalCameraCharacteristics(physicalCameraId)
-            } else {
-                cameraManager.getCameraCharacteristics(physicalCameraId)
-            } ?: return null
+            // Camera2 exposes the physical output IDs from the logical parent, but the
+            // SDK has no getPhysicalCameraCharacteristics() method. Query the physical ID
+            // through CameraManager; if a vendor does not expose its characteristics this
+            // way, the normal stream-size fallback below still applies.
+            val characteristics = cameraManager.getCameraCharacteristics(physicalCameraId)
+                ?: return null
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?: return null
             val sizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
@@ -10250,12 +10247,7 @@ class Camera2Controller(private val context: Context) {
             spatialPrimaryFinishedUri = null
             spatialUltraWideFinishedFile = null
             val wideCharacteristics = runCatching {
-                if (logicalParentId != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    cameraManager.getCameraCharacteristics(logicalParentId)
-                        .getPhysicalCameraCharacteristics(wideId)
-                } else {
-                    cameraManager.getCameraCharacteristics(wideId)
-                }
+                cameraManager.getCameraCharacteristics(wideId)
             }.getOrNull()
             spatialVideoCompanionFile = wideFile
             val wideStarted = spatialVideoRecorder.startRecording(
