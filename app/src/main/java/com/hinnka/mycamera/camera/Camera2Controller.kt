@@ -65,6 +65,7 @@ import com.hinnka.mycamera.video.VideoLogLutMode
 import com.hinnka.mycamera.video.DualCaptureLayout
 import com.hinnka.mycamera.video.DualCaptureSource
 import com.hinnka.mycamera.video.VideoRecorder
+import com.hinnka.mycamera.video.SpecialVideoRecordingTimeline
 import com.hinnka.mycamera.video.SpatialVideoStore
 import com.hinnka.mycamera.video.SpatialVideoPhysicalCameraCandidate
 import com.hinnka.mycamera.video.resolveSpatialVideoPhysicalCameraPair
@@ -306,8 +307,33 @@ class Camera2Controller(private val context: Context) {
     private var spatialVideoEnabled = false
     private var spatialVideoMainPhysicalCameraId: String? = null
     private var spatialVideoUltraWidePhysicalCameraId: String? = null
+    private var spatialVideoPrimaryCameraId: String? = null
+    private var spatialVideoStreamingMode: SpatialVideoStreamingMode? = null
     @Volatile private var spatialPrimaryFinishedUri: Uri? = null
     @Volatile private var spatialUltraWideFinishedFile: File? = null
+    @Volatile private var spatialVideoCompanionFile: File? = null
+    private var spatialVideoStandbyCameraDevice: CameraDevice? = null
+    private var spatialVideoStandbyOpeningCameraId: String? = null
+    private var spatialVideoStandbySession: CameraCaptureSession? = null
+    private var spatialVideoStandbyRepeatingRequest: CaptureRequest? = null
+    private var spatialVideoPrimarySessionAwaitingStandby = false
+    private var spatialVideoStandbySessionGeneration = 0L
+    private val specialVideoRecordingTimeline = SpecialVideoRecordingTimeline()
+    private var spatialVideoStandbyPreviewSurfaceTexture: SurfaceTexture? = null
+    private var spatialVideoStandbyPreviewSurface: Surface? = null
+    private var spatialVideoStandbyInputSize: Size? = null
+    private val specialVideoPreferences = context.getSharedPreferences("special_video_settings", Context.MODE_PRIVATE)
+    private val _spatialVideoEnabled = MutableStateFlow(false)
+    val spatialVideoEnabledFlow: StateFlow<Boolean> = _spatialVideoEnabled.asStateFlow()
+    private val _spatialVideoShowUltraWidePreview = MutableStateFlow(
+        specialVideoPreferences.getBoolean("show_ultra_wide_preview", false)
+    )
+    val spatialVideoShowUltraWidePreview: StateFlow<Boolean> = _spatialVideoShowUltraWidePreview.asStateFlow()
+    private val _spatialVideoPreviewStreamSize = MutableStateFlow<Size?>(null)
+    val spatialVideoPreviewStreamSize: StateFlow<Size?> = _spatialVideoPreviewStreamSize.asStateFlow()
+    private val _spatialVideoPreviewSensorOrientationDegrees = MutableStateFlow(0)
+    val spatialVideoPreviewSensorOrientationDegrees: StateFlow<Int> =
+        _spatialVideoPreviewSensorOrientationDegrees.asStateFlow()
     private var dualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE
     private val _dualCaptureSource = MutableStateFlow(DualCaptureSource.ULTRA_WIDE)
     val dualCaptureSource: StateFlow<DualCaptureSource> = _dualCaptureSource.asStateFlow()
@@ -337,6 +363,18 @@ class Camera2Controller(private val context: Context) {
         val zoomPanX: Float,
         val zoomPanY: Float,
         val zoomPanEnabled: Boolean,
+    )
+    private enum class SpatialVideoStreamingMode {
+        LOGICAL_MULTI_CAMERA_PHYSICAL,
+        CONCURRENT_DEVICES,
+        PERSISTENT_DUAL_SESSION,
+    }
+    private data class SpatialVideoCameraPair(
+        val mode: SpatialVideoStreamingMode,
+        val primaryCameraId: String,
+        val mainCameraInfo: CameraInfo,
+        val mainPhysicalCameraId: String?,
+        val ultraWideCameraId: String,
     )
     private val _dualCaptureStreamSize = MutableStateFlow<Size?>(null)
     val dualCaptureStreamSize: StateFlow<Size?> = _dualCaptureStreamSize.asStateFlow()
@@ -2291,6 +2329,7 @@ class Camera2Controller(private val context: Context) {
 
     private fun clearCameraRuntimeState(reason: String, closeImageReader: Boolean = true) {
         clearCameraSessionState(reason, closeImageReader)
+        stopSpatialVideoStandbyCamera("camera runtime cleared: $reason")
         clearCameraCapabilityCache()
     }
 
@@ -2386,7 +2425,8 @@ class Camera2Controller(private val context: Context) {
     ) {
         cameraOpenGeneration++
         videoRecorder.forceStop()
-            spatialVideoRecorder.forceStop()
+        spatialVideoRecorder.forceStop()
+        stopSpatialVideoStandbyCamera("primary camera unavailable: $reason")
         stopVideoRecordingTicker()
         clearCameraSessionState(reason)
         closeCameraDeviceAndAwait(camera, reason)
@@ -2434,6 +2474,7 @@ class Camera2Controller(private val context: Context) {
         if (videoRecorder.isRecording()) {
             videoRecorder.forceStop()
             spatialVideoRecorder.forceStop()
+            stopSpatialVideoStandbyCamera("primary preview session failed: $reason")
             stopVideoRecordingTicker()
         }
         val device = cameraDevice
@@ -2786,6 +2827,26 @@ class Camera2Controller(private val context: Context) {
                 "Logical multi-camera seamless zoom enabled: logical=$openCameraId, " +
                     "physicalIds=${getCameraCharacteristicsCached(openCameraId).physicalCameraIds}"
             )
+        }
+
+        if (
+            spatialVideoEnabled &&
+            (openCameraId != spatialVideoPrimaryCameraId || selectedCamera?.lensType != LensType.BACK_MAIN)
+        ) {
+            val reason = "Primary camera changed while Special Video was active " +
+                "(newId=$openCameraId newLens=${selectedCamera?.lensType} expected=$spatialVideoPrimaryCameraId)"
+            PLog.w(TAG, reason)
+            if (videoRecorder.isRecording() || _state.value.videoRecordingState.isProcessing) {
+                failSpatialVideoStandby(reason)
+            } else {
+                spatialVideoEnabled = false
+                _spatialVideoEnabled.value = false
+                stopSpatialVideoStandbyCamera(reason)
+                spatialVideoMainPhysicalCameraId = null
+                spatialVideoUltraWidePhysicalCameraId = null
+                spatialVideoPrimaryCameraId = null
+                spatialVideoStreamingMode = null
+            }
         }
 
         val cameraStateCallback = object : CameraDevice.StateCallback() {
@@ -3470,10 +3531,19 @@ class Camera2Controller(private val context: Context) {
         } else {
             null
         }
+        val logicalSpatialOutput = spatialVideoEnabled &&
+            spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+        // Keep the secondary physical output even when the primary stream uses EIS+.
+        // Photon EIS+ processes the main camera through its YUV pipeline; the 0.5x
+        // companion remains an independent, un-stabilized native Camera2 stream.
         val spatialSurface = if (
-            captureMode == CaptureMode.VIDEO && spatialVideoEnabled &&
-            _state.value.videoRecordingState.shouldAttachCameraInput() && !useEnhancedStabilization
+            captureMode == CaptureMode.VIDEO && logicalSpatialOutput &&
+            _state.value.videoRecordingState.shouldAttachCameraInput()
         ) spatialVideoRecorder.cameraInputSurface else null
+        val spatialPreviewSurface = if (
+            captureMode == CaptureMode.VIDEO && logicalSpatialOutput &&
+            _spatialVideoShowUltraWidePreview.value
+        ) spatialVideoStandbyPreviewSurface?.takeIf { it.isValid } else null
         val usesUltraWideDualCapture = captureMode == CaptureMode.VIDEO &&
             dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE &&
             dualCapturePhysicalCameraId != null
@@ -3510,6 +3580,7 @@ class Camera2Controller(private val context: Context) {
                 stabilizationReader?.surface?.let(::addTarget)
                 videoSurface?.let(::addTarget)
                 spatialSurface?.let(::addTarget)
+                spatialPreviewSurface?.let(::addTarget)
                 ultraWidePreviewSurface?.let(::addTarget)
                 ultraWideRecordSurface?.let(::addTarget)
 
@@ -3526,6 +3597,7 @@ class Camera2Controller(private val context: Context) {
             stabilizationReader?.surface?.let(surfaces::add)
             videoSurface?.let(surfaces::add)
             spatialSurface?.let(surfaces::add)
+            spatialPreviewSurface?.let(surfaces::add)
             ultraWidePreviewSurface?.let(surfaces::add)
             ultraWideRecordSurface?.let(surfaces::add)
             if (captureMode == CaptureMode.PHOTO) {
@@ -3592,6 +3664,11 @@ class Camera2Controller(private val context: Context) {
                             val wideId = spatialVideoUltraWidePhysicalCameraId
                                 ?: throw IllegalStateException("Special Video ultra-wide physical camera is unavailable")
                             add(createOutputConfiguration(encoderSurface, physicalCameraId = wideId))
+                        }
+                        spatialPreviewSurface?.let { previewOutput ->
+                            val wideId = spatialVideoUltraWidePhysicalCameraId
+                                ?: throw IllegalStateException("Special Video ultra-wide physical camera is unavailable")
+                            add(createOutputConfiguration(previewOutput, physicalCameraId = wideId))
                         }
                         if (ultraWidePreviewSurface != null || ultraWideRecordSurface != null) {
                             val wideId = ultraWidePhysicalCameraId
@@ -4342,21 +4419,38 @@ class Camera2Controller(private val context: Context) {
 
             // 开始预览
             // 关键修复: 不再动态添加 surface，因为已经在创建 builder 时添加了
+            val deferForIndependentSpecialVideo =
+                _state.value.captureMode == CaptureMode.VIDEO &&
+                    spatialVideoEnabled &&
+                    spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                    _state.value.videoRecordingState.shouldAttachCameraInput() &&
+                    spatialVideoRecorder.isRecording()
             previewRequestBuilder?.let { builder ->
-                submitRepeatingPreviewRequest(session, builder)
+                if (deferForIndependentSpecialVideo) {
+                    spatialVideoPrimarySessionAwaitingStandby = true
+                    PLog.i(TAG, "Special Video main session configured; waiting for the ultra-wide session")
+                } else {
+                    submitRepeatingPreviewRequest(session, builder)
+                }
             }
             if (shouldUseAlgorithmicStabilization()) {
                 scheduleEnhancedStabilizationInputWatchdog(sessionGeneration)
             }
-            if (_state.value.captureMode == CaptureMode.VIDEO &&
-                _state.value.videoRecordingState.shouldAttachCameraInput() &&
-                videoRecorder.cameraInputSurface != null
+            if (
+                _state.value.captureMode == CaptureMode.VIDEO &&
+                _state.value.videoRecordingState.shouldAttachCameraInput()
             ) {
-                if (videoRecorder.onCameraInputStarted()) {
+                if (deferForIndependentSpecialVideo) {
+                    startIndependentSpecialVideoInputsWhenReady()
+                } else if (
+                    videoRecorder.cameraInputSurface != null &&
+                    videoRecorder.onCameraInputStarted()
+                ) {
                     startVideoRecordingTicker()
                 }
             }
             if (_state.value.captureMode == CaptureMode.VIDEO && spatialVideoEnabled &&
+                spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
                 _state.value.videoRecordingState.shouldAttachCameraInput() &&
                 spatialVideoRecorder.cameraInputSurface != null
             ) {
@@ -8660,7 +8754,159 @@ class Camera2Controller(private val context: Context) {
         return Triple(logicalId, pair.mainCameraId, pair.ultraWideCameraId)
     }
 
-    fun isSpatialVideoSupported(): Boolean = resolveSpatialVideoCameraPair() != null
+    /**
+     * Resolve in VCamera's priority order: logical physical outputs, declared concurrent
+     * Camera2 devices, then a persistent pair of independently open CameraDevices.
+     */
+    private fun resolveSpatialVideoConfiguration(): SpatialVideoCameraPair? {
+        val state = _state.value
+        val current = state.getCurrentCameraInfo() ?: return null
+        if (current.lensFacing != CameraCharacteristics.LENS_FACING_BACK) return null
+
+        resolveSpatialVideoCameraPair()?.let { (logicalId, mainPhysicalId, ultraWidePhysicalId) ->
+            val mainInfo = state.availableCameras.firstOrNull {
+                it.cameraId == mainPhysicalId || it.outputPhysicalCameraId == mainPhysicalId
+            } ?: current
+            PLog.i(
+                TAG,
+                "Special Video mode=LOGICAL_MULTI_CAMERA_PHYSICAL logical=$logicalId " +
+                    "mainPhysical=$mainPhysicalId ultraWide=$ultraWidePhysicalId"
+            )
+            return SpatialVideoCameraPair(
+                mode = SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL,
+                primaryCameraId = logicalId,
+                mainCameraInfo = mainInfo,
+                mainPhysicalCameraId = mainPhysicalId,
+                ultraWideCameraId = ultraWidePhysicalId,
+            )
+        }
+
+        val rearLenses = state.availableCameras.filter {
+            it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                !it.isVirtualIszLens && !it.isCustomLensId
+        }
+        val main = rearLenses.asSequence()
+            .filter { it.lensType == LensType.BACK_MAIN }
+            .minByOrNull { abs(it.intrinsicZoomRatio - 1f) }
+            ?: rearLenses.asSequence()
+                .filter { it.intrinsicZoomRatio.isFinite() && it.intrinsicZoomRatio in 0.85f..1.15f }
+                .minByOrNull { abs(it.intrinsicZoomRatio - 1f) }
+            ?: return null
+        val ultraWide = rearLenses.asSequence()
+            .filter { it.lensType == LensType.BACK_ULTRA_WIDE }
+            .minByOrNull {
+                it.intrinsicZoomRatio.takeIf { ratio -> ratio.isFinite() && ratio > 0f }
+                    ?.let { ratio -> abs(ratio - 0.5f) } ?: Float.MAX_VALUE
+            }
+            ?: rearLenses.asSequence()
+                .filter { it.intrinsicZoomRatio.isFinite() && it.intrinsicZoomRatio in 0.2f..0.85f }
+                .minByOrNull { abs(it.intrinsicZoomRatio - 0.5f) }
+            ?: return null
+
+        val mainOpenId = runCatching { main.getOpenCameraId() }.getOrNull() ?: return null
+        val wideOpenId = runCatching { ultraWide.getOpenCameraId() }.getOrNull() ?: return null
+        if (mainOpenId == wideOpenId) {
+            PLog.w(TAG, "Special Video pair rejected: both lenses map to one CameraDevice id=$mainOpenId, no logical outputs resolved")
+            return null
+        }
+        val publicIds = runCatching { cameraManager.cameraIdList.toSet() }.getOrDefault(emptySet())
+        if (mainOpenId !in publicIds || wideOpenId !in publicIds) {
+            PLog.w(TAG, "Special Video pair rejected: Camera2 IDs not public main=$mainOpenId wide=$wideOpenId")
+            return null
+        }
+        val concurrentAdvertised = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                cameraManager.concurrentCameraIds.any { ids -> mainOpenId in ids && wideOpenId in ids }
+            }.getOrDefault(false)
+        } else false
+        val mode = if (concurrentAdvertised) {
+            SpatialVideoStreamingMode.CONCURRENT_DEVICES
+        } else {
+            SpatialVideoStreamingMode.PERSISTENT_DUAL_SESSION
+        }
+        PLog.i(
+            TAG,
+            "Special Video independent pair mode=$mode main=${main.cameraId}/$mainOpenId " +
+                "ultraWide=${ultraWide.cameraId}/$wideOpenId mainZoom=${main.intrinsicZoomRatio} " +
+                "ultraWideZoom=${ultraWide.intrinsicZoomRatio}"
+        )
+        return SpatialVideoCameraPair(
+            mode = mode,
+            primaryCameraId = mainOpenId,
+            mainCameraInfo = main,
+            mainPhysicalCameraId = main.outputPhysicalCameraId,
+            ultraWideCameraId = wideOpenId,
+        )
+    }
+
+    fun isSpatialVideoSupported(): Boolean {
+        val pair = resolveSpatialVideoConfiguration()
+        if (pair == null) {
+            PLog.w(TAG, "Special Video unsupported: rear main 1x + ultra-wide 0.5x pair not discovered")
+        }
+        return pair != null
+    }
+
+    fun setSpatialVideoShowUltraWidePreview(enabled: Boolean) {
+        _spatialVideoShowUltraWidePreview.value = enabled
+        specialVideoPreferences.edit().putBoolean("show_ultra_wide_preview", enabled).apply()
+        if (spatialVideoEnabled) {
+            cameraHandler?.post {
+                if (spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                } else if (enabled && spatialVideoStandbyPreviewSurface != null) {
+                    spatialVideoUltraWidePhysicalCameraId?.let { startSpatialVideoStandbyCamera(it) }
+                } else if (spatialVideoStandbyCameraDevice != null) {
+                    createSpatialVideoStandbySession("ultra-wide preview visibility changed")
+                }
+            }
+        }
+    }
+
+    fun setSpatialVideoPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setSpatialVideoPreviewSurfaceTexture(surfaceTexture) }
+            return
+        }
+        if (spatialVideoStandbyPreviewSurfaceTexture === surfaceTexture) return
+        spatialVideoStandbyPreviewSurface?.release()
+        spatialVideoStandbyPreviewSurface = null
+        spatialVideoStandbyPreviewSurfaceTexture = surfaceTexture
+        if (surfaceTexture != null) {
+            val wideId = spatialVideoUltraWidePhysicalCameraId
+            val logicalParentId = spatialVideoPrimaryCameraId.takeIf {
+                spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+            }
+            val targetSize = spatialVideoStandbyInputSize
+                ?: wideId?.let { resolveSpatialVideoInputSize(it, _state.value.currentPreviewSize, logicalParentId) }
+                ?: _state.value.currentPreviewSize
+            runCatching {
+                surfaceTexture.setDefaultBufferSize(targetSize.width, targetSize.height)
+                spatialVideoStandbyPreviewSurface = Surface(surfaceTexture)
+            }.onFailure { PLog.e(TAG, "Special Video preview surface creation failed", it) }
+            _spatialVideoPreviewStreamSize.value = targetSize
+        } else {
+            _spatialVideoPreviewStreamSize.value = null
+        }
+        if (spatialVideoEnabled) {
+            if (spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL) {
+                createPreviewSession(openGeneration = cameraOpenGeneration)
+            } else {
+                spatialVideoUltraWidePhysicalCameraId?.let { cameraId ->
+                    if (
+                        _spatialVideoShowUltraWidePreview.value &&
+                        spatialVideoStandbyCameraDevice == null &&
+                        surfaceTexture != null
+                    ) {
+                        startSpatialVideoStandbyCamera(cameraId)
+                    } else if (spatialVideoStandbyCameraDevice != null) {
+                        createSpatialVideoStandbySession("preview surface changed")
+                    }
+                }
+            }
+        }
+    }
 
     fun setSpatialVideoEnabled(enabled: Boolean) {
         val handler = cameraHandler
@@ -8678,30 +8924,71 @@ class Camera2Controller(private val context: Context) {
                 onCameraError?.invoke(-1, "Special Video is only available in Video mode.", false)
                 return
             }
-            val cameraPair = resolveSpatialVideoCameraPair()
-            if (cameraPair == null) {
+            val pair = resolveSpatialVideoConfiguration()
+            if (pair == null) {
                 onCameraError?.invoke(
                     -1,
-                    "Special Video requires a logical rear camera exposing simultaneous 1x and 0.5x physical outputs.",
+                    "Special Video needs discoverable rear main 1x and ultra-wide 0.5x Camera2 IDs.",
                     false
                 )
                 return
             }
-            val (logicalId, mainPhysicalCameraId, ultraWidePhysicalCameraId) = cameraPair
-            spatialVideoMainPhysicalCameraId = mainPhysicalCameraId
-            spatialVideoUltraWidePhysicalCameraId = ultraWidePhysicalCameraId
+            val activeId = activeOpenCameraId.takeIf { it.isNotBlank() }
+                ?: _state.value.getCurrentCameraInfo()?.let { runCatching { it.getOpenCameraId() }.getOrNull() }
+            if (activeId != null && activeId != pair.primaryCameraId) {
+                onCameraError?.invoke(
+                    -1,
+                    "Select the rear main 1x camera before enabling Special Video (active=$activeId, main=${pair.primaryCameraId}).",
+                    false
+                )
+                return
+            }
+            spatialVideoMainPhysicalCameraId = pair.mainPhysicalCameraId
+            spatialVideoUltraWidePhysicalCameraId = pair.ultraWideCameraId
+            spatialVideoPrimaryCameraId = pair.primaryCameraId
+            spatialVideoStreamingMode = pair.mode
             spatialVideoEnabled = true
-            dualCaptureEnabled = false
-            activeOutputPhysicalCameraId = spatialVideoMainPhysicalCameraId
+            _spatialVideoEnabled.value = true
+            if (dualCaptureEnabled) setDualCaptureEnabled(false)
+            activeOutputPhysicalCameraId = if (
+                pair.mode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+            ) pair.mainPhysicalCameraId else pair.mainCameraInfo.outputPhysicalCameraId
             logicalMultiCameraAutoSwitchActive = false
-            _state.value = _state.value.copy(zoomRatio = 1f)
-            PLog.i(TAG, "Special Video enabled: main=$spatialVideoMainPhysicalCameraId, ultraWide=$spatialVideoUltraWidePhysicalCameraId")
+            _state.value = _state.value.copy(
+                zoomRatio = 1f,
+                zoomPanX = 0f,
+                zoomPanY = 0f,
+                zoomPanEnabled = false,
+            )
+            PLog.i(
+                TAG,
+                "Special Video enabled: mode=${pair.mode}, primary=${pair.primaryCameraId}, " +
+                    "mainPhysical=${pair.mainPhysicalCameraId}, ultraWide=${pair.ultraWideCameraId}"
+            )
             previewSurfaceTexture?.let { createPreviewSession(openGeneration = cameraOpenGeneration) }
+            if (pair.mode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL) {
+                // Pre-open the standby CameraDevice when Special Video is enabled. Recording
+                // then only has to attach its encoder surface, rather than paying camera-open
+                // latency after the user presses the shutter.
+                startSpatialVideoStandbyCamera(pair.ultraWideCameraId)
+            }
         } else {
             spatialVideoEnabled = false
+            _spatialVideoEnabled.value = false
             spatialVideoRecorder.forceStop()
+            stopSpatialVideoStandbyCamera("Special Video disabled")
             spatialVideoMainPhysicalCameraId = null
             spatialVideoUltraWidePhysicalCameraId = null
+            spatialVideoPrimaryCameraId = null
+            spatialVideoStreamingMode = null
+            spatialVideoStandbyInputSize = null
+            spatialPrimaryFinishedUri = null
+            spatialUltraWideFinishedFile = null
+            spatialVideoCompanionFile?.delete()
+            spatialVideoCompanionFile = null
+            spatialVideoStandbyRepeatingRequest = null
+            spatialVideoPrimarySessionAwaitingStandby = false
+            specialVideoRecordingTimeline.reset()
             activeOutputPhysicalCameraId = resolveRequestedPhysicalCameraId(
                 _state.value,
                 _state.value.getCurrentCameraInfo()
@@ -8710,10 +8997,22 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
-    private fun resolveSpatialVideoInputSize(physicalCameraId: String, preferred: Size): Size? {
+    private fun resolveSpatialVideoInputSize(
+        physicalCameraId: String,
+        preferred: Size,
+        logicalParentCameraId: String? = null,
+    ): Size? {
         return runCatching {
-            val map = cameraManager.getCameraCharacteristics(physicalCameraId)
-                .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val characteristics = if (
+                logicalParentCameraId != null &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+            ) {
+                cameraManager.getCameraCharacteristics(logicalParentCameraId)
+                    .getPhysicalCameraCharacteristics(physicalCameraId)
+            } else {
+                cameraManager.getCameraCharacteristics(physicalCameraId)
+            } ?: return null
+            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?: return null
             val sizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
             if (sizes.isEmpty()) return null
@@ -8736,10 +9035,340 @@ class Camera2Controller(private val context: Context) {
         val ultraWide = spatialUltraWideFinishedFile ?: return
         spatialPrimaryFinishedUri = null
         spatialUltraWideFinishedFile = null
+        if (!ultraWide.isFile || ultraWide.length() <= 0L) {
+            PLog.e(TAG, "Special Video companion missing or empty; retaining the main recording only: ${ultraWide.absolutePath}")
+            ultraWide.delete()
+            spatialVideoCompanionFile = null
+            specialVideoRecordingTimeline.reset()
+            return
+        }
         Thread({
-            val attached = SpatialVideoStore.attachPrimaryAudioTrack(context, primary, ultraWide)
-            PLog.i(TAG, "Special Video companion finalized: file=${ultraWide.name}, audioAttached=$attached")
+            try {
+                val attached = SpatialVideoStore.attachPrimaryAudioTrack(context, primary, ultraWide)
+                PLog.i(TAG, "Special Video companion finalized: file=${ultraWide.name}, audioAttached=$attached")
+            } catch (error: Exception) {
+                PLog.e(TAG, "Special Video audio mirror finalization failed: ${ultraWide.absolutePath}", error)
+            } finally {
+                spatialVideoCompanionFile = null
+                specialVideoRecordingTimeline.reset()
+            }
         }, "SpatialVideoFinalize").start()
+    }
+
+
+    @SuppressLint("MissingPermission")
+    private fun startSpatialVideoStandbyCamera(cameraId: String): Boolean {
+        val handler = cameraHandler ?: return false
+        if (Looper.myLooper() != handler.looper) {
+            handler.post { startSpatialVideoStandbyCamera(cameraId) }
+            return true
+        }
+        if (!spatialVideoEnabled || cameraId.isBlank()) return false
+        val existing = spatialVideoStandbyCameraDevice
+        if (existing != null && existing.id == cameraId) {
+            createSpatialVideoStandbySession("reuse standby camera")
+            return true
+        }
+        if (spatialVideoStandbyOpeningCameraId == cameraId) {
+            PLog.d(TAG, "Special Video standby CameraDevice is already opening: id=$cameraId")
+            return true
+        }
+        stopSpatialVideoStandbyCamera("replace standby camera")
+        val generation = ++spatialVideoStandbySessionGeneration
+        spatialVideoStandbyOpeningCameraId = cameraId
+        val targetSize = spatialVideoStandbyInputSize
+            ?: resolveSpatialVideoInputSize(cameraId, _state.value.currentPreviewSize)
+        if (targetSize == null) {
+            spatialVideoStandbyOpeningCameraId = null
+            PLog.e(TAG, "Special Video cannot resolve ultra-wide stream size: camera=$cameraId")
+            return false
+        }
+        spatialVideoStandbyInputSize = targetSize
+        _spatialVideoPreviewStreamSize.value = targetSize
+        _spatialVideoPreviewSensorOrientationDegrees.value = runCatching {
+            cameraManager.getCameraCharacteristics(cameraId).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        }.getOrDefault(0)
+        PLog.i(
+            TAG,
+            "Special Video opening standby device: mode=$spatialVideoStreamingMode, " +
+                "primary=$spatialVideoPrimaryCameraId ultraWide=$cameraId stream=${targetSize.width}x${targetSize.height}"
+        )
+        return try {
+            cameraManager.openCamera(
+                cameraId,
+                object : CameraDevice.StateCallback() {
+                    override fun onOpened(camera: CameraDevice) {
+                        if (generation != spatialVideoStandbySessionGeneration ||
+                            !spatialVideoEnabled ||
+                            spatialVideoUltraWidePhysicalCameraId != cameraId
+                        ) {
+                            PLog.w(TAG, "Closing stale Special Video standby device: id=${camera.id}, generation=$generation")
+                            camera.close()
+                            return
+                        }
+                        spatialVideoStandbyOpeningCameraId = null
+                        spatialVideoStandbyCameraDevice = camera
+                        PLog.i(TAG, "Special Video standby CameraDevice opened: id=${camera.id}")
+                        createSpatialVideoStandbySession("standby camera opened")
+                    }
+
+                    override fun onDisconnected(camera: CameraDevice) {
+                        if (generation != spatialVideoStandbySessionGeneration) {
+                            camera.close()
+                            return
+                        }
+                        spatialVideoStandbyOpeningCameraId = null
+                        PLog.e(TAG, "Special Video standby camera disconnected: id=${camera.id}")
+                        runCatching { camera.close() }
+                        failSpatialVideoStandby("Ultra-wide camera disconnected during Special Video")
+                    }
+
+                    override fun onError(camera: CameraDevice, error: Int) {
+                        if (generation != spatialVideoStandbySessionGeneration) {
+                            camera.close()
+                            return
+                        }
+                        spatialVideoStandbyOpeningCameraId = null
+                        PLog.e(TAG, "Special Video standby camera open error: id=${camera.id}, error=$error")
+                        runCatching { camera.close() }
+                        failSpatialVideoStandby("Ultra-wide Camera2 open failed (error=$error)")
+                    }
+
+                    override fun onClosed(camera: CameraDevice) {
+                        if (spatialVideoStandbyCameraDevice === camera) {
+                            spatialVideoStandbyCameraDevice = null
+                            spatialVideoStandbySession = null
+                        }
+                    }
+                },
+                handler,
+            )
+            true
+        } catch (error: Exception) {
+            spatialVideoStandbyOpeningCameraId = null
+            PLog.e(TAG, "Special Video failed to open ultra-wide CameraDevice: id=$cameraId", error)
+            false
+        }
+    }
+
+    private fun startIndependentSpecialVideoInputsWhenReady() {
+        val handler = cameraHandler ?: return
+        if (Looper.myLooper() != handler.looper) {
+            handler.post { startIndependentSpecialVideoInputsWhenReady() }
+            return
+        }
+        if (!spatialVideoEnabled ||
+            spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL ||
+            !spatialVideoPrimarySessionAwaitingStandby ||
+            !_state.value.videoRecordingState.shouldAttachCameraInput()
+        ) return
+
+        val mainSession = captureSession ?: return
+        val mainRequest = previewRequestBuilder ?: return
+        val wideSession = spatialVideoStandbySession ?: return
+        val wideRequest = spatialVideoStandbyRepeatingRequest ?: return
+        if (!videoRecorder.isRecording() || !spatialVideoRecorder.isRecording()) {
+            failSpatialVideoStandby("Both Special Video encoders must be prepared before camera streams start")
+            return
+        }
+
+        try {
+            // Both sessions have completed configuration. Start both renderer inputs, then
+            // submit both repeating requests in the same CameraHandler turn.
+            videoRecorder.onCameraInputStarted()
+            spatialVideoRecorder.onCameraInputStarted()
+            submitRepeatingPreviewRequest(mainSession, mainRequest)
+            wideSession.setRepeatingRequest(wideRequest, null, handler)
+            spatialVideoPrimarySessionAwaitingStandby = false
+            startVideoRecordingTicker()
+            PLog.i(
+                TAG,
+                "Special Video dual sessions started together: mode=$spatialVideoStreamingMode " +
+                    "main=$spatialVideoPrimaryCameraId ultraWide=${spatialVideoStandbyCameraDevice?.id} " +
+                    "timelineOriginUs=${specialVideoRecordingTimeline.currentOriginUs()}"
+            )
+        } catch (error: Exception) {
+            PLog.e(TAG, "Could not start both Special Video Camera2 sessions", error)
+            failSpatialVideoStandby(
+                "Unable to start simultaneous main and ultra-wide recording sessions: ${error.localizedMessage}"
+            )
+        }
+    }
+
+    private fun createSpatialVideoStandbySession(reason: String) {
+        val handler = cameraHandler ?: return
+        if (Looper.myLooper() != handler.looper) {
+            handler.post { createSpatialVideoStandbySession(reason) }
+            return
+        }
+        val device = spatialVideoStandbyCameraDevice ?: return
+        if (!spatialVideoEnabled) return
+        val encoderSurface = spatialVideoRecorder.cameraInputSurface
+        val previewSurface = spatialVideoStandbyPreviewSurface?.takeIf {
+            _spatialVideoShowUltraWidePreview.value && it.isValid
+        }
+        val outputSurfaces = buildList {
+            previewSurface?.let(::add)
+            encoderSurface?.takeIf { it.isValid }?.let(::add)
+        }.distinct()
+        if (outputSurfaces.isEmpty()) {
+            val idleSession = spatialVideoStandbySession
+            spatialVideoStandbySession = null
+            spatialVideoStandbyRepeatingRequest = null
+            runCatching { idleSession?.stopRepeating() }
+            runCatching { idleSession?.abortCaptures() }
+            runCatching { idleSession?.close() }
+            PLog.d(
+                TAG,
+                "Special Video standby CameraDevice remains pre-opened without a capture session; " +
+                    "waiting for preview/encoder target id=${device.id} reason=$reason"
+            )
+            return
+        }
+
+        val generation = ++spatialVideoStandbySessionGeneration
+        val oldSession = spatialVideoStandbySession
+        spatialVideoStandbySession = null
+        spatialVideoStandbyRepeatingRequest = null
+        runCatching { oldSession?.stopRepeating() }
+        runCatching { oldSession?.abortCaptures() }
+        runCatching { oldSession?.close() }
+
+        try {
+            val characteristics = cameraManager.getCameraCharacteristics(device.id)
+            val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                outputSurfaces.forEach(::addTarget)
+                set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+                set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                if (afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)) {
+                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                }
+                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                // Match VCamera's resolveSpecialVideoStandbyCropRatio(...)=1.0:
+                // the separate 0.5x file keeps the native, uncropped sensor field of view.
+                if (activeArray != null) set(CaptureRequest.SCALER_CROP_REGION, activeArray)
+            }
+            PLog.i(
+                TAG,
+                "Special Video configuring standby session: id=${device.id}, mode=$spatialVideoStreamingMode, " +
+                    "preview=${previewSurface != null}, encoder=${encoderSurface != null}, " +
+                    "outputs=${outputSurfaces.size}, stream=$spatialVideoStandbyInputSize"
+            )
+            device.createCaptureSession(
+                outputSurfaces,
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        if (generation != spatialVideoStandbySessionGeneration ||
+                            device !== spatialVideoStandbyCameraDevice ||
+                            !spatialVideoEnabled
+                        ) {
+                            safeCloseCaptureSession(session, "stale Special Video standby session")
+                            return
+                        }
+                        spatialVideoStandbySession = session
+                        try {
+                            if (encoderSurface != null) {
+                                // Wait until the main Camera2 session is also configured.
+                                spatialVideoStandbyRepeatingRequest = request.build()
+                                startIndependentSpecialVideoInputsWhenReady()
+                            } else {
+                                session.setRepeatingRequest(request.build(), null, handler)
+                            }
+                            PLog.i(
+                                TAG,
+                                "Special Video standby session configured: camera=${device.id}, " +
+                                    "preview=${previewSurface != null}, encoder=${encoderSurface != null}, mode=$spatialVideoStreamingMode"
+                            )
+                        } catch (error: Exception) {
+                            PLog.e(TAG, "Special Video standby repeating request failed: camera=${device.id}", error)
+                            safeCloseCaptureSession(session, "Special Video standby repeating failure")
+                            spatialVideoStandbySession = null
+                            spatialVideoStandbyRepeatingRequest = null
+                            if (encoderSurface != null) {
+                                failSpatialVideoStandby("Ultra-wide recording request failed: ${error.localizedMessage}")
+                            }
+                        }
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        safeCloseCaptureSession(session, "Special Video standby configure failed")
+                        if (generation == spatialVideoStandbySessionGeneration) {
+                            PLog.e(
+                                TAG,
+                                "Special Video standby session configuration failed: camera=${device.id}, " +
+                                    "mode=$spatialVideoStreamingMode, outputs=${outputSurfaces.size}, reason=$reason"
+                            )
+                            if (encoderSurface != null) {
+                                failSpatialVideoStandby("Ultra-wide Camera2 session configuration failed")
+                            }
+                        }
+                    }
+
+                    override fun onClosed(session: CameraCaptureSession) {
+                        if (spatialVideoStandbySession === session) spatialVideoStandbySession = null
+                    }
+                },
+                handler,
+            )
+        } catch (error: Exception) {
+            PLog.e(TAG, "Special Video standby session creation failed: camera=${device.id}, reason=$reason", error)
+            if (encoderSurface != null) {
+                failSpatialVideoStandby("Ultra-wide recording session could not be created: ${error.localizedMessage}")
+            }
+        }
+    }
+
+    private fun stopSpatialVideoStandbyCamera(reason: String) {
+        spatialVideoStandbySessionGeneration++
+        spatialVideoStandbyOpeningCameraId = null
+        spatialVideoStandbyRepeatingRequest = null
+        spatialVideoPrimarySessionAwaitingStandby = false
+        val session = spatialVideoStandbySession
+        spatialVideoStandbySession = null
+        runCatching { session?.stopRepeating() }
+        runCatching { session?.abortCaptures() }
+        runCatching { session?.close() }
+        val device = spatialVideoStandbyCameraDevice
+        spatialVideoStandbyCameraDevice = null
+        runCatching { device?.close() }
+        PLog.i(TAG, "Special Video standby camera closed: id=${device?.id}, reason=$reason")
+    }
+
+    private fun failSpatialVideoStandby(reason: String) {
+        PLog.e(TAG, "Special Video pipeline failure: $reason")
+        spatialVideoEnabled = false
+        _spatialVideoEnabled.value = false
+        spatialVideoMainPhysicalCameraId = null
+        spatialVideoUltraWidePhysicalCameraId = null
+        spatialVideoPrimaryCameraId = null
+        spatialVideoStreamingMode = null
+        stopSpatialVideoStandbyCamera(reason)
+        spatialVideoRecorder.forceStop()
+        videoRecorder.forceStop()
+        spatialVideoCompanionFile?.let { file ->
+            runCatching { file.delete() }
+                .onFailure { PLog.w(TAG, "Could not remove failed Special Video companion: ${file.absolutePath}", it) }
+        }
+        spatialVideoCompanionFile = null
+        spatialPrimaryFinishedUri = null
+        spatialUltraWideFinishedFile = null
+        specialVideoRecordingTimeline.reset()
+        spatialVideoStandbyRepeatingRequest = null
+        spatialVideoPrimarySessionAwaitingStandby = false
+        stopVideoRecordingTicker()
+        videoCameraHlg10InputActive = false
+        _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+        activeOutputPhysicalCameraId = resolveRequestedPhysicalCameraId(
+            _state.value,
+            _state.value.getCurrentCameraInfo()
+        )
+        onCameraError?.invoke(-1, reason, false)
+        if (cameraDevice != null && previewSurface != null) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+        }
     }
 
     fun isDualCaptureSupported(): Boolean =
@@ -9404,10 +10033,8 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
-        if (spatialVideoEnabled && (
-                _state.value.videoConfig.fps == VideoFpsPreset.FPS_120 || shouldUseVideoEnhancedStabilization()
-            )) {
-            onCameraError?.invoke(-1, "Special Video requires a standard frame rate with Enhanced Stabilization off.", false)
+        if (spatialVideoEnabled && _state.value.videoConfig.fps == VideoFpsPreset.FPS_120) {
+            onCameraError?.invoke(-1, "Special Video requires a standard frame rate; 120fps is not supported for dual-camera recording.", false)
             return
         }
 
@@ -9515,7 +10142,11 @@ class Camera2Controller(private val context: Context) {
                 "monitorLut=${creativeLutConfig?.title}, recordingLut=${recordingLut?.title}, " +
                 "cameraInputHlg10=${cameraInputIsHlg10}"
         )
-        val spatialTimelineOriginUs = if (spatialVideoEnabled) SystemClock.elapsedRealtimeNanos() / 1_000L else null
+        // Both VideoRecorder instances consume the same monotonic origin. Their sensor
+        // timestamps are mapped to this epoch so the two MP4 timelines remain aligned.
+        val spatialTimelineOriginUs = if (spatialVideoEnabled) {
+            specialVideoRecordingTimeline.begin()
+        } else null
         val started = videoRecorder.startRecording(
             size = outputSize,
             cameraInputSize = cameraInputSize,
@@ -9561,7 +10192,13 @@ class Camera2Controller(private val context: Context) {
             dualCapturePipWidthFraction = dualCapturePipWidthFraction,
             onError = { message ->
                 PLog.e(TAG, "Video recording error: $message")
-                onCameraError?.invoke(-1, message, false)
+                if (spatialVideoEnabled) {
+                    cameraHandler?.post {
+                        failSpatialVideoStandby("Primary encoder failed during Special Video: $message")
+                    } ?: onCameraError?.invoke(-1, message, false)
+                } else {
+                    onCameraError?.invoke(-1, message, false)
+                }
             }
         ) { uri ->
             PLog.i(TAG, "Video saved: $uri")
@@ -9601,7 +10238,10 @@ class Camera2Controller(private val context: Context) {
                 return
             }
             val wideFile = SpatialVideoStore.ultraWideFile(context, primaryUri)
-            val wideInputSize = resolveSpatialVideoInputSize(wideId, cameraInputSize)
+            val logicalParentId = spatialVideoPrimaryCameraId.takeIf {
+                spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+            }
+            val wideInputSize = resolveSpatialVideoInputSize(wideId, cameraInputSize, logicalParentId)
             if (wideInputSize == null) {
                 videoRecorder.stopRecording()
                 onCameraError?.invoke(-1, "The ultra-wide camera does not expose a compatible video stream size.", false)
@@ -9610,8 +10250,14 @@ class Camera2Controller(private val context: Context) {
             spatialPrimaryFinishedUri = null
             spatialUltraWideFinishedFile = null
             val wideCharacteristics = runCatching {
-                cameraManager.getCameraCharacteristics(wideId)
+                if (logicalParentId != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    cameraManager.getCameraCharacteristics(logicalParentId)
+                        .getPhysicalCameraCharacteristics(wideId)
+                } else {
+                    cameraManager.getCameraCharacteristics(wideId)
+                }
             }.getOrNull()
+            spatialVideoCompanionFile = wideFile
             val wideStarted = spatialVideoRecorder.startRecording(
                 size = outputSize,
                 cameraInputSize = wideInputSize,
@@ -9637,15 +10283,33 @@ class Camera2Controller(private val context: Context) {
                 sharedTimelineOriginUs = spatialTimelineOriginUs,
                 onError = { message ->
                     PLog.e(TAG, "Special Video ultra-wide recorder error: $message")
-                    onCameraError?.invoke(-1, message, false)
+                    cameraHandler?.post {
+                        if (spatialVideoEnabled && videoRecorder.isRecording()) {
+                            failSpatialVideoStandby("Ultra-wide encoder failed: $message")
+                        } else {
+                            onCameraError?.invoke(-1, message, false)
+                        }
+                    } ?: onCameraError?.invoke(-1, message, false)
                 }
             ) { wideUri ->
                 spatialUltraWideFinishedFile = wideUri?.path?.let(::File)
                 finalizeSpatialVideoCompanionIfReady()
             }
             if (!wideStarted) {
-                videoRecorder.stopRecording()
+                wideFile.delete()
+                spatialVideoCompanionFile = null
+                videoRecorder.forceStop()
                 onCameraError?.invoke(-1, "Special Video could not start the ultra-wide encoder.", false)
+                return
+            }
+            if (spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                !startSpatialVideoStandbyCamera(wideId)
+            ) {
+                wideFile.delete()
+                spatialVideoCompanionFile = null
+                videoRecorder.forceStop()
+                spatialVideoRecorder.forceStop()
+                onCameraError?.invoke(-1, "Special Video could not open the independent ultra-wide Camera2 device.", false)
                 return
             }
         }
@@ -9791,7 +10455,20 @@ class Camera2Controller(private val context: Context) {
             }
         }
         videoRecorder.stopRecording()
-        if (spatialVideoEnabled) spatialVideoRecorder.stopRecording()
+        if (spatialVideoEnabled) {
+            spatialVideoRecorder.stopRecording()
+            spatialVideoStandbyRepeatingRequest = null
+            spatialVideoPrimarySessionAwaitingStandby = false
+            specialVideoRecordingTimeline.reset()
+            if (_spatialVideoShowUltraWidePreview.value &&
+                spatialVideoStandbyPreviewSurface != null &&
+                spatialVideoStandbyPreviewSurfaceTexture != null
+            ) {
+                createSpatialVideoStandbySession("recording stopped; keep preview")
+            } else {
+                stopSpatialVideoStandbyCamera("recording stopped")
+            }
+        }
         if (pendingVendorSessionParameterRestart && cameraDevice != null && previewSurface != null) {
             PLog.d(TAG, "Restarting preview session after recording for pending vendor session parameter change")
             createPreviewSession(openGeneration = cameraOpenGeneration)
@@ -11368,6 +12045,7 @@ class Camera2Controller(private val context: Context) {
             val keepVideoRecording = preserveVideoRecording && _state.value.videoRecordingState.isRecording
             if (!keepVideoRecording) {
                 stopDualCaptureCamera()
+                stopSpatialVideoStandbyCamera("primary CameraDevice closing")
             }
             if (keepVideoRecording) {
                 PLog.d(TAG, "Closing camera while keeping active video recording")
@@ -11665,6 +12343,10 @@ class Camera2Controller(private val context: Context) {
         } else {
             closeCamera()
         }
+        stopSpatialVideoStandbyCamera("controller release")
+        spatialVideoStandbyPreviewSurface?.release()
+        spatialVideoStandbyPreviewSurface = null
+        spatialVideoStandbyPreviewSurfaceTexture = null
         burstGyroRecorder.release()
         oppoContinuousBurstEngine.release()
         videoRecorder.release()
