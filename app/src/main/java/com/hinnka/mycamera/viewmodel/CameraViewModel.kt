@@ -2212,6 +2212,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         cameraController.onPhotoCaptureCompleted = { id, captureInfo ->
             pendingCaptureSettings[id]?.let { settings ->
+                PhotoCaptureCrashLogger.recordEvent(
+                    "CAMERA_SEQUENCE_COMPLETED",
+                    "photoId=${settings.photoId} cameraCaptureId=$id size=${captureInfo.imageWidth}x${captureInfo.imageHeight}"
+                )
                 viewModelScope.launch {
                     try {
                         val metadata = buildPhotoMetadata(
@@ -2241,6 +2245,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         cameraController.onPhotoCaptureReady = { photo ->
             val settings = pendingCaptureSettings.remove(photo.id)
+            if (settings != null) {
+                PhotoCaptureCrashLogger.recordEvent(
+                    "CAMERA_FRAMES_DELIVERED",
+                    "photoId=${settings.photoId} cameraCaptureId=${photo.id} frameCount=${photo.frames.size}"
+                )
+            }
             if (settings == null) {
                 photo.frames.forEach { it.image.close() }
             } else {
@@ -2271,12 +2281,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         }
                         shotSettings.processingFinished = true
                         publishCapturedThumbnail(shotSettings)
+                        PhotoCaptureCrashLogger.finishPhotoCapture(
+                            captureId = shotSettings.photoId,
+                            success = shotSettings.savedPhotoId != null,
+                            failureReason = if (shotSettings.savedPhotoId == null) {
+                                "Photo processing ended without saving an image"
+                            } else {
+                                null
+                            },
+                        )
                     }
                 }
             }
         }
         cameraController.onPhotoCaptureFailed = { id ->
             pendingCaptureSettings.remove(id)?.let { settings ->
+                PhotoCaptureCrashLogger.finishPhotoCapture(
+                    captureId = settings.photoId,
+                    success = false,
+                    failureReason = "Camera2 reported photo capture failure (captureId=$id)",
+                )
                 settings.processingFinished = true
                 publishCapturedThumbnail(settings)
                 viewModelScope.launch {
@@ -3709,6 +3733,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val settings = snapshotCaptureSettings()
         cameraController.capture { id ->
             settings.captureId = id
+            PhotoCaptureCrashLogger.beginPhotoCapture(
+                captureId = settings.photoId,
+                details = linkedMapOf(
+                    "cameraId" to settings.cameraId,
+                    "cameraCaptureId" to id.toString(),
+                    "captureMode" to settings.state.captureMode.name,
+                    "rawCapture" to settings.state.useRaw.toString(),
+                    "lensFacing" to settings.lensFacing.toString(),
+                    "sensorOrientation" to settings.sensorOrientation.toString(),
+                    "deviceRotation" to settings.deviceRotation.toString(),
+                    "multipleExposure" to settings.multipleExposure.toString(),
+                    "livePhoto" to settings.state.useLivePhoto.toString(),
+                    "hdrBracket" to settings.state.hdrBracketCapturing.toString(),
+                ),
+            )
+            PhotoCaptureCrashLogger.recordEvent("SHUTTER_ACCEPTED", "photoId=${settings.photoId} cameraCaptureId=$id")
             pendingCaptureSettings[id] = settings
             capturePhotoThumbnails(settings)
             if (settings.state.useLivePhoto) {
