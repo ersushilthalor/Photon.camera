@@ -310,6 +310,7 @@ class Camera2Controller(private val context: Context) {
     private var spatialVideoPrimaryCameraId: String? = null
     private var spatialVideoStreamingMode: SpatialVideoStreamingMode? = null
     @Volatile private var spatialVideoUnsupportedReason: String? = null
+    @Volatile private var spatialVideoPrimaryReopenInProgress = false
     @Volatile private var spatialPrimaryFinishedUri: Uri? = null
     @Volatile private var spatialUltraWideFinishedFile: File? = null
     @Volatile private var spatialVideoCompanionFile: File? = null
@@ -2885,6 +2886,7 @@ class Camera2Controller(private val context: Context) {
                     }
                     return
                 }
+                spatialVideoPrimaryReopenInProgress = false
                 PLog.d(TAG, "Camera opened/reused: ${camera.id}")
                 cameraDeviceLifecycle = CameraDeviceLifecycle.OPEN
                 cameraDevice = camera
@@ -2934,6 +2936,7 @@ class Camera2Controller(private val context: Context) {
                             "openId=${camera.id} reason=CameraDevice disconnected"
                     )
                 }
+                spatialVideoPrimaryReopenInProgress = false
                 PLog.w(TAG, "Camera disconnected: ${camera.id} - 相机被其他应用或系统接管")
                 handleCameraDeviceUnavailable(
                     camera = camera,
@@ -2953,6 +2956,7 @@ class Camera2Controller(private val context: Context) {
                     closeCameraDeviceAndAwait(camera, "stale camera error", blocksLifecycle = false)
                     return
                 }
+                spatialVideoPrimaryReopenInProgress = false
                 val errorMessage = when (error) {
                     ERROR_CAMERA_IN_USE ->
                         "相机正在被其他应用使用"
@@ -3414,6 +3418,7 @@ class Camera2Controller(private val context: Context) {
             }
 
         } catch (e: Exception) {
+            spatialVideoPrimaryReopenInProgress = false
             if (spatialVideoEnabled) {
                 PLog.e(
                     TAG,
@@ -9172,6 +9177,9 @@ class Camera2Controller(private val context: Context) {
                         "main=${pair.mainPhysicalCameraId} ultraWide=${pair.ultraWideCameraId} " +
                         "oldOpenId=$activeId newOpenId=${pair.primaryCameraId}"
                 )
+                // closeCameraInternal() must retain the Special Video pair while this
+                // intentional device handoff replaces the logical parent with the main sensor.
+                spatialVideoPrimaryReopenInProgress = true
                 // openCameraNow() reads spatialVideoPrimaryCameraId and opens the main physical
                 // ID. Its onOpened callback pre-opens the ultra-wide physical CameraDevice.
                 openCamera(currentPreviewTexture)
@@ -12311,6 +12319,8 @@ class Camera2Controller(private val context: Context) {
             if (!keepVideoRecording) {
                 stopDualCaptureCamera()
                 when {
+                    spatialVideoEnabled && spatialVideoPrimaryReopenInProgress ->
+                        stopSpatialVideoStandbyCamera("primary CameraDevice replacement for physical main")
                     spatialVideoEnabled &&
                         !_state.value.videoRecordingState.isRecording &&
                         !_state.value.videoRecordingState.isProcessing ->
