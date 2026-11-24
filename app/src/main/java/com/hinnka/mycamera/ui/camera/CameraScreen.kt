@@ -25,7 +25,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.shape.RectangleShape
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -1592,7 +1591,11 @@ fun CameraScreen(
                                 .size(width = 112.dp, height = 150.dp)
                             // Keep the TextureView and its SurfaceTexture alive while hidden.
                             // This lets the standby camera keep producing frames before a tap.
-                            else -> Modifier.fillMaxSize()
+                            // A tiny non-zero view keeps SurfaceTexture attached without
+                            // placing an invisible full-screen AndroidView over the camera UI.
+                            else -> Modifier
+                                .align(Alignment.TopStart)
+                                .size(1.dp)
                         }
                         Box(
                             modifier = previewModifier
