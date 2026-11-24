@@ -9786,8 +9786,12 @@ class Camera2Controller(private val context: Context) {
             PLog.e(TAG, "Special Video companion missing or empty; retaining the main recording only: ${ultraWide.absolutePath}")
             ultraWide.delete()
             spatialVideoCompanionFile = null
+            _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
             return
         }
+        // Both encoder outputs have now reached finalization. Only now may the next Special
+        // Video recording reset the shared timeline and start a new paired camera session.
+        _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
         if (spatialVideoEnabled &&
             spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
         ) {
@@ -11116,7 +11120,7 @@ class Camera2Controller(private val context: Context) {
                         stopDualCaptureCamera()
                     }
                 }
-                if (dualAspectRecordingActive) {
+                if (dualAspectRecordingActive || (spatialVideoEnabled && uri != null)) {
                     _state.value = _state.value.copy(
                         videoRecordingState = _state.value.videoRecordingState.copy(
                             isRecording = false,
