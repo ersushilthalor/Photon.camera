@@ -12973,6 +12973,10 @@ class Camera2Controller(private val context: Context) {
      * 启动连拍
      */
     fun startBurstCapture(onAccepted: (() -> Unit)? = null) {
+        if (_state.value.isMaximumResolutionPhoto) {
+            PLog.w(TAG, "Continuous burst is unavailable in native maximum-resolution photo mode")
+            return
+        }
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
             handler.post { startBurstCapture(onAccepted) }
