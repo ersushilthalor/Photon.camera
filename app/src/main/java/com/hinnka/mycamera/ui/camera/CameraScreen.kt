@@ -252,6 +252,9 @@ fun CameraScreen(
     val spatialVideoPreviewStreamSize by viewModel.spatialVideoPreviewStreamSize.collectAsState()
     val spatialVideoPreviewSensorOrientation by
         viewModel.spatialVideoPreviewSensorOrientationDegrees.collectAsState()
+    val dualAspectPreviewStreamSize by viewModel.dualAspectPreviewStreamSize.collectAsState()
+    val dualAspectPreviewSensorOrientation by
+        viewModel.dualAspectPreviewSensorOrientationDegrees.collectAsState()
 
     LaunchedEffect(state.captureMode) {
         if (state.captureMode != CaptureMode.VIDEO && dualCaptureEnabled) {
@@ -308,6 +311,8 @@ fun CameraScreen(
     val latestDualCaptureSource = rememberUpdatedState(dualCaptureSource)
     val latestSpatialVideoPreviewSize = rememberUpdatedState(spatialVideoPreviewStreamSize)
     val latestSpatialVideoPreviewOrientation = rememberUpdatedState(spatialVideoPreviewSensorOrientation)
+    val latestDualAspectPreviewSize = rememberUpdatedState(dualAspectPreviewStreamSize)
+    val latestDualAspectPreviewOrientation = rememberUpdatedState(dualAspectPreviewSensorOrientation)
     val rawDcpId by viewModel.rawDcpId.collectAsState()
     val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
     val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
@@ -1634,11 +1639,122 @@ fun CameraScreen(
 
                     if (state.captureMode == CaptureMode.VIDEO) {
                         state.videoConfig.dualAspectRatio?.let { secondaryRatio ->
-                            DualAspectPreviewOverlay(
-                                ratio = secondaryRatio,
-                                isRecording = state.videoRecordingState.isRecording,
-                                modifier = Modifier.fillMaxSize().padding(top = topSafePadding + 58.dp, bottom = 116.dp)
-                            )
+                            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                                val previewWidth = (maxWidth * 0.62f).coerceAtMost(380.dp)
+                                val previewHeight = previewWidth / secondaryRatio.displayAspectRatio
+                                val previewTop = (maxHeight * 0.52f)
+                                    .coerceAtMost((maxHeight - previewHeight - 116.dp).coerceAtLeast(0.dp))
+                                val density = LocalDensity.current
+                                var previewDragOffset by remember(secondaryRatio) {
+                                    mutableStateOf(Offset.Zero)
+                                }
+                                val previewShape = RoundedCornerShape(18.dp)
+
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .offset(y = previewTop)
+                                        .offset {
+                                            IntOffset(
+                                                previewDragOffset.x.roundToInt(),
+                                                previewDragOffset.y.roundToInt(),
+                                            )
+                                        }
+                                        .width(previewWidth)
+                                        .aspectRatio(secondaryRatio.displayAspectRatio)
+                                        .clip(previewShape)
+                                        .background(Color.Black)
+                                        .border(1.dp, Color.White.copy(alpha = 0.9f), previewShape)
+                                        .pointerInput(
+                                            maxWidth,
+                                            maxHeight,
+                                            previewWidth,
+                                            previewHeight,
+                                            previewTop,
+                                        ) {
+                                            detectDragGestures { change, dragAmount ->
+                                                change.consume()
+                                                val horizontalLimit = with(density) {
+                                                    ((maxWidth - previewWidth) / 2f).toPx().coerceAtLeast(0f)
+                                                }
+                                                val topLimit = with(density) { -previewTop.toPx() }
+                                                val bottomLimit = with(density) {
+                                                    (maxHeight - previewTop - previewHeight - 116.dp)
+                                                        .toPx().coerceAtLeast(0f)
+                                                }
+                                                previewDragOffset = Offset(
+                                                    (previewDragOffset.x + dragAmount.x)
+                                                        .coerceIn(-horizontalLimit, horizontalLimit),
+                                                    (previewDragOffset.y + dragAmount.y)
+                                                        .coerceIn(topLimit, bottomLimit),
+                                                )
+                                            }
+                                        },
+                                ) {
+                                    AndroidView(
+                                        modifier = Modifier.fillMaxSize(),
+                                        factory = { viewContext ->
+                                            TextureView(viewContext).apply {
+                                                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                                    override fun onSurfaceTextureAvailable(
+                                                        surface: SurfaceTexture,
+                                                        width: Int,
+                                                        height: Int,
+                                                    ) {
+                                                        viewModel.setDualAspectPreviewSurfaceTexture(surface)
+                                                        this@apply.post {
+                                                            updateDualCaptureTextureTransform(
+                                                                latestDualAspectPreviewSize.value,
+                                                                latestDualAspectPreviewOrientation.value,
+                                                            )
+                                                        }
+                                                    }
+
+                                                    override fun onSurfaceTextureSizeChanged(
+                                                        surface: SurfaceTexture,
+                                                        width: Int,
+                                                        height: Int,
+                                                    ) {
+                                                        this@apply.post {
+                                                            updateDualCaptureTextureTransform(
+                                                                latestDualAspectPreviewSize.value,
+                                                                latestDualAspectPreviewOrientation.value,
+                                                            )
+                                                        }
+                                                    }
+
+                                                    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                                                        viewModel.setDualAspectPreviewSurfaceTexture(null)
+                                                        return true
+                                                    }
+
+                                                    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+                                                }
+                                            }
+                                        },
+                                        update = { textureView ->
+                                            textureView.updateDualCaptureTextureTransform(
+                                                dualAspectPreviewStreamSize,
+                                                dualAspectPreviewSensorOrientation,
+                                            )
+                                        },
+                                    )
+                                    Text(
+                                        text = "DUAL · ${secondaryRatio.displayName}",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier
+                                            .align(Alignment.TopStart)
+                                            .padding(8.dp)
+                                            .background(
+                                                Color.Black.copy(alpha = 0.55f),
+                                                RoundedCornerShape(6.dp),
+                                            )
+                                            .padding(horizontal = 7.dp, vertical = 4.dp),
+                                    )
+                                }
+                            }
                         }
                     }
 
