@@ -11991,14 +11991,37 @@ class Camera2Controller(private val context: Context) {
                     currentState = currentState,
                 )
                 if (currentState.isMaximumResolutionPhoto && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val deviceRotation = Math.floorMod(OrientationObserver.captureRotationDegrees.toInt(), 360)
+                    val sensorOrientation = Math.floorMod(cachedSensorOrientation, 360)
+                    val jpegOrientation = if (isCurrentCameraFrontFacing()) {
+                        Math.floorMod(sensorOrientation - deviceRotation, 360)
+                    } else {
+                        Math.floorMod(sensorOrientation + deviceRotation, 360)
+                    }
                     set(
                         CaptureRequest.SENSOR_PIXEL_MODE,
                         CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION,
                     )
+                    set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
                     set(CaptureRequest.JPEG_QUALITY, 100.toByte())
+                    setZslDisabledIfSupported(this)
+                    applyHighQualityStillPostProcessingSettings(this)
+                    selectBestMode(
+                        availableEdgeModes,
+                        CaptureRequest.EDGE_MODE_HIGH_QUALITY,
+                        CaptureRequest.EDGE_MODE_FAST,
+                        CaptureRequest.EDGE_MODE_OFF,
+                    )?.let { set(CaptureRequest.EDGE_MODE, it) }
+                    selectBestMode(
+                        availableNoiseReductionModes,
+                        CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY,
+                        CaptureRequest.NOISE_REDUCTION_MODE_FAST,
+                        CaptureRequest.NOISE_REDUCTION_MODE_OFF,
+                    )?.let { set(CaptureRequest.NOISE_REDUCTION_MODE, it) }
                     PLog.i(
                         TAG,
-                        "Submitting native maximum-resolution still capture: " + reader.width + "x" + reader.height,
+                        "Submitting native maximum-resolution still capture: " +
+                            reader.width + "x" + reader.height + " jpegOrientation=" + jpegOrientation,
                     )
                 }
 
