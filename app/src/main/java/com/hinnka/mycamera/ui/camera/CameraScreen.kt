@@ -25,6 +25,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.RectangleShape
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -1556,18 +1557,39 @@ fun CameraScreen(
 
                     if (
                         state.captureMode == CaptureMode.VIDEO &&
-                        spatialVideoEnabled &&
-                        spatialVideoShowUltraWidePreview
+                        spatialVideoEnabled
                     ) {
                         val specialPreviewShape = RoundedCornerShape(12.dp)
-                        Box(
-                            modifier = Modifier
+                        val selectedZoomRatio = activeCameraInfo?.intrinsicZoomRatio ?: 1f
+                        val isSpatialVideoUltraWideSelected =
+                            activeCameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                                selectedZoomRatio.isFinite() &&
+                                selectedZoomRatio in 0.2f..0.85f
+                        val showUltraWideInset =
+                            spatialVideoShowUltraWidePreview && !isSpatialVideoUltraWideSelected
+                        val showUltraWideFullScreen = isSpatialVideoUltraWideSelected
+                        val previewModifier = when {
+                            showUltraWideFullScreen -> Modifier.fillMaxSize()
+                            showUltraWideInset -> Modifier
                                 .align(Alignment.BottomStart)
                                 .padding(start = 12.dp, bottom = 104.dp)
                                 .size(width = 112.dp, height = 150.dp)
-                                .clip(specialPreviewShape)
+                            // Keep the TextureView and its SurfaceTexture alive while hidden.
+                            // This lets the standby camera keep producing frames before a tap.
+                            else -> Modifier.fillMaxSize()
+                        }
+                        Box(
+                            modifier = previewModifier
+                                .graphicsLayer {
+                                    alpha = if (showUltraWideFullScreen || showUltraWideInset) 1f else 0f
+                                }
+                                .then(
+                                    if (showUltraWideInset) Modifier
+                                        .clip(specialPreviewShape)
+                                        .border(1.dp, Color.White.copy(alpha = 0.85f), specialPreviewShape)
+                                    else Modifier.clipToBounds()
+                                )
                                 .background(Color.Black)
-                                .border(1.dp, Color.White.copy(alpha = 0.85f), specialPreviewShape)
                         ) {
                             AndroidView(
                                 modifier = Modifier.fillMaxSize(),
@@ -1618,17 +1640,19 @@ fun CameraScreen(
                                     )
                                 },
                             )
-                            Text(
-                                text = "0.5x",
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(6.dp)
-                                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
-                                    .padding(horizontal = 5.dp, vertical = 2.dp)
-                            )
+                            if (showUltraWideInset) {
+                                Text(
+                                    text = "0.5x",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(6.dp)
+                                        .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
+                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                )
+                            }
                         }
                     }
 
