@@ -2819,7 +2819,7 @@ object GalleryManager {
             if (!tempFile.renameTo(photoFile)) {
                 // Some filesystems refuse rename-over-existing because preparePhoto has already
                 // created an empty placeholder. Copy through a stream as a bounded-memory fallback.
-                FileInputStream(tempFile).use { input ->
+                tempFile.inputStream().use { input ->
                     FileOutputStream(photoFile, false).use { output ->
                         input.copyTo(output, bufferSize = 64 * 1024)
                         output.fd.sync()
