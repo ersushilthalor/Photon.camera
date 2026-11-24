@@ -285,6 +285,7 @@ fun CameraTopSheet(
                                 },
                                 selected = useMultipleExposure,
                                 checked = useMultipleExposure,
+                                enabled = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
                                 showStatusDot = true,
                                 onClick = { onMultipleExposureToggle(!useMultipleExposure) },
                                 modifier = itemModifier
@@ -320,6 +321,7 @@ fun CameraTopSheet(
                             leadingIcon = { tint -> PhotoMenuHdrGlyph(tint) },
                             selected = ultraHdrEnabled,
                             checked = ultraHdrEnabled,
+                            enabled = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
                             showStatusDot = true,
                             onClick = { onUltraHdrToggle(!ultraHdrEnabled) },
                             modifier = itemModifier
@@ -432,6 +434,7 @@ fun CameraTopSheet(
                                 Icon(AppIcons.AutoAwesome, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
                             },
                             selected = isProfessionalMode || oppoPhotoSettings.customPipelineEnabled,
+                            enabled = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
                             trailingIcon = AppIcons.ChevronRight,
                             onClick = {
                                 if (isProfessionalMode) {
