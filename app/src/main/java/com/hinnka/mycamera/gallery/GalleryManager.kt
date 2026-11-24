@@ -2812,9 +2812,20 @@ object GalleryManager {
                 }
                 output.fd.sync()
             }
-            if (tempFile.length() <= 0L || !tempFile.renameTo(photoFile)) {
+            if (tempFile.length() <= 0L) {
                 tempFile.delete()
-                throw IOException("Unable to publish native JPEG capture for $photoId")
+                throw IOException("Native JPEG capture buffer was empty for $photoId")
+            }
+            if (!tempFile.renameTo(photoFile)) {
+                // Some filesystems refuse rename-over-existing because preparePhoto has already
+                // created an empty placeholder. Copy through a stream as a bounded-memory fallback.
+                FileInputStream(tempFile).use { input ->
+                    FileOutputStream(photoFile, false).use { output ->
+                        input.copyTo(output, bufferSize = 64 * 1024)
+                        output.fd.sync()
+                    }
+                }
+                tempFile.delete()
             }
 
             markProcessingPhotoDisplayReady(photoId, photoFile, metadata)
