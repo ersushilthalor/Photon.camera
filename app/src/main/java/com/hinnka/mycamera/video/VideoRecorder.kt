@@ -159,6 +159,7 @@ class VideoRecorder(
     private var sharedTimelineOriginProvider: (() -> Long?)? = null
     private var sharedTimelineStopTimeProvider: (() -> Long?)? = null
     private var onSharedTimelineFirstFrame: ((Long) -> Unit)? = null
+    @Volatile private var usesSharedTimelineOrigin = false
     private var sharedTimelineVideoEndReporter: ((Long?, Boolean) -> Unit)? = null
     private var sharedTimelineCommonEndAwaiter: (suspend () -> Long?)? = null
     private var sharedTimelineDrainAwaiter: (suspend () -> Unit)? = null

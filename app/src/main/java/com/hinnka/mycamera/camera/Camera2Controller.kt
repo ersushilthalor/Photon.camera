@@ -350,6 +350,7 @@ class Camera2Controller(private val context: Context) {
     private var spatialVideoPrimarySessionAwaitingStandby = false
     private var spatialVideoStandbySessionGeneration = 0L
     private val specialVideoRecordingTimeline = SpecialVideoRecordingTimeline()
+    @Volatile private var specialVideoDrainDurationMs: Long = 0L
     private var spatialVideoStandbyPreviewSurfaceTexture: SurfaceTexture? = null
     private var spatialVideoStandbyPreviewSurface: Surface? = null
     private var spatialVideoStandbyInputSize: Size? = null
@@ -10961,7 +10962,7 @@ class Camera2Controller(private val context: Context) {
         // Select the shared origin after both recorders accept their first frame. Until then,
         // VideoRecorder keeps encoded samples pending instead of committing a false start time.
         val hasSharedRecordingTimeline = spatialVideoEnabled || selectedDualAspectRatio != null
-        val specialVideoDrainDurationMs = if (spatialVideoEnabled) {
+        specialVideoDrainDurationMs = if (spatialVideoEnabled) {
             val lookaheadFrames = if (useEnhancedStabilization) {
                 normalizeStabilizationLookahead(
                     _state.value.videoConfig.enhancedStabilizationLookahead
