@@ -219,11 +219,11 @@ object SpatialVideoStore {
                 "Final Special Video container durations: main=${primaryDurationMs}ms, " +
                     "ultraWide=${ultraWideDurationMs}ms, delta=${deltaMs}ms"
             )
-            if (deltaMs > 100L) {
+            if (deltaMs > 40L) {
                 PLog.w(
-                    TAG,
-                    "Special Video duration mismatch exceeds 100ms: main=${primaryDurationMs}ms, " +
-                        "ultraWide=${ultraWideDurationMs}ms"
+                    SPECIAL_TIMELINE_TAG,
+                    "Special Video container duration mismatch exceeds 40ms: " +
+                        "main=${primaryDurationMs}ms, ultraWide=${ultraWideDurationMs}ms, delta=${deltaMs}ms"
                 )
             }
         } else {
