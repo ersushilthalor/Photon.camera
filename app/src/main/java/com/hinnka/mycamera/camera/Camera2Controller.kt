@@ -3414,14 +3414,6 @@ class Camera2Controller(private val context: Context) {
                 PLog.i(TAG, "Reusing CameraDevice ${reuseCameraDevice.id} for capture-mode session rebuild")
                 cameraStateCallback.onOpened(reuseCameraDevice)
             } else {
-                if (persistentSpecialVideoPrimary != null) {
-                    val publicIds = cameraManager.cameraIdList.toSet()
-                    if (openCameraId !in publicIds) {
-                        throw IllegalStateException(
-                            "Special Video main physical Camera2 ID $openCameraId is not publicly openable"
-                        )
-                    }
-                }
                 cameraManager.openCamera(openCameraId, cameraStateCallback, cameraHandler)
             }
 
