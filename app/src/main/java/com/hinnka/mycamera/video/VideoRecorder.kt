@@ -167,7 +167,7 @@ class VideoRecorder(
     private var onSharedTimelineDrainComplete: (suspend () -> Unit)? = null
     private var sharedTimelineStreamName: String? = null
     private var sharedTimelineDrainDurationMs: Long = 0L
-    private var acceptStopDrainFrames = false
+    @Volatile private var acceptStopDrainFrames = false
     private var sharedVideoTailSamples = java.util.ArrayDeque<EncodedSample>()
     private var sharedAudioTailSamples = java.util.ArrayDeque<EncodedSample>()
     private var sharedTailBytes = 0L
@@ -1808,13 +1808,38 @@ class VideoRecorder(
         queue.addLast(sample)
         sharedTailBytes += sample.data.size.toLong()
 
-        val newestPtsUs = if (isVideo) {
-            lastSharedVideoSourcePtsUs
-        } else {
-            lastSharedAudioSourcePtsUs
+        if (isVideo) {
+            flushSpecialVideoTailQueueLocked(
+                sharedVideoTailSamples,
+                isVideo = true,
+                newestPtsUs = lastSharedVideoSourcePtsUs,
+            )
+            // Audio uses the same per-recorder video origin. Keep its tail until that
+            // origin is known, then age it with the audio clock independently.
+            if (firstSharedVideoSourcePtsUs != UNSET_TIMESTAMP &&
+                lastSharedAudioSourcePtsUs != UNSET_TIMESTAMP
+            ) {
+                flushSpecialVideoTailQueueLocked(
+                    sharedAudioTailSamples,
+                    isVideo = false,
+                    newestPtsUs = lastSharedAudioSourcePtsUs,
+                )
+            }
+        } else if (firstSharedVideoSourcePtsUs != UNSET_TIMESTAMP) {
+            flushSpecialVideoTailQueueLocked(
+                sharedAudioTailSamples,
+                isVideo = false,
+                newestPtsUs = lastSharedAudioSourcePtsUs,
+            )
         }
-        val flushBeforeUs = newestPtsUs - SPECIAL_VIDEO_TAIL_WINDOW_US
+    }
 
+    private fun flushSpecialVideoTailQueueLocked(
+        queue: java.util.ArrayDeque<EncodedSample>,
+        isVideo: Boolean,
+        newestPtsUs: Long,
+    ) {
+        val flushBeforeUs = newestPtsUs - SPECIAL_VIDEO_TAIL_WINDOW_US
         while (queue.isNotEmpty()) {
             val oldest = queue.peekFirst()
             val olderThanTail = oldest.info.presentationTimeUs <= flushBeforeUs
