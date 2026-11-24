@@ -3955,6 +3955,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 开始连拍
      */
     fun startContinuousCapture() {
+        if (state.value.isMaximumResolutionPhoto) return
         if (state.value.useRaw && state.value.isRawSupported) return
         val photoSettings = oppoPhotoSettings.value
         if (!photoSettings.fastShutterEnabled) return
