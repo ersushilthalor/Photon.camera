@@ -166,6 +166,10 @@ fun CameraTopSheet(
     var showRenderingEngineSheet by rememberSaveable { mutableStateOf(false) }
     var showOppoPipelineSheet by rememberSaveable { mutableStateOf(false) }
     var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
+    val isNative50MActive =
+        maximumResolutionAvailable &&
+            !useRaw &&
+            oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50
 
     fun handleContentManagementAction(action: () -> Unit) {
         showContentManagementOptions = false
@@ -273,7 +277,7 @@ fun CameraTopSheet(
                                 },
                                 selected = useJpgMax,
                                 checked = useJpgMax,
-                                enabled = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
+                                enabled = !isNative50MActive,
                                 showStatusDot = true,
                                 onClick = { onJpgMaxToggle(!useJpgMax) },
                                 modifier = itemModifier
@@ -285,7 +289,7 @@ fun CameraTopSheet(
                                 },
                                 selected = useMultipleExposure,
                                 checked = useMultipleExposure,
-                                enabled = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
+                                enabled = !isNative50MActive,
                                 showStatusDot = true,
                                 onClick = { onMultipleExposureToggle(!useMultipleExposure) },
                                 modifier = itemModifier
@@ -294,14 +298,19 @@ fun CameraTopSheet(
 
                         PhotoMenuQuickTile(
                             title = "PHOTO SIZE",
-                            subtitle = if (oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50) "50 MP" else "12 MP",
+                            subtitle = when {
+                                oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50 && !maximumResolutionAvailable -> "Unavailable"
+                                isNative50MActive -> "50 MP"
+                                else -> "12 MP"
+                            },
                             accentTitle = false,
                             leadingIcon = { tint ->
                                 Icon(AppIcons.Layers, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
                             },
-                            selected = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50,
-                            checked = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50,
-                            enabled = maximumResolutionAvailable && !useRaw,
+                            selected = isNative50MActive,
+                            checked = isNative50MActive,
+                            enabled = !useRaw && (maximumResolutionAvailable ||
+                                oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50),
                             showStatusDot = true,
                             onClick = {
                                 val nextMode = if (oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50) {
@@ -321,7 +330,7 @@ fun CameraTopSheet(
                             leadingIcon = { tint -> PhotoMenuHdrGlyph(tint) },
                             selected = ultraHdrEnabled,
                             checked = ultraHdrEnabled,
-                            enabled = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
+                            enabled = !isNative50MActive,
                             showStatusDot = true,
                             onClick = { onUltraHdrToggle(!ultraHdrEnabled) },
                             modifier = itemModifier
@@ -397,7 +406,7 @@ fun CameraTopSheet(
                             checked = oppoPhotoSettings.refocusEnabled,
                             enabled = refocusAvailable &&
                                 !isProfessionalMode &&
-                                oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
+                                !isNative50MActive,
                             showStatusDot = true,
                             onClick = {
                                 val enabled = !oppoPhotoSettings.refocusEnabled
@@ -417,8 +426,7 @@ fun CameraTopSheet(
                             },
                             selected = oppoPhotoSettings.fastShutterEnabled,
                             checked = oppoPhotoSettings.fastShutterEnabled,
-                            enabled = !isProfessionalMode &&
-                                oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
+                            enabled = !isProfessionalMode && !isNative50MActive,
                             showStatusDot = true,
                             onClick = {
                                 onOppoPhotoSettingsChange(
@@ -434,7 +442,7 @@ fun CameraTopSheet(
                                 Icon(AppIcons.AutoAwesome, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
                             },
                             selected = isProfessionalMode || oppoPhotoSettings.customPipelineEnabled,
-                            enabled = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
+                            enabled = !isNative50MActive,
                             trailingIcon = AppIcons.ChevronRight,
                             onClick = {
                                 if (isProfessionalMode) {
