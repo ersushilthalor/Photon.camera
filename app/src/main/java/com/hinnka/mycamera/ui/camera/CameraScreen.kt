@@ -1430,9 +1430,25 @@ fun CameraScreen(
                             }
                         },
                 ) {
-                    val currentCameraId = state.currentCameraId
                     val activeCameraInfo = state.getCurrentCameraInfo()
-                    val calibrationOffset by viewModel.getCameraOrientationOffset(currentCameraId)
+                    // Special Video's primary CameraDevice remains the 1x sensor while the
+                    // secondary TextureView is promoted to full screen for 0.5x. Keep GL
+                    // calibration bound to that real primary sensor instead of changing its
+                    // camera identity every time the displayed lens is switched.
+                    val previewCameraInfo = if (spatialVideoEnabled) {
+                        state.availableCameras.asSequence()
+                            .filter {
+                                it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                                    it.intrinsicZoomRatio.isFinite() &&
+                                    abs(it.intrinsicZoomRatio - 1f) <= 0.15f
+                            }
+                            .minByOrNull { abs(it.intrinsicZoomRatio - 1f) }
+                            ?: activeCameraInfo
+                    } else {
+                        activeCameraInfo
+                    }
+                    val previewCameraId = previewCameraInfo?.cameraId ?: state.currentCameraId
+                    val calibrationOffset by viewModel.getCameraOrientationOffset(previewCameraId)
                         .collectAsState(initial = 0)
                     val eyeFocusActive = eyeFocusEnabled &&
                         viewModel.isEyeFocusRuntimeAvailable &&
@@ -1450,9 +1466,9 @@ fun CameraScreen(
                             previewSize = previewSize,
                             captureSize = state.currentCaptureSize,
                             captureMode = state.captureMode,
-                            cameraId = activeCameraInfo?.cameraId ?: state.currentCameraId,
-                            sensorOrientation = activeCameraInfo?.sensorOrientation ?: 0,
-                            lensFacing = if (activeCameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
+                            cameraId = previewCameraInfo?.cameraId ?: state.currentCameraId,
+                            sensorOrientation = previewCameraInfo?.sensorOrientation ?: 0,
+                            lensFacing = if (previewCameraInfo?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
                             calibrationOffset = calibrationOffset,
                             baselineLut = viewModel.currentBaselineLutConfig,
                             currentLut = viewModel.currentLutConfig,
