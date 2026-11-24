@@ -1725,13 +1725,19 @@ private fun VideoMenuToggleTile(
 ) {
     val shape = RoundedCornerShape(10.dp)
     val alpha = if (enabled) 1f else 0.42f
+    val selected = checked && enabled
+    val foreground = if (selected) OnAccentColor else Color.White.copy(alpha = alpha)
+    val iconTint = if (selected) OnAccentColor else AccentColor.copy(alpha = alpha)
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .menuCardSurface(
-                shape = shape,
-                background = VideoMenuCard,
-                elevation = 2.dp
+            .then(
+                if (selected) Modifier.clip(shape).background(AccentColor)
+                else Modifier.menuCardSurface(
+                    shape = shape,
+                    background = VideoMenuCard,
+                    elevation = 2.dp
+                )
             )
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 3.dp, vertical = 2.dp),
@@ -1743,7 +1749,7 @@ private fun VideoMenuToggleTile(
             verticalArrangement = Arrangement.spacedBy(1.dp)
         ) {
             Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
-                leadingIcon(AccentColor.copy(alpha = alpha))
+                leadingIcon(iconTint)
             }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1751,7 +1757,7 @@ private fun VideoMenuToggleTile(
             ) {
                 QuickSettingLabel(
                     text = title,
-                    color = Color.White.copy(alpha = alpha),
+                    color = foreground,
                     fontWeight = FontWeight.SemiBold,
                     maxFontSize = 9.5.sp,
                     maxLines = 1
@@ -1764,7 +1770,7 @@ private fun VideoMenuToggleTile(
                         .background(
                             when {
                                 !enabled -> Color.White.copy(alpha = 0.14f)
-                                checked -> AccentColor
+                                selected -> OnAccentColor
                                 else -> Color(0xFF77777D)
                             }
                         )
