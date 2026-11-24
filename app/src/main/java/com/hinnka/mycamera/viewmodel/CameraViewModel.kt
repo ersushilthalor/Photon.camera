@@ -635,6 +635,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             oppoPhotoSettings.collect { settings ->
                 cameraController.setAutoHdrEnabled(settings.autoHdrEnabled)
                 cameraController.setFastShutterTargetFps(settings.fastShutterFps)
+                cameraController.setPhotoMegapixelMode(settings.photoMegapixelMode)
                 cameraController.setRefocusCaptureSettings(
                     enabled = settings.refocusEnabled,
                     frameCount = settings.refocusFrameCount,
