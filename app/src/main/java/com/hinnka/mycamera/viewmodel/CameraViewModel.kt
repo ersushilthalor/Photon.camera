@@ -118,6 +118,7 @@ import com.hinnka.mycamera.video.DualCaptureLayout
 import com.hinnka.mycamera.video.DualCaptureSource
 import com.hinnka.mycamera.video.VideoAudioInputManager
 import com.hinnka.mycamera.video.VideoAudioInputOption
+import com.hinnka.mycamera.video.DualVideoAspectRatio
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoFpsPreset
@@ -4280,6 +4281,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveVideoAspectRatio(aspectRatio)
         }
+    }
+
+    fun setDualVideoAspectRatio(aspectRatio: DualVideoAspectRatio?) {
+        cameraController.setDualVideoAspectRatio(aspectRatio)
     }
 
     fun setVideoStabilizationMode(mode: com.hinnka.mycamera.video.VideoStabilizationMode) {

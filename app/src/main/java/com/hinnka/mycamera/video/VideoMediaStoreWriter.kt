@@ -119,13 +119,14 @@ object VideoMediaStoreWriter {
         sourceFile: File,
         dateTakenMs: Long = System.currentTimeMillis(),
         recordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON,
-        recordingTreeUri: String? = null
+        recordingTreeUri: String? = null,
+        fileNameSuffix: String? = null
     ): Uri? = withContext(Dispatchers.IO) {
         if (!sourceFile.exists() || sourceFile.length() <= 0L) {
             return@withContext null
         }
 
-        val fileName = buildFileName(dateTakenMs)
+        val fileName = buildFileName(dateTakenMs, fileNameSuffix)
         if (recordingPath == VideoRecordingPath.EXTERNAL_TREE) {
             val output = createTreeVideo(context, recordingTreeUri, fileName)
                 ?: return@withContext null
@@ -170,9 +171,10 @@ object VideoMediaStoreWriter {
         }
     }
 
-    private fun buildFileName(dateTakenMs: Long): String {
-        return "PhotonCamera_${
-            SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(dateTakenMs))
-        }.mp4"
+    private fun buildFileName(dateTakenMs: Long, suffix: String? = null): String {
+        val safeSuffix = suffix?.trim()?.takeIf { it.isNotEmpty() }
+            ?.replace(Regex("[^A-Za-z0-9_-]"), "_")?.let { "_" + it }.orEmpty()
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(dateTakenMs))
+        return "PhotonCamera_" + timestamp + safeSuffix + ".mp4"
     }
 }

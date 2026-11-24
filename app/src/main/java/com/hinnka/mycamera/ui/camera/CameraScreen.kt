@@ -99,6 +99,7 @@ import com.hinnka.mycamera.viewmodel.GalleryViewModel
 import com.hinnka.mycamera.video.CaptureMode
 import com.hinnka.mycamera.video.DualCaptureLayout
 import com.hinnka.mycamera.video.DualCaptureSource
+import com.hinnka.mycamera.video.DualVideoAspectRatio
 import com.hinnka.mycamera.video.VideoAspectRatio
 import com.hinnka.mycamera.video.VideoFpsPreset
 import com.hinnka.mycamera.video.VideoLogProfile
@@ -1631,6 +1632,16 @@ fun CameraScreen(
                         }
                     }
 
+                    if (state.captureMode == CaptureMode.VIDEO) {
+                        state.videoConfig.dualAspectRatio?.let { secondaryRatio ->
+                            DualAspectPreviewOverlay(
+                                ratio = secondaryRatio,
+                                isRecording = state.videoRecordingState.isRecording,
+                                modifier = Modifier.fillMaxSize().padding(top = topSafePadding + 58.dp, bottom = 116.dp)
+                            )
+                        }
+                    }
+
                     if (state.captureMode == CaptureMode.VIDEO && dualCaptureEnabled) {
                         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                             val insetPadding = 12.dp
@@ -2362,6 +2373,19 @@ fun CameraScreen(
             onAspectRatioChange = { runPreviewTransition { viewModel.setAspectRatio(it) } },
             videoAspectRatio = state.videoConfig.aspectRatio,
             onVideoAspectRatioChange = { runPreviewTransition { viewModel.setVideoAspectRatio(it) } },
+            dualVideoAspectRatio = state.videoConfig.dualAspectRatio,
+            onDualVideoAspectToggle = {
+                if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
+                    android.widget.Toast.makeText(context, "Stop recording before changing Dual Aspect.", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    viewModel.setDualVideoAspectRatio(
+                        if (state.videoConfig.dualAspectRatio == null)
+                            DualVideoAspectRatio.defaultFor(state.videoConfig.aspectRatio)
+                        else null
+                    )
+                }
+            },
+            onDualVideoAspectRatioChange = viewModel::setDualVideoAspectRatio,
             videoLogProfile = state.videoConfig.logProfile,
             availableVideoLogProfiles = state.videoCapabilities.availableLogProfiles,
             onVideoLogProfileChange = { viewModel.setVideoLogProfile(it) },

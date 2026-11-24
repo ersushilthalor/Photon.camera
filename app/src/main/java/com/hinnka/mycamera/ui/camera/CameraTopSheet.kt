@@ -88,6 +88,9 @@ fun CameraTopSheet(
     onAspectRatioChange: (AspectRatio) -> Unit,
     videoAspectRatio: VideoAspectRatio,
     onVideoAspectRatioChange: (VideoAspectRatio) -> Unit,
+    dualVideoAspectRatio: DualVideoAspectRatio?,
+    onDualVideoAspectToggle: () -> Unit,
+    onDualVideoAspectRatioChange: (DualVideoAspectRatio) -> Unit,
     videoLogProfile: VideoLogProfile,
     availableVideoLogProfiles: List<VideoLogProfile>,
     onVideoLogProfileChange: (VideoLogProfile) -> Unit,
@@ -456,45 +459,80 @@ fun CameraTopSheet(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(7.dp)
                     ) {
-                        VideoAspectRatio.entries.forEach { ratio ->
-                            val isSelected = videoAspectRatio == ratio
-                            val shape = RoundedCornerShape(15.dp)
-                            Box(
-                                modifier = Modifier
-                                    .weight(if (ratio == VideoAspectRatio.OPEN_GATE) 1.1f else 1f)
-                                    .height(44.dp)
-                                    .then(
-                                        if (isSelected) {
-                                            Modifier.clip(shape).background(AccentColor)
-                                        } else {
-                                            Modifier.menuCardSurface(
-                                                shape = shape,
-                                                background = VideoMenuCard,
-                                                elevation = 3.dp
-                                            )
-                                        }
-                                    )
-                                    .clickable { onVideoAspectRatioChange(ratio) }
-                                    .padding(horizontal = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                        VideoAspectRatio.entries
+                            .filter { it != VideoAspectRatio.OPEN_GATE }
+                            .forEach { ratio ->
+                                val selected = videoAspectRatio == ratio
+                                val shape = RoundedCornerShape(15.dp)
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(44.dp)
+                                        .then(
+                                            if (selected) Modifier.clip(shape).background(AccentColor)
+                                            else Modifier.menuCardSurface(shape = shape, background = VideoMenuCard, elevation = 3.dp)
+                                        )
+                                        .clickable { onVideoAspectRatioChange(ratio) }
+                                        .padding(horizontal = 8.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    VideoAspectRatioMenuIcon(
-                                        ratio = ratio,
-                                        tint = if (isSelected) OnAccentColor else AccentColor
-                                    )
-                                    Text(
-                                        text = videoAspectRatioLabel(ratio),
-                                        color = if (isSelected) OnAccentColor else Color.White,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1
-                                    )
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        VideoAspectRatioMenuIcon(ratio = ratio, tint = if (selected) OnAccentColor else AccentColor)
+                                        Text(
+                                            text = videoAspectRatioLabel(ratio),
+                                            color = if (selected) OnAccentColor else Color.White,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1
+                                        )
+                                    }
                                 }
                             }
+                        val dualSelected = dualVideoAspectRatio != null
+                        val dualShape = RoundedCornerShape(15.dp)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                                .then(
+                                    if (dualSelected) Modifier.clip(dualShape).background(AccentColor)
+                                    else Modifier.menuCardSurface(shape = dualShape, background = VideoMenuCard, elevation = 3.dp)
+                                )
+                                .clickable { onDualVideoAspectToggle() }
+                                .padding(horizontal = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(AppIcons.Videocam, contentDescription = null,
+                                    tint = if (dualSelected) OnAccentColor else AccentColor,
+                                    modifier = Modifier.size(21.dp))
+                                Text("DUAL", color = if (dualSelected) OnAccentColor else Color.White,
+                                    fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
+                        }
+                    }
+
+                    AnimatedVisibility(visible = dualVideoAspectRatio != null) {
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth().padding(top = 7.dp),
+                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            DualVideoAspectRatio.entries
+                                .filterNot { it.matchesPrimary(videoAspectRatio) }
+                                .forEach { ratio ->
+                                    VideoOptionChip(
+                                        title = ratio.displayName,
+                                        selected = dualVideoAspectRatio == ratio,
+                                        onClick = { onDualVideoAspectRatioChange(ratio) }
+                                    )
+                                }
                         }
                     }
 
@@ -660,13 +698,24 @@ fun CameraTopSheet(
                                             verticalArrangement = Arrangement.spacedBy(8.dp),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            VideoAspectRatio.entries.forEach { ratio ->
-                                                VideoOptionChip(
-                                                    title = videoAspectRatioLabel(ratio),
-                                                    selected = videoAspectRatio == ratio,
-                                                    onClick = { onVideoAspectRatioChange(ratio) }
-                                                )
-                                            }
+                                            VideoAspectRatio.entries
+                                                .filter { it != VideoAspectRatio.OPEN_GATE }
+                                                .forEach { ratio ->
+                                                    VideoOptionChip(
+                                                        title = videoAspectRatioLabel(ratio),
+                                                        selected = videoAspectRatio == ratio,
+                                                        onClick = { onVideoAspectRatioChange(ratio) }
+                                                    )
+                                                }
+                                            DualVideoAspectRatio.entries
+                                                .filterNot { it.matchesPrimary(videoAspectRatio) }
+                                                .forEach { ratio ->
+                                                    VideoOptionChip(
+                                                        title = "Dual " + ratio.displayName,
+                                                        selected = dualVideoAspectRatio == ratio,
+                                                        onClick = { onDualVideoAspectRatioChange(ratio) }
+                                                    )
+                                                }
                                         }
                                     }
 

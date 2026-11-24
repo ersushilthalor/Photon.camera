@@ -45,6 +45,47 @@ enum class VideoAspectRatio {
     }
 }
 
+/**
+ * Aspect ratio for the independent second file in Dual Aspect recording.
+ * Video encoders use portrait buffers; muxer metadata controls display orientation.
+ */
+enum class DualVideoAspectRatio(
+    val displayName: String,
+    val portraitAspectRatio: Float,
+    val isPortrait: Boolean,
+    val fileSuffix: String
+) {
+    LANDSCAPE_16_9("16:9", 9f / 16f, false, "16x9"),
+    PORTRAIT_9_16("9:16", 9f / 16f, true, "9x16"),
+    LANDSCAPE_21_9("21:9", 9f / 21f, false, "21x9"),
+    PORTRAIT_9_21("9:21", 9f / 21f, true, "9x21"),
+    LANDSCAPE_4_3("4:3", 3f / 4f, false, "4x3"),
+    PORTRAIT_3_4("3:4", 3f / 4f, true, "3x4"),
+    SQUARE_1_1("1:1", 1f, false, "1x1");
+
+    val displayAspectRatio: Float
+        get() = if (isPortrait) portraitAspectRatio else 1f / portraitAspectRatio
+
+    fun matchesPrimary(primary: VideoAspectRatio): Boolean = when (primary) {
+        VideoAspectRatio.RATIO_16_9 -> this == LANDSCAPE_16_9
+        VideoAspectRatio.RATIO_21_9 -> this == LANDSCAPE_21_9
+        VideoAspectRatio.OPEN_GATE -> false
+    }
+
+    fun resolveOutputSize(resolution: VideoResolutionPreset): Size =
+        resolution.resolveOutputSize(portraitAspectRatio)
+
+    fun resolveOrientationHint(baseOrientationDegrees: Int): Int {
+        val base = ((baseOrientationDegrees % 360) + 360) % 360
+        return if (isPortrait) (base + 270) % 360 else base
+    }
+
+    companion object {
+        fun defaultFor(primary: VideoAspectRatio): DualVideoAspectRatio =
+            PORTRAIT_9_16.takeUnless { it.matchesPrimary(primary) } ?: LANDSCAPE_16_9
+    }
+}
+
 enum class VideoResolutionPreset(
     val displayName: String,
     val shortEdge: Int,
@@ -153,7 +194,8 @@ data class VideoConfig(
     val enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
     val torchEnabled: Boolean = false,
     val lensLockEnabled: Boolean = false,
-    val whiteBalanceLockEnabled: Boolean = false
+    val whiteBalanceLockEnabled: Boolean = false,
+    val dualAspectRatio: DualVideoAspectRatio? = null
 ) {
     fun resolveOutputSize(openGatePortraitAspectRatio: Float, cameraInputSize: Size): Size {
         if (aspectRatio == VideoAspectRatio.OPEN_GATE) {

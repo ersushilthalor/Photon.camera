@@ -33,6 +33,8 @@ import com.hinnka.mycamera.raw.RawEnginePreviewSource
 import com.hinnka.mycamera.raw.RawCameraCalibration
 import com.hinnka.mycamera.raw.RawColorCalibrationPolicy
 import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -64,6 +66,8 @@ import com.hinnka.mycamera.video.OppoHlg10AutoExposureEngine
 import com.hinnka.mycamera.video.VideoLogLutMode
 import com.hinnka.mycamera.video.DualCaptureLayout
 import com.hinnka.mycamera.video.DualCaptureSource
+import com.hinnka.mycamera.video.DualVideoAspectRatio
+import com.hinnka.mycamera.video.VideoMediaStoreWriter
 import com.hinnka.mycamera.video.VideoRecorder
 import com.hinnka.mycamera.video.SpecialVideoRecordingTimeline
 import com.hinnka.mycamera.video.SpatialVideoStore
@@ -317,6 +321,19 @@ class Camera2Controller(private val context: Context) {
     private var previewSurfaceTexture: SurfaceTexture? = null
     private var dualCaptureEnabled = false
     private var spatialVideoEnabled = false
+
+    @Volatile private var dualAspectRecordingActive = false
+    private var dualAspectPrimaryFinishReceived = false
+    private var dualAspectSecondaryFinishReceived = false
+    private var dualAspectPrimaryFinishedUri: Uri? = null
+    private var dualAspectSecondaryFinishedFile: File? = null
+    private var dualAspectCompanionFile: File? = null
+    private var dualAspectOutputRatio: DualVideoAspectRatio? = null
+    private var dualAspectOutputDateTakenMs = 0L
+    private var dualAspectOutputRecordingPath = VideoRecordingPath.DCIM_PHOTON
+    private var dualAspectOutputTreeUri: String? = null
+    private var dualAspectFinalizing = false
+
     private var spatialVideoMainPhysicalCameraId: String? = null
     private var spatialVideoUltraWidePhysicalCameraId: String? = null
     private var spatialVideoPrimaryCameraId: String? = null
@@ -2468,6 +2485,7 @@ class Camera2Controller(private val context: Context) {
         cameraOpenGeneration++
         videoRecorder.forceStop()
         spatialVideoRecorder.forceStop()
+        clearDualAspectRecordingState("primary camera unavailable: $reason")
         if (spatialVideoEnabled) {
             clearSpecialVideoRuntimeState("primary camera unavailable: $reason")
         } else {
@@ -2527,6 +2545,7 @@ class Camera2Controller(private val context: Context) {
         if (videoRecorder.isRecording()) {
             videoRecorder.forceStop()
             spatialVideoRecorder.forceStop()
+            clearDualAspectRecordingState("preview session failed: $reason")
             stopVideoRecordingTicker()
         }
         if (spatialVideoEnabled) {
@@ -3915,7 +3934,7 @@ class Camera2Controller(private val context: Context) {
         val highSpeedVideo = captureMode == CaptureMode.VIDEO &&
             _state.value.videoConfig.fps == VideoFpsPreset.FPS_120 &&
             _state.value.videoRecordingState.shouldAttachCameraInput()
-        val stabilizationReader = if (highSpeedVideo) null else ensureStabilizationImageReader()
+        val stabilizationReader = if (highSpeedVideo || dualAspectRecordingActive) null else ensureStabilizationImageReader()
         val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
         val videoSurface = if (
             captureMode == CaptureMode.VIDEO &&
@@ -3932,7 +3951,8 @@ class Camera2Controller(private val context: Context) {
         // Photon EIS+ processes the main camera through its YUV pipeline; the 0.5x
         // companion remains an independent, un-stabilized native Camera2 stream.
         val spatialSurface = if (
-            captureMode == CaptureMode.VIDEO && logicalSpatialOutput &&
+            captureMode == CaptureMode.VIDEO &&
+            (logicalSpatialOutput || dualAspectRecordingActive) &&
             _state.value.videoRecordingState.shouldAttachCameraInput()
         ) spatialVideoRecorder.cameraInputSurface else null
         val spatialPreviewSurface = if (
@@ -3945,10 +3965,14 @@ class Camera2Controller(private val context: Context) {
         val ultraWidePreviewSurface = if (usesUltraWideDualCapture) dualCapturePreviewSurface else null
         val ultraWideRecordSurface = if (usesUltraWideDualCapture) dualCaptureRecordSurface else null
         val ultraWidePhysicalCameraId = dualCapturePhysicalCameraId
-        val ultraWideAeMeteringPhysicalCameraId = resolveUltraWideAeMeteringPhysicalCameraId(
-            state = _state.value,
-            highSpeedVideo = highSpeedVideo,
-        )
+        val ultraWideAeMeteringPhysicalCameraId = if (dualAspectRecordingActive) {
+            null
+        } else {
+            resolveUltraWideAeMeteringPhysicalCameraId(
+                state = _state.value,
+                highSpeedVideo = highSpeedVideo,
+            )
+        }
         val ultraWideAeReader = ultraWideAeMeteringPhysicalCameraId?.let { physicalId ->
             ensureUltraWideAeMeteringReader(physicalId, handler)
         }
@@ -4873,8 +4897,11 @@ class Camera2Controller(private val context: Context) {
                     startVideoRecordingTicker()
                 }
             }
-            if (_state.value.captureMode == CaptureMode.VIDEO && spatialVideoEnabled &&
-                spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+            if (_state.value.captureMode == CaptureMode.VIDEO &&
+                (dualAspectRecordingActive || (
+                    spatialVideoEnabled &&
+                        spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+                )) &&
                 _state.value.videoRecordingState.shouldAttachCameraInput() &&
                 spatialVideoRecorder.cameraInputSurface != null
             ) {
@@ -8677,8 +8704,28 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setVideoAspectRatio(aspectRatio: VideoAspectRatio) {
-        _state.value = _state.value.copy(videoConfig = _state.value.videoConfig.copy(aspectRatio = aspectRatio))
+        val config = _state.value.videoConfig
+        val selectedSecondary = config.dualAspectRatio
+        val resolvedSecondary = selectedSecondary?.takeUnless { it.matchesPrimary(aspectRatio) }
+            ?: selectedSecondary?.let { DualVideoAspectRatio.defaultFor(aspectRatio) }
+        _state.value = _state.value.copy(
+            videoConfig = config.copy(aspectRatio = aspectRatio, dualAspectRatio = resolvedSecondary)
+        )
         refreshVideoCapabilities()
+    }
+
+    fun setDualVideoAspectRatio(aspectRatio: DualVideoAspectRatio?) {
+        if (_state.value.videoRecordingState.isRecording ||
+            _state.value.videoRecordingState.isProcessing
+        ) return
+        val currentConfig = _state.value.videoConfig
+        val primary = currentConfig.aspectRatio.takeUnless { it == VideoAspectRatio.OPEN_GATE }
+            ?: VideoAspectRatio.RATIO_16_9
+        val resolved = aspectRatio?.takeUnless { it.matchesPrimary(primary) }
+            ?: aspectRatio?.let { DualVideoAspectRatio.defaultFor(primary) }
+        _state.value = _state.value.copy(
+            videoConfig = currentConfig.copy(aspectRatio = primary, dualAspectRatio = resolved)
+        )
     }
 
     fun setVideoLogLutMode(mode: VideoLogLutMode) {
@@ -10724,6 +10771,20 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
+        val selectedDualAspectRatio = _state.value.videoConfig.dualAspectRatio
+        if (selectedDualAspectRatio != null &&
+            (spatialVideoEnabled || dualCaptureEnabled ||
+                _state.value.videoConfig.fps == VideoFpsPreset.FPS_120 ||
+                shouldUseVideoEnhancedStabilization())
+        ) {
+            onCameraError?.invoke(
+                -1,
+                "Dual Aspect requires standard FPS, Enhanced Stabilization off, and Special Video / Dual Capture disabled.",
+                false
+            )
+            return
+        }
+
         if (spatialVideoEnabled && _state.value.videoConfig.fps == VideoFpsPreset.FPS_120) {
             onCameraError?.invoke(-1, "Special Video requires a standard frame rate; 120fps is not supported for dual-camera recording.", false)
             return
@@ -10835,9 +10896,30 @@ class Camera2Controller(private val context: Context) {
         )
         // Both VideoRecorder instances consume the same monotonic origin. Their sensor
         // timestamps are mapped to this epoch so the two MP4 timelines remain aligned.
-        val spatialTimelineOriginUs = if (spatialVideoEnabled) {
+        val spatialTimelineOriginUs = if (spatialVideoEnabled || selectedDualAspectRatio != null) {
             specialVideoRecordingTimeline.begin()
         } else null
+        val baseOrientationHintDegrees = resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees)
+        val cameraTimestampSource = getActiveOpenCameraCharacteristics()
+            ?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+            ?: CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
+
+        if (selectedDualAspectRatio != null) {
+            dualAspectRecordingActive = true
+            dualAspectPrimaryFinishReceived = false
+            dualAspectSecondaryFinishReceived = false
+            dualAspectPrimaryFinishedUri = null
+            dualAspectSecondaryFinishedFile = null
+            dualAspectOutputRatio = selectedDualAspectRatio
+            dualAspectOutputDateTakenMs = System.currentTimeMillis()
+            dualAspectOutputRecordingPath = _state.value.videoConfig.recordingPath
+            dualAspectOutputTreeUri = _state.value.videoConfig.recordingTreeUri
+            dualAspectCompanionFile = File(
+                context.filesDir,
+                "dual_aspect_video/PhotonCamera_" + dualAspectOutputDateTakenMs + "_" + selectedDualAspectRatio.fileSuffix + ".mp4"
+            )
+        }
+
         val started = videoRecorder.startRecording(
             size = outputSize,
             cameraInputSize = cameraInputSize,
@@ -10856,12 +10938,10 @@ class Camera2Controller(private val context: Context) {
             ),
             cameraInputIsHlg10 = cameraInputIsHlg10,
             colorLayers = colorLayers,
-            cameraTimestampSource = getActiveOpenCameraCharacteristics()
-                ?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
-                ?: CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN,
+            cameraTimestampSource = cameraTimestampSource,
             sensorOrientationDegrees = _state.value.getCurrentCameraInfo()?.sensorOrientation
                 ?: cachedSensorOrientation,
-            orientationHintDegrees = resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees),
+            orientationHintDegrees = baseOrientationHintDegrees,
             flipEncodedFrame = shouldFlipEncodedFrame,
             enhancedStabilization = useEnhancedStabilization,
             enhancedStabilizationStrength =
@@ -10887,6 +10967,14 @@ class Camera2Controller(private val context: Context) {
                     cameraHandler?.post {
                         failSpatialVideoStandby("Primary encoder failed during Special Video: $message")
                     } ?: onCameraError?.invoke(-1, message, false)
+                } else if (dualAspectRecordingActive) {
+                    cameraHandler?.post {
+                        clearDualAspectRecordingState("primary encoder failed")
+                        spatialVideoRecorder.forceStop()
+                        videoRecorder.forceStop()
+                        _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+                        onCameraError?.invoke(-1, "Dual Aspect primary recording failed: $message", false)
+                    } ?: onCameraError?.invoke(-1, message, false)
                 } else {
                     onCameraError?.invoke(-1, message, false)
                 }
@@ -10894,6 +10982,10 @@ class Camera2Controller(private val context: Context) {
         ) { uri ->
             PLog.i(TAG, "Video saved: $uri")
             val completeRecording = Runnable {
+                if (dualAspectRecordingActive) {
+                    dualAspectPrimaryFinishedUri = uri
+                    dualAspectPrimaryFinishReceived = true
+                }
                 if (spatialVideoEnabled) {
                     spatialPrimaryFinishedUri = uri
                     finalizeSpatialVideoCompanionIfReady()
@@ -10908,19 +11000,87 @@ class Camera2Controller(private val context: Context) {
                         stopDualCaptureCamera()
                     }
                 }
-                _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+                if (dualAspectRecordingActive) {
+                    _state.value = _state.value.copy(
+                        videoRecordingState = _state.value.videoRecordingState.copy(
+                            isRecording = false,
+                            isPaused = false,
+                            isProcessing = true
+                        )
+                    )
+                } else {
+                    _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+                }
                 if (cameraDevice != null && previewSurface != null) {
                     createPreviewSession(openGeneration = cameraOpenGeneration)
                 }
                 onVideoSaved?.invoke(uri)
+                if (dualAspectRecordingActive) finalizeDualAspectCompanionIfReady()
             }
             cameraHandler?.post(completeRecording) ?: completeRecording.run()
         }
         if (!started) {
             videoCameraHlg10InputActive = false
+            if (dualAspectRecordingActive) clearDualAspectRecordingState("primary encoder preparation failed")
             return
         }
-        if (spatialVideoEnabled) {
+        if (selectedDualAspectRatio != null) {
+            val companionFile = dualAspectCompanionFile
+            if (companionFile == null) {
+                clearDualAspectRecordingState("secondary output path unavailable")
+                videoRecorder.forceStop()
+                onCameraError?.invoke(-1, "Dual Aspect could not prepare its second output file.", false)
+                return
+            }
+            val secondaryStarted = spatialVideoRecorder.startRecording(
+                size = selectedDualAspectRatio.resolveOutputSize(_state.value.videoConfig.resolution),
+                cameraInputSize = cameraInputSize,
+                fps = _state.value.videoConfig.fps.fps,
+                bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
+                codecMime = _state.value.videoConfig.codec.mimeType,
+                colorConfig = VideoEncoderColorRequest(
+                    logProfile = logProfile,
+                    hasActiveLut = recordingLut != null && (recordingRecipe?.lutIntensity ?: 1f) > 0f
+                ),
+                cameraInputIsHlg10 = cameraInputIsHlg10,
+                colorLayers = colorLayers,
+                cameraTimestampSource = cameraTimestampSource,
+                sensorOrientationDegrees = _state.value.getCurrentCameraInfo()?.sensorOrientation
+                    ?: cachedSensorOrientation,
+                orientationHintDegrees = selectedDualAspectRatio.resolveOrientationHint(baseOrientationHintDegrees),
+                flipEncodedFrame = shouldFlipEncodedFrame,
+                enhancedStabilization = false,
+                recordingPath = dualAspectOutputRecordingPath,
+                recordingTreeUri = dualAspectOutputTreeUri,
+                privateOutputFile = companionFile,
+                recordAudio = false,
+                sharedTimelineOriginUs = spatialTimelineOriginUs,
+                onError = { message ->
+                    PLog.e(TAG, "Dual Aspect secondary encoder error: $message")
+                    cameraHandler?.post {
+                        clearDualAspectRecordingState("secondary encoder failed")
+                        videoRecorder.forceStop()
+                        spatialVideoRecorder.forceStop()
+                        _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+                        onCameraError?.invoke(-1, "Dual Aspect secondary recording failed: $message", false)
+                    } ?: onCameraError?.invoke(-1, message, false)
+                }
+            ) { finishedUri ->
+                val completeSecondary = Runnable {
+                    dualAspectSecondaryFinishedFile =
+                        finishedUri?.path?.let(::File) ?: companionFile.takeIf { it.isFile }
+                    dualAspectSecondaryFinishReceived = true
+                    finalizeDualAspectCompanionIfReady()
+                }
+                cameraHandler?.post(completeSecondary) ?: completeSecondary.run()
+            }
+            if (!secondaryStarted) {
+                clearDualAspectRecordingState("secondary encoder preparation failed")
+                videoRecorder.forceStop()
+                onCameraError?.invoke(-1, "Dual Aspect could not start the second video encoder.", false)
+                return
+            }
+        } else if (spatialVideoEnabled) {
             val primaryUri = videoRecorder.pendingOutputUri
             val wideId = spatialVideoUltraWidePhysicalCameraId
             if (primaryUri == null || wideId == null) {
@@ -11017,6 +11177,88 @@ class Camera2Controller(private val context: Context) {
         createPreviewSession(openGeneration = cameraOpenGeneration)
     }
 
+    private fun finalizeDualAspectCompanionIfReady() {
+        if (!dualAspectRecordingActive || !dualAspectPrimaryFinishReceived ||
+            !dualAspectSecondaryFinishReceived || dualAspectFinalizing
+        ) return
+
+        val primaryUri = dualAspectPrimaryFinishedUri
+        val companionFile = dualAspectSecondaryFinishedFile ?: dualAspectCompanionFile
+        val ratio = dualAspectOutputRatio
+        if (companionFile == null || ratio == null) {
+            clearDualAspectRecordingState("dual output missing at finalization")
+            _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+            return
+        }
+
+        dualAspectFinalizing = true
+        val dateTakenMs = dualAspectOutputDateTakenMs
+        val recordingPath = dualAspectOutputRecordingPath
+        val recordingTreeUri = dualAspectOutputTreeUri
+
+        Thread({
+            val publishedUri = try {
+                if (primaryUri != null && companionFile.isFile) {
+                    SpatialVideoStore.attachPrimaryAudioTrack(context, primaryUri, companionFile)
+                }
+                runBlocking(Dispatchers.IO) {
+                    VideoMediaStoreWriter.publishVideo(
+                        context = context,
+                        sourceFile = companionFile,
+                        dateTakenMs = dateTakenMs,
+                        recordingPath = recordingPath,
+                        recordingTreeUri = recordingTreeUri,
+                        fileNameSuffix = "Dual_" + ratio.fileSuffix
+                    )
+                }
+            } catch (error: Exception) {
+                PLog.e(TAG, "Failed to publish Dual Aspect companion video", error)
+                null
+            }
+
+            runCatching { companionFile.delete() }
+            val finish = Runnable {
+                dualAspectRecordingActive = false
+                dualAspectFinalizing = false
+                dualAspectPrimaryFinishReceived = false
+                dualAspectSecondaryFinishReceived = false
+                dualAspectPrimaryFinishedUri = null
+                dualAspectSecondaryFinishedFile = null
+                dualAspectCompanionFile = null
+                dualAspectOutputRatio = null
+                specialVideoRecordingTimeline.reset()
+                _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+                if (publishedUri != null) {
+                    PLog.i(TAG, "Dual Aspect companion saved: $publishedUri")
+                    onVideoSaved?.invoke(publishedUri)
+                } else {
+                    onCameraError?.invoke(
+                        -1,
+                        "The primary video was saved, but the second Dual Aspect video could not be published.",
+                        false
+                    )
+                }
+            }
+            cameraHandler?.post(finish) ?: finish.run()
+        }, "Photon-DualAspect-Finalize").start()
+    }
+
+    private fun clearDualAspectRecordingState(reason: String) {
+        if (dualAspectFinalizing) return
+        dualAspectCompanionFile?.let { file -> if (file.exists()) runCatching { file.delete() } }
+        dualAspectRecordingActive = false
+        dualAspectPrimaryFinishReceived = false
+        dualAspectSecondaryFinishReceived = false
+        dualAspectPrimaryFinishedUri = null
+        dualAspectSecondaryFinishedFile = null
+        dualAspectCompanionFile = null
+        dualAspectOutputRatio = null
+        dualAspectOutputTreeUri = null
+        dualAspectFinalizing = false
+        specialVideoRecordingTimeline.reset()
+        PLog.w(TAG, "Dual Aspect recording state cleared: $reason")
+    }
+
     private fun isCurrentCameraFrontFacing(): Boolean {
         return cachedLensFacing == CameraCharacteristics.LENS_FACING_FRONT ||
             _state.value.getCurrentCameraInfo()?.lensType == LensType.FRONT
@@ -11086,7 +11328,9 @@ class Camera2Controller(private val context: Context) {
     fun pauseVideoRecording() {
         if (!_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isPaused) return
         videoRecorder.pauseRecording()
-        if (spatialVideoEnabled && spatialVideoRecorder.isRecording()) spatialVideoRecorder.pauseRecording()
+        if ((spatialVideoEnabled || dualAspectRecordingActive) && spatialVideoRecorder.isRecording()) {
+            spatialVideoRecorder.pauseRecording()
+        }
         if (videoRecorder.usesDedicatedCameraInput) {
             updateDedicatedVideoRepeatingTarget(includeVideoSurface = false)
         }
@@ -11105,7 +11349,9 @@ class Camera2Controller(private val context: Context) {
             return
         }
         videoRecorder.resumeRecording()
-        if (spatialVideoEnabled && spatialVideoRecorder.isRecording()) spatialVideoRecorder.resumeRecording()
+        if ((spatialVideoEnabled || dualAspectRecordingActive) && spatialVideoRecorder.isRecording()) {
+            spatialVideoRecorder.resumeRecording()
+        }
         videoRecordingPausedMs += SystemClock.elapsedRealtime() - videoRecordingPauseStartElapsedMs
         _state.value = _state.value.copy(
             videoRecordingState = _state.value.videoRecordingState.copy(isPaused = false)
@@ -11122,7 +11368,7 @@ class Camera2Controller(private val context: Context) {
             videoRecordingState = _state.value.videoRecordingState.copy(
                 isRecording = false,
                 isPaused = false,
-                isProcessing = videoRecorder.usesDedicatedCameraInput
+                isProcessing = videoRecorder.usesDedicatedCameraInput || dualAspectRecordingActive
             )
         )
         if (videoRecorder.usesDedicatedCameraInput && !_state.value.videoRecordingState.isPaused) {
@@ -11147,8 +11393,10 @@ class Camera2Controller(private val context: Context) {
             }
         }
         videoRecorder.stopRecording()
-        if (spatialVideoEnabled) {
+        if (spatialVideoEnabled || dualAspectRecordingActive) {
             spatialVideoRecorder.stopRecording()
+        }
+        if (spatialVideoEnabled) {
             spatialVideoStandbyRepeatingRequest = null
             spatialVideoPrimarySessionAwaitingStandby = false
             specialVideoRecordingTimeline.reset()
@@ -11200,6 +11448,9 @@ class Camera2Controller(private val context: Context) {
                     ?.let(::addTarget)
                 encoderTarget
                     ?.takeIf { includeVideoSurface && !useEnhancedStabilization }
+                    ?.let(::addTarget)
+                spatialVideoRecorder.cameraInputSurface
+                    ?.takeIf { includeVideoSurface && dualAspectRecordingActive }
                     ?.let(::addTarget)
                 applyBaseCameraSettings(this, isCapture = false)
             }
