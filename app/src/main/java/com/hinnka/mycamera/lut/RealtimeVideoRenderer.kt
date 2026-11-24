@@ -281,9 +281,15 @@ class RealtimeVideoRenderer(
             setDefaultBufferSize(currentCameraInputSize.width, currentCameraInputSize.height)
             setOnFrameAvailableListener {
                 cameraFramePending.set(true)
-                if (!enhancedStabilizationEnabled ||
-                    stabilizationCoordinator?.isCurrentCameraSupported != true
-                ) {
+                val useMgcFrames = enhancedStabilizationEnabled &&
+                    stabilizationCoordinator?.isCurrentCameraSupported == true &&
+                    stabilizationSessionStarted &&
+                    stabilizationSession?.isOperational == true
+                // Fall back to the regular OES frame callback whenever EIS+ is requested but
+                // its session is not actually running (native start failure, HAL conflict,
+                // camera switch reset, or coordinator teardown). Otherwise one failed EIS
+                // session can suppress every subsequent normal video frame.
+                if (!useMgcFrames) {
                     onFrameAvailable()
                 }
             }
