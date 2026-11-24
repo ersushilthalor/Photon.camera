@@ -379,6 +379,7 @@ fun SettingsScreen(
     val videoLutId by viewModel.videoLutId.collectAsState()
     val videoLensLockEnabled by viewModel.videoLensLockEnabled.collectAsState()
     val videoWhiteBalanceLockEnabled by viewModel.videoWhiteBalanceLockEnabled.collectAsState()
+    val keepUltraWideAeReady by viewModel.keepUltraWideAeReady.collectAsState()
     val openAIApiKey by viewModel.openAIApiKey.collectAsState()
     val openAIUrl by viewModel.openAIUrl.collectAsState()
     val openAIModel by viewModel.openAIModel.collectAsState()
@@ -1159,6 +1160,18 @@ fun SettingsScreen(
                     SettingsSection(
                         title = stringResource(R.string.settings_focus_lens_group_lens_selection)
                     ) {
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_keep_ultra_wide_ae_ready),
+                            description = stringResource(R.string.settings_keep_ultra_wide_ae_ready_description),
+                            checked = keepUltraWideAeReady,
+                            onCheckedChange = viewModel::setKeepUltraWideAeReady,
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
                         DefaultFocalLengthSetting(
                             viewModel = viewModel,
                             currentFocalLength = defaultFocalLength,

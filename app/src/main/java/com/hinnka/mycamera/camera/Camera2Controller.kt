@@ -103,6 +103,7 @@ class Camera2Controller(private val context: Context) {
 
     companion object {
         private const val TAG = "Camera2Controller"
+        private const val ULTRA_WIDE_AE_HANDOFF_MAX_AGE_MS = 900L
 
         // 自定义错误代码
         const val ERROR_CAMERA_DISCONNECTED = 1000
@@ -156,6 +157,17 @@ class Camera2Controller(private val context: Context) {
         val surfaceTexture: SurfaceTexture,
         val preserveVideoRecording: Boolean,
     )
+
+    /** Latest converged AE sample produced by the hidden ultra-wide physical output. */
+    private data class UltraWideAeReading(
+        val physicalCameraId: String,
+        val exposureTimeNs: Long,
+        val sensitivityIso: Int,
+        val frameDurationNs: Long,
+        val sampledAtElapsedRealtimeMs: Long,
+    )
+
+    private data class UltraWideAeHandoffRequestTag(val physicalCameraId: String)
 
     private data class CaptureModeReconfigureRequest(
         val generation: Int,
@@ -385,6 +397,18 @@ class Camera2Controller(private val context: Context) {
     val dualCaptureStreamSize: StateFlow<Size?> = _dualCaptureStreamSize.asStateFlow()
     private var imageReader: ImageReader? = null
     private var stabilizationImageReader: StabilizationImageReader? = null
+
+    // A low-resolution physical ultra-wide YUV output keeps that sensor's 3A pipeline warm
+    // while the main lens is displayed. Frames are drained immediately; only AE metadata is kept.
+    private var keepUltraWideAeReady = true
+    private var ultraWideAeMeteringReader: ImageReader? = null
+    private var ultraWideAeMeteringReaderPhysicalCameraId: String? = null
+    private var activeUltraWideAeMeteringPhysicalCameraId: String? = null
+    private var ultraWideAeMeteringSessionAttached = false
+    private var ultraWideAeMeteringSuppressed = false
+    private var latestUltraWideAeReading: UltraWideAeReading? = null
+    private var pendingUltraWideAeHandoff: UltraWideAeReading? = null
+    private var ultraWideAeHandoffActiveForSession = false
 
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal)
     private var nrLevel = NoiseReductionLevel.DEFAULT
@@ -1254,6 +1278,10 @@ class Camera2Controller(private val context: Context) {
             request: CaptureRequest,
             failure: CaptureFailure,
         ) {
+            val ultraWideTag = request.tag as? UltraWideAeHandoffRequestTag
+            if (ultraWideTag != null) {
+                finishUltraWideAeHandoff(session, request)
+            }
             val flashTag = request.tag as? StillFlashRequestTag
             if (flashTag != null) {
                 val pending = stillFlashPrecapture ?: return
@@ -1290,6 +1318,8 @@ class Camera2Controller(private val context: Context) {
             // Results from a retired session can arrive after a physical-output handoff; using
             // the new global physical-camera ID for those old frames mixes two sensors' metadata.
             if (session === captureSession) {
+                updateUltraWideAeMeteringResult(result)
+                finishUltraWideAeHandoff(session, request)
                 updateLogicalMultiCameraStabilizationCamera(result)
                 realtimeStabilizationCoordinator.submitCaptureResult(
                     result = result,
@@ -2318,6 +2348,13 @@ class Camera2Controller(private val context: Context) {
             safeCloseImageReader(imageReader)
             imageReader = null
             closeStabilizationImageReader()
+            closeUltraWideAeMeteringReader()
+            activeUltraWideAeMeteringPhysicalCameraId = null
+            ultraWideAeMeteringSessionAttached = false
+            ultraWideAeMeteringSuppressed = false
+            latestUltraWideAeReading = null
+            pendingUltraWideAeHandoff = null
+            ultraWideAeHandoffActiveForSession = false
         }
     }
 
@@ -3557,6 +3594,270 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+
+    /**
+     * Resolve the rear ultra-wide physical sensor belonging to the currently-open logical
+     * camera. This deliberately avoids opening a second CameraDevice: the physical YUV
+     * output is attached to the existing logical session, so unsupported devices simply
+     * fall back to ordinary single-camera preview.
+     */
+    private fun resolveUltraWideAeMeteringPhysicalCameraId(
+        state: CameraState,
+        highSpeedVideo: Boolean,
+    ): String? {
+        if (!keepUltraWideAeReady || ultraWideAeMeteringSuppressed) return null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || highSpeedVideo) return null
+        if (spatialVideoEnabled || dualCaptureEnabled) return null
+
+        val currentCamera = state.getCurrentCameraInfo() ?: return null
+        if (currentCamera.lensFacing != CameraCharacteristics.LENS_FACING_BACK ||
+            currentCamera.isVirtualIszLens
+        ) {
+            return null
+        }
+
+        val logicalCameraId = currentCamera.logicalCameraId
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        if (logicalCameraId != getActiveOpenCameraId()) return null
+
+        val logicalCharacteristics = getCameraCharacteristicsOrNull(
+            logicalCameraId,
+            "ultra-wide AE pre-metering logical camera",
+        ) ?: return null
+        val physicalIds = logicalCharacteristics.physicalCameraIds
+        if (physicalIds.size < 2) return null
+
+        val wideIdFromDiscoveredLens = state.availableCameras.asSequence()
+            .filter {
+                it.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                    it.lensType == LensType.BACK_ULTRA_WIDE &&
+                    !it.isVirtualIszLens
+            }
+            .filter { runCatching { it.getOpenCameraId() == logicalCameraId }.getOrDefault(false) }
+            .mapNotNull { it.outputPhysicalCameraId ?: it.cameraId }
+            .firstOrNull { it in physicalIds }
+
+        val widePhysicalId = wideIdFromDiscoveredLens
+            ?: currentCamera.physicalCameras
+                .filter { it.intrinsicZoomRatio in 0.01f..0.85f }
+                .minByOrNull { it.intrinsicZoomRatio }
+                ?.cameraId
+                ?.takeIf { it in physicalIds }
+            ?: return null
+
+        // The currently selected ultra-wide output is already running at full preview
+        // resolution; do not allocate a duplicate stream for the same sensor.
+        if (widePhysicalId == activeOutputPhysicalCameraId) return null
+
+        // In HAL seamless-zoom mode the logical output may already be displaying ultra-wide
+        // at sub-1x ratios. The hidden stream is only needed while another lens is active.
+        if (logicalMultiCameraAutoSwitchActive &&
+            getTargetZoomRatioByMain(state, currentCamera) <= 0.85f
+        ) {
+            return null
+        }
+        return widePhysicalId
+    }
+
+    private fun ensureUltraWideAeMeteringReader(
+        physicalCameraId: String,
+        handler: Handler,
+    ): ImageReader? {
+        ultraWideAeMeteringReader?.let { existing ->
+            if (ultraWideAeMeteringReaderPhysicalCameraId == physicalCameraId) return existing
+            closeUltraWideAeMeteringReader()
+        }
+
+        return try {
+            val characteristics = getCameraCharacteristicsOrNull(
+                physicalCameraId,
+                "ultra-wide AE pre-metering stream",
+            ) ?: return null
+            val streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?: return null
+            val availableSizes = streamMap.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()
+            val size = availableSizes
+                .filter { it.width <= 640 && it.height <= 480 }
+                .minByOrNull { it.width.toLong() * it.height.toLong() }
+                ?: availableSizes.minByOrNull { it.width.toLong() * it.height.toLong() }
+                ?: return null
+
+            ImageReader.newInstance(
+                size.width,
+                size.height,
+                ImageFormat.YUV_420_888,
+                2,
+            ).also { reader ->
+                reader.setOnImageAvailableListener({ source ->
+                    try {
+                        // The image pixels are intentionally unused. Draining every callback
+                        // prevents the hidden stream from stalling the Camera2 pipeline.
+                        source.acquireLatestImage()?.close()
+                    } catch (error: Exception) {
+                        PLog.v(TAG, "Ultra-wide AE metering frame drain skipped: ${error.message}")
+                    }
+                }, handler)
+                ultraWideAeMeteringReader = reader
+                ultraWideAeMeteringReaderPhysicalCameraId = physicalCameraId
+                PLog.i(
+                    TAG,
+                    "Ultra-wide AE pre-metering stream ready: physical=$physicalCameraId " +
+                        "size=${size.width}x${size.height}",
+                )
+            }
+        } catch (error: Exception) {
+            PLog.w(TAG, "Ultra-wide AE pre-metering unavailable for physical=$physicalCameraId", error)
+            null
+        }
+    }
+
+    private fun closeUltraWideAeMeteringReader() {
+        val reader = ultraWideAeMeteringReader
+        ultraWideAeMeteringReader = null
+        ultraWideAeMeteringReaderPhysicalCameraId = null
+        try {
+            reader?.setOnImageAvailableListener(null, null)
+            safeCloseImageReader(reader)
+        } catch (error: Exception) {
+            PLog.w(TAG, "Unable to close ultra-wide AE metering reader: ${error.message}")
+        }
+    }
+
+    private fun updateUltraWideAeMeteringResult(result: TotalCaptureResult) {
+        val physicalCameraId = activeUltraWideAeMeteringPhysicalCameraId
+            ?: ultraWideAeMeteringReaderPhysicalCameraId
+                ?.takeIf { it == activeOutputPhysicalCameraId }
+            ?: return
+        val physicalResult = result.physicalCameraResults[physicalCameraId]
+            ?: if (activeOutputPhysicalCameraId == physicalCameraId) result else return
+
+        val aeMode = physicalResult.get(CaptureResult.CONTROL_AE_MODE)
+        if (aeMode == CaptureRequest.CONTROL_AE_MODE_OFF) return
+        val aeState = physicalResult.get(CaptureResult.CONTROL_AE_STATE)
+        if (aeState != CaptureResult.CONTROL_AE_STATE_CONVERGED &&
+            aeState != CaptureResult.CONTROL_AE_STATE_LOCKED
+        ) {
+            return
+        }
+        val exposureTimeNs = physicalResult.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+            ?.takeIf { it > 0L }
+            ?: return
+        val sensitivityIso = physicalResult.get(CaptureResult.SENSOR_SENSITIVITY)
+            ?.takeIf { it > 0 }
+            ?: return
+        val frameDurationNs = physicalResult.get(CaptureResult.SENSOR_FRAME_DURATION)
+            ?.takeIf { it > 0L }
+            ?: exposureTimeNs
+
+        latestUltraWideAeReading = UltraWideAeReading(
+            physicalCameraId = physicalCameraId,
+            exposureTimeNs = exposureTimeNs,
+            sensitivityIso = sensitivityIso,
+            frameDurationNs = frameDurationNs,
+            sampledAtElapsedRealtimeMs = SystemClock.elapsedRealtime(),
+        )
+    }
+
+    /**
+     * Seed only the first frame after a same-logical-camera switch with the ultra-wide
+     * sensor's recently converged exposure. The repeating request is immediately returned
+     * to normal AE as soon as that first frame completes.
+     */
+    private fun applyPendingUltraWideAeHandoff(builder: CaptureRequest.Builder) {
+        val reading = pendingUltraWideAeHandoff ?: return
+        val ageMs = SystemClock.elapsedRealtime() - reading.sampledAtElapsedRealtimeMs
+        if (reading.physicalCameraId != activeOutputPhysicalCameraId ||
+            ageMs !in 0L..ULTRA_WIDE_AE_HANDOFF_MAX_AGE_MS ||
+            !_state.value.isAutoExposure ||
+            !isManualSensorSupported
+        ) {
+            pendingUltraWideAeHandoff = null
+            return
+        }
+
+        val physicalCharacteristics = getCameraCharacteristicsOrNull(
+            reading.physicalCameraId,
+            "ultra-wide AE handoff",
+        ) ?: run {
+            pendingUltraWideAeHandoff = null
+            return
+        }
+        val exposureRange = physicalCharacteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            ?: run {
+                pendingUltraWideAeHandoff = null
+                return
+            }
+        val sensitivityRange = physicalCharacteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            ?: run {
+                pendingUltraWideAeHandoff = null
+                return
+            }
+        val exposureTimeNs = reading.exposureTimeNs.coerceIn(exposureRange.lower, exposureRange.upper)
+        val sensitivityIso = reading.sensitivityIso.coerceIn(sensitivityRange.lower, sensitivityRange.upper)
+
+        try {
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            builder.set(CaptureRequest.CONTROL_AE_LOCK, false)
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTimeNs)
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, sensitivityIso)
+            builder.setTag(UltraWideAeHandoffRequestTag(reading.physicalCameraId))
+            ultraWideAeHandoffActiveForSession = true
+            pendingUltraWideAeHandoff = null
+            PLog.i(
+                TAG,
+                "Ultra-wide AE handoff primed: physical=${reading.physicalCameraId} " +
+                    "iso=$sensitivityIso exposureNs=$exposureTimeNs ageMs=$ageMs",
+            )
+        } catch (error: Exception) {
+            pendingUltraWideAeHandoff = null
+            ultraWideAeHandoffActiveForSession = false
+            PLog.w(TAG, "Unable to apply cached ultra-wide exposure; continuing with normal AE", error)
+        }
+    }
+
+    private fun finishUltraWideAeHandoff(
+        session: CameraCaptureSession,
+        request: CaptureRequest,
+    ) {
+        val tag = request.tag as? UltraWideAeHandoffRequestTag ?: return
+        if (session !== captureSession || !ultraWideAeHandoffActiveForSession ||
+            tag.physicalCameraId != activeOutputPhysicalCameraId
+        ) {
+            return
+        }
+
+        val builder = previewRequestBuilder ?: return
+        try {
+            applyExposureSettings(builder, _state.value, isCapture = false)
+            builder.setTag(null)
+            ultraWideAeHandoffActiveForSession = false
+            submitRepeatingPreviewRequest(session, builder)
+            PLog.i(TAG, "Ultra-wide AE handoff complete; automatic exposure resumed")
+        } catch (error: Exception) {
+            ultraWideAeHandoffActiveForSession = false
+            PLog.w(TAG, "Unable to resume automatic exposure after ultra-wide handoff", error)
+        }
+    }
+
+    private fun retryPreviewSessionWithoutUltraWideAeMetering(
+        reason: String,
+        openGeneration: Long,
+    ): Boolean {
+        if (!ultraWideAeMeteringSessionAttached ||
+            ultraWideAeMeteringSuppressed ||
+            openGeneration != cameraOpenGeneration
+        ) {
+            return false
+        }
+        ultraWideAeMeteringSuppressed = true
+        activeUltraWideAeMeteringPhysicalCameraId = null
+        ultraWideAeMeteringSessionAttached = false
+        PLog.w(TAG, "Retrying camera session without optional ultra-wide AE stream: $reason")
+        createPreviewSession(openGeneration = openGeneration)
+        return true
+    }
+
     private fun createPreviewSession(
         forceWithoutVendorSessionParameters: Boolean = false,
         openGeneration: Long = cameraOpenGeneration
@@ -3615,6 +3916,18 @@ class Camera2Controller(private val context: Context) {
         val ultraWidePreviewSurface = if (usesUltraWideDualCapture) dualCapturePreviewSurface else null
         val ultraWideRecordSurface = if (usesUltraWideDualCapture) dualCaptureRecordSurface else null
         val ultraWidePhysicalCameraId = dualCapturePhysicalCameraId
+        val ultraWideAeMeteringPhysicalCameraId = resolveUltraWideAeMeteringPhysicalCameraId(
+            state = _state.value,
+            highSpeedVideo = highSpeedVideo,
+        )
+        val ultraWideAeReader = ultraWideAeMeteringPhysicalCameraId?.let { physicalId ->
+            ensureUltraWideAeMeteringReader(physicalId, handler)
+        }
+        val ultraWideAeMeteringSurface = ultraWideAeReader?.surface
+        activeUltraWideAeMeteringPhysicalCameraId =
+            ultraWideAeMeteringPhysicalCameraId.takeIf { ultraWideAeMeteringSurface != null }
+        ultraWideAeMeteringSessionAttached = ultraWideAeMeteringSurface != null
+        ultraWideAeHandoffActiveForSession = false
         val sessionGeneration = ++previewSessionGeneration
         pendingVendorSessionParameterRestart = false
         val templateType = if (
@@ -3648,9 +3961,11 @@ class Camera2Controller(private val context: Context) {
                 spatialPreviewSurface?.let(::addTarget)
                 ultraWidePreviewSurface?.let(::addTarget)
                 ultraWideRecordSurface?.let(::addTarget)
+                ultraWideAeMeteringSurface?.let(::addTarget)
 
                 // 应用所有相机参数（曝光、白平衡、闪光灯、变焦）
                 applyBaseCameraSettings(this, isCapture = false)
+                applyPendingUltraWideAeHandoff(this)
                 if (highSpeedVideo) {
                     set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, requireNotNull(highSpeedFpsRange))
                     set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
@@ -3665,6 +3980,7 @@ class Camera2Controller(private val context: Context) {
             spatialPreviewSurface?.let(surfaces::add)
             ultraWidePreviewSurface?.let(surfaces::add)
             ultraWideRecordSurface?.let(surfaces::add)
+            ultraWideAeMeteringSurface?.let(surfaces::add)
             if (captureMode == CaptureMode.PHOTO) {
                 val captureReader = reader ?: return
                 surfaces += captureReader.surface
@@ -3745,6 +4061,11 @@ class Camera2Controller(private val context: Context) {
                                 add(createOutputConfiguration(wideEncoder, physicalCameraId = wideId))
                             }
                         }
+                        ultraWideAeMeteringSurface?.let { meteringSurface ->
+                            val meteringId = ultraWideAeMeteringPhysicalCameraId
+                                ?: throw IllegalStateException("Ultra-wide AE metering camera ID is unavailable")
+                            add(createOutputConfiguration(meteringSurface, physicalCameraId = meteringId))
+                        }
                     },
                     Executor { handler.post(it) },
                     object : CameraCaptureSession.StateCallback() {
@@ -3770,6 +4091,7 @@ class Camera2Controller(private val context: Context) {
                             PLog.e(TAG, "Video session configuration failed")
                             safeCloseCaptureSession(session, "video configure failure")
                             if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
+                            if (retryPreviewSessionWithoutUltraWideAeMetering("video configure failed", openGeneration)) return
                             if (vendorSessionParametersApplied &&
                                 retryPreviewSessionWithoutVendorSessionParameters(
                                     reason = "video configure failed",
@@ -3810,6 +4132,11 @@ class Camera2Controller(private val context: Context) {
                 reader?.surface?.let { captureSurface ->
                     add(createOutputConfiguration(captureSurface))
                 }
+                ultraWideAeMeteringSurface?.let { meteringSurface ->
+                    val meteringId = ultraWideAeMeteringPhysicalCameraId
+                        ?: throw IllegalStateException("Ultra-wide AE metering camera ID is unavailable")
+                    add(createOutputConfiguration(meteringSurface, physicalCameraId = meteringId))
+                }
             }
             val sessionConfig = SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
@@ -3841,6 +4168,7 @@ class Camera2Controller(private val context: Context) {
                                     "sessionColorSpace=${if (shouldUseP3ColorSpace()) "DISPLAY_P3" else "DEFAULT"}"
                         )
                         safeCloseCaptureSession(session, "photo configure failure")
+                        if (retryPreviewSessionWithoutUltraWideAeMetering("photo configure failed", openGeneration)) return
                         if (vendorSessionParametersApplied &&
                             retryPreviewSessionWithoutVendorSessionParameters(
                                 reason = "photo configure failed",
@@ -3871,6 +4199,7 @@ class Camera2Controller(private val context: Context) {
         } catch (e: IllegalStateException) {
             PLog.w(TAG, "Failed to create preview session", e)
             if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
+            if (retryPreviewSessionWithoutUltraWideAeMetering("create session illegal state: ${e.message}", openGeneration)) return
             if (vendorSessionParametersApplied &&
                 retryPreviewSessionWithoutVendorSessionParameters(
                     reason = "create session illegal state: ${e.message}",
@@ -3890,6 +4219,7 @@ class Camera2Controller(private val context: Context) {
         } catch (e: Exception) {
             PLog.w(TAG, "Failed to create preview session", e)
             if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
+            if (retryPreviewSessionWithoutUltraWideAeMetering("create session exception: ${e.message}", openGeneration)) return
             if (vendorSessionParametersApplied &&
                 retryPreviewSessionWithoutVendorSessionParameters(
                     reason = "create session exception: ${e.message}",
@@ -7567,6 +7897,12 @@ class Camera2Controller(private val context: Context) {
         val stabilizationCharacteristics = physicalCharacteristics ?: openCharacteristics
         val stabilizationCameraId = resolvedPhysicalCameraId ?: openCameraId
 
+        pendingUltraWideAeHandoff = latestUltraWideAeReading?.takeIf { reading ->
+            reading.physicalCameraId == resolvedPhysicalCameraId &&
+                resolvedPhysicalCameraId == ultraWideAeMeteringReaderPhysicalCameraId &&
+                _state.value.isAutoExposure &&
+                SystemClock.elapsedRealtime() - reading.sampledAtElapsedRealtimeMs in 0L..ULTRA_WIDE_AE_HANDOFF_MAX_AGE_MS
+        }
         PLog.i(
             TAG,
             "Recreating session for zoom physical output: " +
@@ -8494,6 +8830,27 @@ class Camera2Controller(private val context: Context) {
         previewRequestBuilder?.apply {
             applyBaseCameraSettings(this, isCapture = false)
             updatePreview()
+        }
+    }
+
+    fun setKeepUltraWideAeReady(enabled: Boolean) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setKeepUltraWideAeReady(enabled) }
+            return
+        }
+        if (keepUltraWideAeReady == enabled) return
+        keepUltraWideAeReady = enabled
+        pendingUltraWideAeHandoff = null
+        if (enabled) ultraWideAeMeteringSuppressed = false
+        PLog.i(TAG, "Keep Ultra-Wide AE Ready enabled=$enabled")
+        if (cameraDevice != null && previewSurface != null &&
+            !_state.value.videoRecordingState.isRecording &&
+            !_state.value.videoRecordingState.isProcessing
+        ) {
+            createPreviewSession()
+        } else if (_state.value.videoRecordingState.isRecording) {
+            PLog.i(TAG, "Ultra-wide AE setting will take effect after recording stops")
         }
     }
 

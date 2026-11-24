@@ -261,6 +261,7 @@ data class UserPreferences(
     val videoTorchEnabled: Boolean = false,
     val videoLensLockEnabled: Boolean = false,
     val videoWhiteBalanceLockEnabled: Boolean = false,
+    val keepUltraWideAeReady: Boolean = true,
     val videoCodec: com.hinnka.mycamera.video.VideoCodec = com.hinnka.mycamera.video.VideoCodec.H264,
     val ultraHdrGainMapEnabled: Boolean = false,
     val phantomMode: Boolean = false,
@@ -549,6 +550,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val VIDEO_TORCH_ENABLED = booleanPreferencesKey("video_torch_enabled")
         private val VIDEO_LENS_LOCK_ENABLED = booleanPreferencesKey("video_lens_lock_enabled")
         private val VIDEO_WHITE_BALANCE_LOCK_ENABLED = booleanPreferencesKey("video_white_balance_lock_enabled")
+        private val KEEP_ULTRA_WIDE_AE_READY = booleanPreferencesKey("keep_ultra_wide_ae_ready")
         private val VIDEO_CODEC = stringPreferencesKey("video_codec")
         // Keep the persisted key for compatibility with existing installations.
         private val ULTRA_HDR_GAIN_MAP_ENABLED = booleanPreferencesKey("auto_enable_hdr_for_hdr_capture")
@@ -925,6 +927,7 @@ class UserPreferencesRepository(private val context: Context) {
                 videoTorchEnabled = preferences[VIDEO_TORCH_ENABLED] ?: false,
                 videoLensLockEnabled = preferences[VIDEO_LENS_LOCK_ENABLED] ?: false,
                 videoWhiteBalanceLockEnabled = preferences[VIDEO_WHITE_BALANCE_LOCK_ENABLED] ?: false,
+                keepUltraWideAeReady = preferences[KEEP_ULTRA_WIDE_AE_READY] ?: true,
                 videoCodec = com.hinnka.mycamera.video.VideoCodec.valueOf(
                     preferences[VIDEO_CODEC] ?: com.hinnka.mycamera.video.VideoCodec.H264.name
                 ),
@@ -2454,6 +2457,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveVideoLensLockEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[VIDEO_LENS_LOCK_ENABLED] = enabled
+        }
+    }
+
+    suspend fun saveKeepUltraWideAeReady(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEEP_ULTRA_WIDE_AE_READY] = enabled
         }
     }
 

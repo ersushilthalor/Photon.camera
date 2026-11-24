@@ -1959,6 +1959,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val videoWhiteBalanceLockEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.videoWhiteBalanceLockEnabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val keepUltraWideAeReady: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.keepUltraWideAeReady }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val photoPreviewStabilizationEnabled: StateFlow<Boolean> =
         userPreferencesRepository.userPreferences
             .map { it.photoPreviewStabilizationEnabled }
@@ -2480,6 +2483,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoTorchEnabled(it.videoTorchEnabled)
                 cameraController.setVideoLensLockEnabled(it.videoLensLockEnabled)
                 cameraController.setVideoWhiteBalanceLockEnabled(it.videoWhiteBalanceLockEnabled)
+                cameraController.setKeepUltraWideAeReady(it.keepUltraWideAeReady)
                 cameraController.setVideoCodec(it.videoCodec)
                 cameraController.setMirrorFrontCameraEnabled(it.mirrorFrontCamera)
                 multipleExposureState = multipleExposureState.copy(
@@ -2661,6 +2665,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoTorchEnabled(prefs.videoTorchEnabled)
                 cameraController.setVideoLensLockEnabled(prefs.videoLensLockEnabled)
                 cameraController.setVideoWhiteBalanceLockEnabled(prefs.videoWhiteBalanceLockEnabled)
+                cameraController.setKeepUltraWideAeReady(prefs.keepUltraWideAeReady)
                 cameraController.setVideoCodec(prefs.videoCodec)
                 cameraController.setMeteringMode(prefs.meteringMode)
 
@@ -4417,6 +4422,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setVideoWhiteBalanceLockEnabled(enabled)
         viewModelScope.launch {
             userPreferencesRepository.saveVideoWhiteBalanceLockEnabled(enabled)
+        }
+    }
+
+    fun setKeepUltraWideAeReady(enabled: Boolean) {
+        cameraController.setKeepUltraWideAeReady(enabled)
+        viewModelScope.launch {
+            userPreferencesRepository.saveKeepUltraWideAeReady(enabled)
         }
     }
 
