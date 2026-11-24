@@ -621,7 +621,7 @@ fun CameraTopSheet(
                                 Icon(AppIcons.Videocam, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
                             },
                             checked = spatialVideoEnabled,
-                            enabled = spatialVideoSupported || spatialVideoEnabled,
+                            enabled = true,
                             onClick = onVideoSpatialVideoClick,
                             modifier = itemModifier
                         )

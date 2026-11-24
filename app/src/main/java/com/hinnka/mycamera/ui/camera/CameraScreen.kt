@@ -2392,19 +2392,13 @@ fun CameraScreen(
                     !state.videoRecordingState.isProcessing,
             onVideoStabilizationModeChange = viewModel::setVideoStabilizationMode,
             spatialVideoEnabled = spatialVideoEnabled,
-            spatialVideoSupported = spatialVideoEnabled || viewModel.isSpatialVideoSupported(),
+            spatialVideoSupported = true,
             onVideoSpatialVideoClick = {
                 if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
                     android.widget.Toast.makeText(
                         context,
                         "Stop recording before changing Special Video.",
                         android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                } else if (!spatialVideoEnabled && !viewModel.isSpatialVideoSupported()) {
-                    android.widget.Toast.makeText(
-                        context,
-                        "No rear 1x and 0.5x Camera2 camera pair was discovered.",
-                        android.widget.Toast.LENGTH_LONG,
                     ).show()
                 } else {
                     viewModel.setSpatialVideoEnabled(!spatialVideoEnabled)

@@ -2818,12 +2818,14 @@ class Camera2Controller(private val context: Context) {
         val cameraId = _state.value.currentCameraId
         val selectedCamera = _state.value.getCurrentCameraInfo()
         val selectedOpenCameraId = selectedCamera?.getOpenCameraId() ?: cameraId
-        val persistentSpecialVideoPrimary = spatialVideoPrimaryCameraId?.takeIf {
-            spatialVideoEnabled && spatialVideoStreamingMode == SpatialVideoStreamingMode.PERSISTENT_DUAL_SESSION
+        val specialVideoPrimaryOverride = spatialVideoPrimaryCameraId?.takeIf {
+            spatialVideoEnabled
         }
-        // In persistent dual-session mode, open the selected 1x physical CameraDevice
-        // directly. Do not reopen its logical parent and then route only one child output.
-        val openCameraId = persistentSpecialVideoPrimary ?: selectedOpenCameraId
+        // Match VCamera's Special Video handoff: keep the resolved 1x stream as the
+        // primary CameraDevice, regardless of which rear lens was selected beforehand.
+        // For a logical-output pair this is the logical parent; for a persistent pair
+        // this is the independently openable 1x physical CameraDevice.
+        val openCameraId = specialVideoPrimaryOverride ?: selectedOpenCameraId
         val targetZoomRatioByMain = getTargetZoomRatioByMain(_state.value, selectedCamera)
         val captureMode = _state.value.captureMode
         if (captureMode != CaptureMode.VIDEO && dualCaptureCameraDevice != null) {
@@ -2840,12 +2842,14 @@ class Camera2Controller(private val context: Context) {
         }
 
         activeOpenCameraId = openCameraId
-        logicalMultiCameraAutoSwitchActive = persistentSpecialVideoPrimary == null &&
+        logicalMultiCameraAutoSwitchActive = !spatialVideoEnabled &&
             shouldUseLogicalMultiCameraZoom(_state.value, selectedCamera)
-        val requestedPhysicalCameraId = if (persistentSpecialVideoPrimary != null) {
-            null
-        } else {
-            resolveRequestedPhysicalCameraId(_state.value, selectedCamera)
+        val requestedPhysicalCameraId = when {
+            spatialVideoEnabled &&
+                spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL ->
+                spatialVideoMainPhysicalCameraId
+            specialVideoPrimaryOverride != null -> null
+            else -> resolveRequestedPhysicalCameraId(_state.value, selectedCamera)
         }
         var outputPhysicalCameraId = if (logicalMultiCameraAutoSwitchActive) null else requestedPhysicalCameraId
         activeOutputPhysicalCameraId = outputPhysicalCameraId
@@ -2858,12 +2862,9 @@ class Camera2Controller(private val context: Context) {
             )
         }
 
-        if (
-            spatialVideoEnabled &&
-            (openCameraId != spatialVideoPrimaryCameraId || selectedCamera?.lensType != LensType.BACK_MAIN)
-        ) {
+        if (spatialVideoEnabled && openCameraId != spatialVideoPrimaryCameraId) {
             val reason = "Primary camera changed while Special Video was active " +
-                "(newId=$openCameraId newLens=${selectedCamera?.lensType} expected=$spatialVideoPrimaryCameraId)"
+                "(newId=$openCameraId expected=$spatialVideoPrimaryCameraId)"
             PLog.w(TAG, reason)
             if (videoRecorder.isRecording() || _state.value.videoRecordingState.isProcessing) {
                 failSpatialVideoStandby(reason)
@@ -8739,8 +8740,9 @@ class Camera2Controller(private val context: Context) {
         val openCameraId = runCatching { current.getOpenCameraId() }
             .getOrDefault(current.cameraId)
         if (openCameraId != logicalId) return null
-        if (activeOpenCameraId.isNotBlank() && activeOpenCameraId != logicalId) return null
-
+        // Pair discovery is independent of the currently opened rear route. VCamera
+        // resolves the main/ultra-wide pair from the full rear-lens inventory, then
+        // performs the primary-device handoff when Special Video is enabled.
         val logicalCharacteristics = runCatching {
             cameraManager.getCameraCharacteristics(logicalId)
         }.getOrNull() ?: return null
@@ -8868,11 +8870,10 @@ class Camera2Controller(private val context: Context) {
 
                 val selectedOpenId = runCatching { current.getOpenCameraId() }
                     .getOrDefault(current.cameraId)
-                val activeId = activeOpenCameraId.takeIf { it.isNotBlank() }
-                if (selectedOpenId != logicalId || (activeId != null && activeId != logicalId)) {
+                if (selectedOpenId != logicalId) {
                     spatialVideoUnsupportedReason =
-                        "$unavailableReason; logical output fallback requires active parent=$logicalId " +
-                            "(selected=$selectedOpenId active=${activeId ?: "not-open"})"
+                        "$unavailableReason; logical output fallback requires selected parent=$logicalId " +
+                            "(selected=$selectedOpenId)"
                     return null
                 }
 
@@ -9040,22 +9041,18 @@ class Camera2Controller(private val context: Context) {
             )
         }
 
-        val publicIds = try {
-            cameraManager.cameraIdList.toSet()
-        } catch (error: Exception) {
-            val reason = "CameraManager.cameraIdList unavailable: ${error.message ?: error.javaClass.simpleName}"
-            spatialVideoUnsupportedReason = reason
-            PLog.e(TAG, "Special Video unsupported: mode=independent main=$mainOpenId ultraWide=$wideOpenId reason=$reason", error)
-            return null
+        // VCamera attempts the discovered Camera2 IDs directly. Do not reject a lens
+        // merely because OEM firmware omitted it from CameraManager.cameraIdList:
+        // hidden-but-queryable IDs can still be opened on devices that expose them.
+        val unavailableIds = listOf(mainOpenId, wideOpenId).filter { cameraId ->
+            runCatching { cameraManager.getCameraCharacteristics(cameraId) }.isFailure
         }
-        if (mainOpenId !in publicIds || wideOpenId !in publicIds) {
-            val missingIds = listOf(mainOpenId, wideOpenId).filterNot { it in publicIds }
-            val reason = "Camera2 device ID(s) are not public: ${missingIds.joinToString()}"
+        if (unavailableIds.isNotEmpty()) {
+            val reason = "Discovered Camera2 device ID(s) have no readable characteristics: ${unavailableIds.joinToString()}"
             spatialVideoUnsupportedReason = reason
             PLog.w(
                 TAG,
-                "Special Video unsupported: mode=independent main=$mainOpenId ultraWide=$wideOpenId " +
-                    "reason=$reason publicCameraIds=$publicIds"
+                "Special Video unsupported: mode=independent main=$mainOpenId ultraWide=$wideOpenId reason=$reason"
             )
             return null
         }
@@ -9176,16 +9173,8 @@ class Camera2Controller(private val context: Context) {
             }
             val activeId = activeOpenCameraId.takeIf { it.isNotBlank() }
                 ?: _state.value.getCurrentCameraInfo()?.let { runCatching { it.getOpenCameraId() }.getOrNull() }
-            val acceptedActiveIds = setOfNotNull(pair.primaryCameraId, pair.logicalParentCameraId)
-            if (activeId != null && activeId !in acceptedActiveIds) {
-                onCameraError?.invoke(
-                    -1,
-                    "Select the rear main 1x camera before enabling Special Video " +
-                        "(active=$activeId, main=${pair.primaryCameraId}, parent=${pair.logicalParentCameraId}).",
-                    false
-                )
-                return
-            }
+            // The selected rear lens is not required to already be the 1x stream.
+            // Switch the primary to the resolved main ID below, as VCamera does.
             spatialVideoMainPhysicalCameraId = pair.mainPhysicalCameraId
             spatialVideoUltraWidePhysicalCameraId = pair.ultraWideCameraId
             spatialVideoPrimaryCameraId = pair.primaryCameraId
@@ -9214,8 +9203,7 @@ class Camera2Controller(private val context: Context) {
                     "logicalParent=${pair.logicalParentCameraId}, mainPhysical=${pair.mainPhysicalCameraId}, " +
                     "ultraWide=${pair.ultraWideCameraId}"
             )
-            val primaryNeedsReopen = pair.mode == SpatialVideoStreamingMode.PERSISTENT_DUAL_SESSION &&
-                activeId != pair.primaryCameraId
+            val primaryNeedsReopen = activeId != null && activeId != pair.primaryCameraId
             val currentPreviewTexture = previewSurfaceTexture
             if (primaryNeedsReopen && currentPreviewTexture == null) {
                 val reason = "Cannot switch Special Video primary to physical main ID: preview SurfaceTexture is unavailable"
@@ -9252,8 +9240,9 @@ class Camera2Controller(private val context: Context) {
         } else {
             val selectedOpenId = _state.value.getCurrentCameraInfo()
                 ?.let { runCatching { it.getOpenCameraId() }.getOrNull() }
-            val restoreLogicalParent = spatialVideoStreamingMode == SpatialVideoStreamingMode.PERSISTENT_DUAL_SESSION &&
-                selectedOpenId != null && selectedOpenId != activeOpenCameraId
+            val restoreLogicalParent =
+                spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                    selectedOpenId != null && selectedOpenId != activeOpenCameraId
             spatialVideoRecorder.forceStop()
             clearSpecialVideoRuntimeState("Special Video disabled")
             previewSurfaceTexture?.let { texture ->
@@ -9334,28 +9323,8 @@ class Camera2Controller(private val context: Context) {
             return true
         }
         if (!spatialVideoEnabled || cameraId.isBlank()) return false
-        val publicIds = runCatching { cameraManager.cameraIdList.toSet() }.getOrElse { error ->
-            val reason = "CameraManager.cameraIdList unavailable while opening ultra-wide ID=$cameraId: ${error.message}"
-            PLog.e(
-                TAG,
-                "Special Video standby open rejected: mode=$spatialVideoStreamingMode " +
-                    "main=$spatialVideoMainPhysicalCameraId ultraWide=$cameraId reason=$reason",
-                error
-            )
-            failSpatialVideoStandby(reason)
-            return false
-        }
-        if (cameraId !in publicIds) {
-            val reason = "Ultra-wide physical Camera2 ID $cameraId is not public/openable"
-            PLog.w(
-                TAG,
-                "Special Video standby open rejected: mode=$spatialVideoStreamingMode " +
-                    "main=$spatialVideoMainPhysicalCameraId ultraWide=$cameraId reason=$reason " +
-                    "publicCameraIds=$publicIds"
-            )
-            failSpatialVideoStandby(reason)
-            return false
-        }
+        // Use the Camera2 ID that discovery resolved, including an OEM hidden ID.
+        // The actual open callback remains the authority on whether this device permits it.
         val existing = spatialVideoStandbyCameraDevice
         if (existing != null && existing.id == cameraId) {
             createSpatialVideoStandbySession("reuse standby camera")
