@@ -3394,7 +3394,9 @@ class Camera2Controller(private val context: Context) {
                     PLog.w(TAG, "50 MP photo requested but this camera exposes no maximum-resolution JPEG stream; using the normal photo output")
                 }
 
-                val readerMaxImages = resolveImageReaderMaxImages()
+                // 50 MP JPEGs are large buffers and this mode captures a single frame.
+                // Keep the queue bounded instead of reserving the multi-frame RAW/HDR depth.
+                val readerMaxImages = if (maximumResolutionSize != null) 2 else resolveImageReaderMaxImages()
                 imageReaderMaxImages = readerMaxImages
 
                 PLog.d(
