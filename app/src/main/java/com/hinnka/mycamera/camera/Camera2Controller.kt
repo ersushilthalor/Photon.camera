@@ -11038,6 +11038,9 @@ class Camera2Controller(private val context: Context) {
                 fps = _state.value.videoConfig.fps.fps,
                 bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
                 codecMime = _state.value.videoConfig.codec.mimeType,
+                fallbackCodecMimes = com.hinnka.mycamera.video.VideoCodec.entries
+                    .map { it.mimeType }
+                    .filterNot { it == _state.value.videoConfig.codec.mimeType },
                 colorConfig = VideoEncoderColorRequest(
                     logProfile = logProfile,
                     hasActiveLut = recordingLut != null && (recordingRecipe?.lutIntensity ?: 1f) > 0f
@@ -11228,6 +11231,9 @@ class Camera2Controller(private val context: Context) {
                 dualAspectOutputRatio = null
                 specialVideoRecordingTimeline.reset()
                 _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+                if (cameraDevice != null && previewSurface != null) {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
                 if (publishedUri != null) {
                     PLog.i(TAG, "Dual Aspect companion saved: $publishedUri")
                     onVideoSaved?.invoke(publishedUri)

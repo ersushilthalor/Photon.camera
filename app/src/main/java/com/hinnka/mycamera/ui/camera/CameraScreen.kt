@@ -2377,6 +2377,12 @@ fun CameraScreen(
             onDualVideoAspectToggle = {
                 if (state.videoRecordingState.isRecording || state.videoRecordingState.isProcessing) {
                     android.widget.Toast.makeText(context, "Stop recording before changing Dual Aspect.", android.widget.Toast.LENGTH_SHORT).show()
+                } else if (state.videoConfig.dualAspectRatio == null && (spatialVideoEnabled || dualCaptureEnabled)) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Turn off Special Video and Dual Capture before enabling Dual Aspect.",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
                 } else {
                     viewModel.setDualVideoAspectRatio(
                         if (state.videoConfig.dualAspectRatio == null)
@@ -2424,6 +2430,12 @@ fun CameraScreen(
                         "Stop recording before changing Special Video.",
                         android.widget.Toast.LENGTH_SHORT,
                     ).show()
+                } else if (!spatialVideoEnabled && state.videoConfig.dualAspectRatio != null) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Turn off Dual Aspect before enabling Special Video.",
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
                 } else {
                     viewModel.setSpatialVideoEnabled(!spatialVideoEnabled)
                 }
@@ -2445,6 +2457,12 @@ fun CameraScreen(
                     android.widget.Toast.makeText(
                         context,
                         context.getString(R.string.dual_capture_stop_recording_to_change),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                } else if (!dualCaptureEnabled && state.videoConfig.dualAspectRatio != null) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Turn off Dual Aspect before enabling Dual Capture.",
                         android.widget.Toast.LENGTH_SHORT,
                     ).show()
                 } else if (!dualCaptureEnabled && !viewModel.isDualCaptureSupported()) {
