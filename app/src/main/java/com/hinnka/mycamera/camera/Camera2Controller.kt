@@ -11108,7 +11108,6 @@ class Camera2Controller(private val context: Context) {
                 }
                 if (spatialVideoEnabled) {
                     spatialPrimaryFinishedUri = uri
-                    finalizeSpatialVideoCompanionIfReady()
                 }
                 if (dualCaptureRecordSurface != null) {
                     dualCaptureRecordSurface = null
@@ -11130,6 +11129,12 @@ class Camera2Controller(private val context: Context) {
                     )
                 } else {
                     _state.value = _state.value.copy(videoRecordingState = VideoRecordingState())
+                }
+                if (spatialVideoEnabled && uri != null) {
+                    // Run after the primary callback marks the UI as processing. The wide
+                    // recorder may have completed first; finalization must win regardless of
+                    // which asynchronous recorder callback arrives first.
+                    finalizeSpatialVideoCompanionIfReady()
                 }
                 if (cameraDevice != null && previewSurface != null) {
                     createPreviewSession(openGeneration = cameraOpenGeneration)
