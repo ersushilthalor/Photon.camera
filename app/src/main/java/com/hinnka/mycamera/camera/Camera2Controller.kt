@@ -1215,6 +1215,7 @@ class Camera2Controller(private val context: Context) {
     private fun resolveImageReaderMaxImages(): Int = CAPTURE_READER_MAX_IMAGES
 
     private fun captureImageRequestCount(state: CameraState, reader: ImageReader): Int = when {
+        state.isMaximumResolutionPhoto -> 1
         state.refocusCaptureEnabled &&
             state.captureMode == CaptureMode.PHOTO &&
             state.minimumFocusDistance > 0f &&
@@ -3309,16 +3310,37 @@ class Camera2Controller(private val context: Context) {
                 } else {
                     null
                 }
+                val requestsMaximumResolution = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    state.value.photoMegapixelMode == PhotoMegapixelMode.M50 &&
+                    !effectivelyUseRaw
+                fun maximumResolutionJpegSize(characteristics: CameraCharacteristics): Size? {
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || effectivelyUseRaw) return null
+                    return runCatching {
+                        characteristics
+                            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
+                            ?.getOutputSizes(ImageFormat.JPEG)
+                            ?.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                    }.onFailure {
+                        PLog.w(TAG, "Unable to query maximum-resolution JPEG streams", it)
+                    }.getOrNull()
+                }
+                var maximumResolutionCapabilitySize = maximumResolutionJpegSize(outputCharacteristicsForStreams)
+                var maximumResolutionSize = if (requestsMaximumResolution) {
+                    maximumResolutionCapabilitySize
+                } else {
+                    null
+                }
                 val wantsP010 = !effectivelyUseRaw &&
+                        maximumResolutionSize == null &&
                         isP010Supported &&
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                         state.value.useP010
-                var captureFormat = if (rawOutput != null) {
-                    rawOutput.format
-                } else if (wantsP010 && isOutputFormatAdvertised(outputCharacteristicsForStreams, ImageFormat.YCBCR_P010)) {
-                    ImageFormat.YCBCR_P010
-                } else {
-                    ImageFormat.YUV_420_888
+                var captureFormat = when {
+                    rawOutput != null -> rawOutput.format
+                    maximumResolutionSize != null -> ImageFormat.JPEG
+                    wantsP010 && isOutputFormatAdvertised(outputCharacteristicsForStreams, ImageFormat.YCBCR_P010) ->
+                        ImageFormat.YCBCR_P010
+                    else -> ImageFormat.YUV_420_888
                 }
                 if (outputPhysicalCameraId != null && isPhysicalOutputProfileFailed(outputPhysicalCameraId, captureFormat)) {
                     val failedPhysicalCameraId = outputPhysicalCameraId
@@ -3333,14 +3355,26 @@ class Camera2Controller(private val context: Context) {
                     outputCameraIdForStreams = openCameraId
                     outputCharacteristicsForStreams = openCharacteristics
                     rawOutput = null
-                    captureFormat = ImageFormat.YUV_420_888
+                    maximumResolutionCapabilitySize = maximumResolutionJpegSize(outputCharacteristicsForStreams)
+                    maximumResolutionSize = if (requestsMaximumResolution) {
+                        maximumResolutionCapabilitySize
+                    } else {
+                        null
+                    }
+                    captureFormat = when {
+                        maximumResolutionSize != null -> ImageFormat.JPEG
+                        wantsP010 -> ImageFormat.YCBCR_P010.takeIf {
+                            isOutputFormatAdvertised(outputCharacteristicsForStreams, it)
+                        } ?: ImageFormat.YUV_420_888
+                        else -> ImageFormat.YUV_420_888
+                    }
                 }
                 previewSize = CameraUtils.getFixedPreviewSize(outputCharacteristicsForStreams, aspectRatio)
                 surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
-                val captureSize = if (rawOutput != null) {
-                    rawOutput.size
-                } else {
-                    CameraUtils.getBestCaptureSize(outputCharacteristicsForStreams, aspectRatio, captureFormat)
+                val captureSize = when {
+                    rawOutput != null -> rawOutput.size
+                    maximumResolutionSize != null && captureFormat == ImageFormat.JPEG -> maximumResolutionSize
+                    else -> CameraUtils.getBestCaptureSize(outputCharacteristicsForStreams, aspectRatio, captureFormat)
                 }
 
                 val isP3Supported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -3349,12 +3383,20 @@ class Camera2Controller(private val context: Context) {
                         ?.contains(ColorSpace.Named.DISPLAY_P3) == true
                 } else false
 
-                _state.value = _state.value.copy(
-                    isP3Supported = isP3Supported,
-                    currentCaptureSize = captureSize
-                )
+                _state.update { current ->
+                    current.copy(
+                        isP3Supported = isP3Supported,
+                        currentCaptureSize = captureSize,
+                        supportsMaximumResolutionCapture = maximumResolutionCapabilitySize != null,
+                    )
+                }
+                if (state.value.photoMegapixelMode == PhotoMegapixelMode.M50 && maximumResolutionSize == null) {
+                    PLog.w(TAG, "50 MP photo requested but this camera exposes no maximum-resolution JPEG stream; using the normal photo output")
+                }
 
-                val readerMaxImages = resolveImageReaderMaxImages()
+                // 50 MP JPEGs are large buffers and this mode captures a single frame.
+                // Keep the queue bounded instead of reserving the multi-frame RAW/HDR depth.
+                val readerMaxImages = if (maximumResolutionSize != null) 2 else resolveImageReaderMaxImages()
                 imageReaderMaxImages = readerMaxImages
 
                 PLog.d(
@@ -3364,9 +3406,10 @@ class Camera2Controller(private val context: Context) {
                             ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
                             ImageFormat.RAW10 -> "RAW10"
                             ImageFormat.YCBCR_P010 -> "P010"
+                            ImageFormat.JPEG -> if (maximumResolutionSize != null) "MAX_RES_JPEG" else "JPEG"
                             else -> "YUV"
                         }
-                    }, stream=$outputCameraIdForStreams, isP3Supported: $isP3Supported, imageReaderMaxImages: $readerMaxImages"
+                    }, stream=$outputCameraIdForStreams, maxResolution=${maximumResolutionSize != null}, isP3Supported: $isP3Supported, imageReaderMaxImages: $readerMaxImages"
                 )
                 imageReader = ImageReader.newInstance(
                     captureSize.width,
@@ -3815,7 +3858,15 @@ class Camera2Controller(private val context: Context) {
                     add(createOutputConfiguration(eisSurface))
                 }
                 reader?.surface?.let { captureSurface ->
-                    add(createOutputConfiguration(captureSurface))
+                    add(createOutputConfiguration(captureSurface).apply {
+                        if (
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                            _state.value.isMaximumResolutionPhoto &&
+                            reader.imageFormat == ImageFormat.JPEG
+                        ) {
+                            addSensorPixelModeUsed(CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
+                        }
+                    })
                 }
             }
             val sessionConfig = SessionConfiguration(
@@ -10959,6 +11010,16 @@ class Camera2Controller(private val context: Context) {
         _state.update { it.copy(autoHdrEnabled = enabled) }
     }
 
+    fun setPhotoMegapixelMode(mode: PhotoMegapixelMode) {
+        if (_state.value.photoMegapixelMode == mode) return
+        _state.update { it.copy(photoMegapixelMode = mode) }
+        if (_state.value.captureMode == CaptureMode.PHOTO) {
+            previewSurfaceTexture?.let { texture ->
+                reconfigureCaptureMode(texture)
+            }
+        }
+    }
+
     fun setRefocusCaptureSettings(enabled: Boolean, frameCount: Int) {
         _state.update {
             it.copy(
@@ -11874,6 +11935,7 @@ class Camera2Controller(private val context: Context) {
             val currentState = stillFlashCaptureState ?: _state.value
             val useMultiFrameTorch = isMultiFrameTorchCaptureActive
             if (
+                !currentState.isMaximumResolutionPhoto &&
                 currentState.refocusCaptureEnabled &&
                 currentState.captureMode == CaptureMode.PHOTO &&
                 !isRawCapture &&
@@ -11930,6 +11992,40 @@ class Camera2Controller(private val context: Context) {
                     isRawCapture = isRawCapture,
                     currentState = currentState,
                 )
+                if (currentState.isMaximumResolutionPhoto && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val deviceRotation = Math.floorMod(OrientationObserver.captureRotationDegrees.toInt(), 360)
+                    val sensorOrientation = Math.floorMod(cachedSensorOrientation, 360)
+                    val jpegOrientation = if (isCurrentCameraFrontFacing()) {
+                        Math.floorMod(sensorOrientation - deviceRotation, 360)
+                    } else {
+                        Math.floorMod(sensorOrientation + deviceRotation, 360)
+                    }
+                    set(
+                        CaptureRequest.SENSOR_PIXEL_MODE,
+                        CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION,
+                    )
+                    set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
+                    set(CaptureRequest.JPEG_QUALITY, 100.toByte())
+                    setZslDisabledIfSupported(this)
+                    applyHighQualityStillPostProcessingSettings(this)
+                    selectBestMode(
+                        availableEdgeModes,
+                        CaptureRequest.EDGE_MODE_HIGH_QUALITY,
+                        CaptureRequest.EDGE_MODE_FAST,
+                        CaptureRequest.EDGE_MODE_OFF,
+                    )?.let { set(CaptureRequest.EDGE_MODE, it) }
+                    selectBestMode(
+                        availableNoiseReductionModes,
+                        CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY,
+                        CaptureRequest.NOISE_REDUCTION_MODE_FAST,
+                        CaptureRequest.NOISE_REDUCTION_MODE_OFF,
+                    )?.let { set(CaptureRequest.NOISE_REDUCTION_MODE, it) }
+                    PLog.i(
+                        TAG,
+                        "Submitting native maximum-resolution still capture: " +
+                            reader.width + "x" + reader.height + " jpegOrientation=" + jpegOrientation,
+                    )
+                }
 
                 // A previous multi-frame/torch sequence may have used AE_LOCK. Standard
                 // single-frame flash capture must let the flash AE routine choose exposure.
@@ -12879,6 +12975,10 @@ class Camera2Controller(private val context: Context) {
      * 启动连拍
      */
     fun startBurstCapture(onAccepted: (() -> Unit)? = null) {
+        if (_state.value.isMaximumResolutionPhoto) {
+            PLog.w(TAG, "Continuous burst is unavailable in native maximum-resolution photo mode")
+            return
+        }
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
             handler.post { startBurstCapture(onAccepted) }

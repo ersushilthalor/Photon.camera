@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.data
 
 import android.content.Context
+import com.hinnka.mycamera.camera.PhotoMegapixelMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -8,6 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 data class OppoPhotoSettings(
+    val photoMegapixelMode: PhotoMegapixelMode = PhotoMegapixelMode.M12,
     val autoHdrEnabled: Boolean = true,
     val fastShutterEnabled: Boolean = true,
     val fastShutterFps: Int = 20,
@@ -146,6 +148,7 @@ class OppoPhotoSettingsRepository(context: Context) {
             .putBoolean("fast_shutter", updated.fastShutterEnabled)
             .putInt("fast_shutter_fps", updated.fastShutterFps)
             .putBoolean("refocus", updated.refocusEnabled)
+            .putString("photo_megapixel_mode", updated.photoMegapixelMode.name)
             .putInt("refocus_frame_count", updated.refocusFrameCount)
             .putBoolean("custom_pipeline", updated.customPipelineEnabled)
             .putString("pipeline_profile", updated.pipelineProfile)
@@ -185,6 +188,9 @@ class OppoPhotoSettingsRepository(context: Context) {
             fastShutterEnabled = preferences.getBoolean("fast_shutter", true),
             fastShutterFps = preferences.getInt("fast_shutter_fps", 20),
             refocusEnabled = preferences.getBoolean("refocus", false),
+            photoMegapixelMode = runCatching {
+                PhotoMegapixelMode.valueOf(preferences.getString("photo_megapixel_mode", PhotoMegapixelMode.M12.name) ?: PhotoMegapixelMode.M12.name)
+            }.getOrDefault(PhotoMegapixelMode.M12),
             refocusFrameCount = preferences.getInt("refocus_frame_count", 3),
             customPipelineEnabled = preferences.getBoolean("custom_pipeline", false),
             pipelineProfile = profile,

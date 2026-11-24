@@ -2517,6 +2517,7 @@ fun CameraScreen(
             oppoPhotoSettings = oppoPhotoSettings,
             onOppoPhotoSettingsChange = viewModel::updateOppoPhotoSettings,
             refocusAvailable = state.minimumFocusDistance > 0f,
+            maximumResolutionAvailable = state.supportsMaximumResolutionCapture,
             contentTopPadding = CameraTopBarBaseTopPadding + topSafePadding,
         )
 

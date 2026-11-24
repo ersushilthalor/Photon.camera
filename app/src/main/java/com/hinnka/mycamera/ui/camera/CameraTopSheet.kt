@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.PhotoMegapixelMode
 import com.hinnka.mycamera.data.OppoPhotoSettings
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
@@ -157,6 +158,7 @@ fun CameraTopSheet(
     oppoPhotoSettings: OppoPhotoSettings,
     onOppoPhotoSettingsChange: (OppoPhotoSettings) -> Unit,
     refocusAvailable: Boolean,
+    maximumResolutionAvailable: Boolean = false,
     contentTopPadding: Dp = CameraTopSheetContentTopPadding,
     modifier: Modifier = Modifier,
 ) {
@@ -164,6 +166,10 @@ fun CameraTopSheet(
     var showRenderingEngineSheet by rememberSaveable { mutableStateOf(false) }
     var showOppoPipelineSheet by rememberSaveable { mutableStateOf(false) }
     var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
+    val isNative50MActive =
+        maximumResolutionAvailable &&
+            !useRaw &&
+            oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50
 
     fun handleContentManagementAction(action: () -> Unit) {
         showContentManagementOptions = false
@@ -271,6 +277,7 @@ fun CameraTopSheet(
                                 },
                                 selected = useJpgMax,
                                 checked = useJpgMax,
+                                enabled = !isNative50MActive,
                                 showStatusDot = true,
                                 onClick = { onJpgMaxToggle(!useJpgMax) },
                                 modifier = itemModifier
@@ -282,6 +289,7 @@ fun CameraTopSheet(
                                 },
                                 selected = useMultipleExposure,
                                 checked = useMultipleExposure,
+                                enabled = !isNative50MActive,
                                 showStatusDot = true,
                                 onClick = { onMultipleExposureToggle(!useMultipleExposure) },
                                 modifier = itemModifier
@@ -289,11 +297,40 @@ fun CameraTopSheet(
                         }
 
                         PhotoMenuQuickTile(
+                            title = "PHOTO SIZE",
+                            subtitle = when {
+                                oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50 && !maximumResolutionAvailable -> "Unavailable"
+                                isNative50MActive -> "50 MP"
+                                else -> "12 MP"
+                            },
+                            accentTitle = false,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Layers, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
+                            selected = isNative50MActive,
+                            checked = isNative50MActive,
+                            enabled = !useRaw && (maximumResolutionAvailable ||
+                                oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50),
+                            showStatusDot = true,
+                            onClick = {
+                                val nextMode = if (oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50) {
+                                    PhotoMegapixelMode.M12
+                                } else {
+                                    PhotoMegapixelMode.M50
+                                }
+                                onOppoPhotoSettingsChange(
+                                    oppoPhotoSettings.copy(photoMegapixelMode = nextMode)
+                                )
+                            },
+                            modifier = itemModifier
+                        )
+                        PhotoMenuQuickTile(
                             title = stringResource(R.string.settings_ultra_hdr_gain_map),
                             accentTitle = false,
                             leadingIcon = { tint -> PhotoMenuHdrGlyph(tint) },
                             selected = ultraHdrEnabled,
                             checked = ultraHdrEnabled,
+                            enabled = !isNative50MActive,
                             showStatusDot = true,
                             onClick = { onUltraHdrToggle(!ultraHdrEnabled) },
                             modifier = itemModifier
@@ -367,7 +404,9 @@ fun CameraTopSheet(
                             leadingIcon = { tint -> PhotoMenuRefocusGlyph(tint) },
                             selected = oppoPhotoSettings.refocusEnabled,
                             checked = oppoPhotoSettings.refocusEnabled,
-                            enabled = refocusAvailable && !isProfessionalMode,
+                            enabled = refocusAvailable &&
+                                !isProfessionalMode &&
+                                !isNative50MActive,
                             showStatusDot = true,
                             onClick = {
                                 val enabled = !oppoPhotoSettings.refocusEnabled
@@ -387,7 +426,7 @@ fun CameraTopSheet(
                             },
                             selected = oppoPhotoSettings.fastShutterEnabled,
                             checked = oppoPhotoSettings.fastShutterEnabled,
-                            enabled = !isProfessionalMode,
+                            enabled = !isProfessionalMode && !isNative50MActive,
                             showStatusDot = true,
                             onClick = {
                                 onOppoPhotoSettingsChange(
@@ -403,6 +442,7 @@ fun CameraTopSheet(
                                 Icon(AppIcons.AutoAwesome, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
                             },
                             selected = isProfessionalMode || oppoPhotoSettings.customPipelineEnabled,
+                            enabled = !isNative50MActive,
                             trailingIcon = AppIcons.ChevronRight,
                             onClick = {
                                 if (isProfessionalMode) {

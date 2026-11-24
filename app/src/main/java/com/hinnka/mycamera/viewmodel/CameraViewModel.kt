@@ -635,6 +635,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             oppoPhotoSettings.collect { settings ->
                 cameraController.setAutoHdrEnabled(settings.autoHdrEnabled)
                 cameraController.setFastShutterTargetFps(settings.fastShutterFps)
+                cameraController.setPhotoMegapixelMode(settings.photoMegapixelMode)
                 cameraController.setRefocusCaptureSettings(
                     enabled = settings.refocusEnabled,
                     frameCount = settings.refocusFrameCount,
@@ -3812,7 +3813,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val captureInfo = first.captureInfo
         val characteristics = first.characteristics
         val captureResult = first.captureResult
-        if (settings.multipleExposure) {
+        if (photo.state.isMaximumResolutionPhoto) {
+            // Native maximum-resolution JPEG is already processed by the sensor ISP.
+            // Preserve its bytes and route around YUV/HDR/RAW multi-frame compositors.
+            PLog.i(
+                TAG,
+                "Dispatching native maximum-resolution photo: " +
+                    "${first.image.width}x${first.image.height} format=${first.image.format}",
+            )
+            saveImage(
+                first.image,
+                captureInfo,
+                characteristics,
+                captureResult,
+                settings.portraitMask,
+                settings,
+            )
+        } else if (settings.multipleExposure) {
             handleMultipleExposureFrameCaptured(first.image, captureInfo, settings)
         } else if (photo.state.refocusCapturing) {
             processRefocusCapture(photo, settings)
@@ -3938,6 +3955,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 开始连拍
      */
     fun startContinuousCapture() {
+        if (state.value.isMaximumResolutionPhoto) return
         if (state.value.useRaw && state.value.isRawSupported) return
         val photoSettings = oppoPhotoSettings.value
         if (!photoSettings.fastShutterEnabled) return
