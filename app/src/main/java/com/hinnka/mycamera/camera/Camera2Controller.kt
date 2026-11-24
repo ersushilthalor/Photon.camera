@@ -3955,9 +3955,11 @@ class Camera2Controller(private val context: Context) {
             (logicalSpatialOutput || dualAspectRecordingActive) &&
             _state.value.videoRecordingState.shouldAttachCameraInput()
         ) spatialVideoRecorder.cameraInputSurface else null
+        // Keep the ultra-wide preview output attached for the lifetime of Special Video.
+        // Visibility is a UI-only choice; adding/removing this output on every lens tap would
+        // force a CameraCaptureSession rebuild and defeat instant preview handoff.
         val spatialPreviewSurface = if (
-            captureMode == CaptureMode.VIDEO && logicalSpatialOutput &&
-            _spatialVideoShowUltraWidePreview.value
+            captureMode == CaptureMode.VIDEO && logicalSpatialOutput
         ) spatialVideoStandbyPreviewSurface?.takeIf { it.isValid } else null
         val usesUltraWideDualCapture = captureMode == CaptureMode.VIDEO &&
             dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE &&
@@ -4708,6 +4710,46 @@ class Camera2Controller(private val context: Context) {
         val state = _state.value
         val currentCamera = state.getCurrentCameraInfo() ?: return false
         val targetCamera = state.availableCameras.firstOrNull { it.cameraId == targetCameraId } ?: return false
+
+        // Special Video already owns both camera streams. Switching between its paired
+        // 1x and 0.5x lenses must only change which live preview is displayed; reopening
+        // the primary CameraDevice here would stall the viewfinder and interrupt a paired
+        // recording even though the standby ultra-wide stream is already running.
+        if (spatialVideoEnabled) {
+            val targetRatio = targetCamera.intrinsicZoomRatio
+            val isSpecialVideoPairLens =
+                targetCamera.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                    targetRatio.isFinite() &&
+                    (abs(targetRatio - 1f) <= 0.15f || targetRatio in 0.2f..0.85f)
+            if (!isSpecialVideoPairLens) return false
+
+            val expectedPrimaryId = spatialVideoPrimaryCameraId
+            val primaryReady = cameraDevice != null &&
+                captureSession != null &&
+                (expectedPrimaryId == null || activeOpenCameraId == expectedPrimaryId)
+            val previewSurfaceReady = spatialVideoStandbyPreviewSurface?.isValid == true
+            val wideReady = when (spatialVideoStreamingMode) {
+                SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL ->
+                    primaryReady && previewSurfaceReady
+                SpatialVideoStreamingMode.PERSISTENT_DUAL_SESSION,
+                SpatialVideoStreamingMode.CONCURRENT_DEVICES ->
+                    spatialVideoStandbyCameraDevice?.id == spatialVideoUltraWidePhysicalCameraId &&
+                        spatialVideoStandbySession != null &&
+                        previewSurfaceReady
+                else -> false
+            }
+            if (primaryReady && wideReady) {
+                PLog.i(
+                    TAG,
+                    "Special Video lens preview handoff in-place: selected=${targetCamera.cameraId}, " +
+                        "ratio=$targetRatio, main=$spatialVideoMainPhysicalCameraId, " +
+                        "ultraWide=$spatialVideoUltraWidePhysicalCameraId"
+                )
+                return true
+            }
+            return false
+        }
+
         val logicalCameraId = currentCamera.logicalCameraId ?: return false
         if (targetCamera.logicalCameraId != logicalCameraId) return false
         if (runCatching { targetCamera.getOpenCameraId() }.getOrNull() != logicalCameraId) return false
@@ -9532,17 +9574,8 @@ class Camera2Controller(private val context: Context) {
     fun setSpatialVideoShowUltraWidePreview(enabled: Boolean) {
         _spatialVideoShowUltraWidePreview.value = enabled
         specialVideoPreferences.edit().putBoolean("show_ultra_wide_preview", enabled).apply()
-        if (spatialVideoEnabled) {
-            cameraHandler?.post {
-                if (spatialVideoStreamingMode == SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL) {
-                    createPreviewSession(openGeneration = cameraOpenGeneration)
-                } else if (enabled && spatialVideoStandbyPreviewSurface != null) {
-                    spatialVideoUltraWidePhysicalCameraId?.let { startSpatialVideoStandbyCamera(it) }
-                } else if (spatialVideoStandbyCameraDevice != null) {
-                    createSpatialVideoStandbySession("ultra-wide preview visibility changed")
-                }
-            }
-        }
+        // The secondary preview surface stays attached while Special Video is active.
+        // This setting only controls whether the UI shows the small inset when 1x is selected.
     }
 
     fun setSpatialVideoPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) {
@@ -9630,7 +9663,12 @@ class Camera2Controller(private val context: Context) {
                     pair.mainCameraInfo.outputPhysicalCameraId
             }
             logicalMultiCameraAutoSwitchActive = false
+            // Special Video always starts on its primary 1x stream. The ultra-wide
+            // CameraDevice is already running in parallel and is selected as a preview source
+            // only when the user taps its lens control.
             _state.value = _state.value.copy(
+                currentCameraId = pair.mainCameraInfo.cameraId,
+                currentLensType = pair.mainCameraInfo.lensType,
                 zoomRatio = 1f,
                 zoomPanX = 0f,
                 zoomPanY = 0f,
@@ -9926,9 +9964,9 @@ class Camera2Controller(private val context: Context) {
         val device = spatialVideoStandbyCameraDevice ?: return
         if (!spatialVideoEnabled) return
         val encoderSurface = spatialVideoRecorder.cameraInputSurface
-        val previewSurface = spatialVideoStandbyPreviewSurface?.takeIf {
-            _spatialVideoShowUltraWidePreview.value && it.isValid
-        }
+        // Keep this preview output streaming even when its inset is hidden. The same
+        // live frames are promoted to the full viewfinder when the user selects 0.5x.
+        val previewSurface = spatialVideoStandbyPreviewSurface?.takeIf { it.isValid }
         val outputSurfaces = buildList {
             previewSurface?.let(::add)
             encoderSurface?.takeIf { it.isValid }?.let(::add)
