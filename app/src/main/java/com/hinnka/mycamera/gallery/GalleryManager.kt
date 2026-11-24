@@ -2741,6 +2741,15 @@ object GalleryManager {
                 )
             }
 
+            ImageFormat.JPEG -> {
+                saveJpegPhoto(
+                    context = context,
+                    photoId = photoId,
+                    image = image,
+                    shouldAutoSave = shouldAutoSave,
+                )
+            }
+
             ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
                 saveRawPhoto(
                     context,
@@ -2767,6 +2776,80 @@ object GalleryManager {
             else -> {
                 PLog.e(TAG, "Unsupported image format: $format")
             }
+        }
+    }
+
+    /**
+     * Preserve a native Camera2 maximum-resolution JPEG without decoding it into a full-size
+     * Bitmap. This avoids allocating several hundred megabytes for 50 MP captures and keeps the
+     * sensor JPEG payload intact.
+     */
+    private suspend fun saveJpegPhoto(
+        context: Context,
+        photoId: String,
+        image: SafeImage,
+        shouldAutoSave: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val metadata = loadMetadata(context, photoId)
+                ?: throw IOException("Missing capture metadata for native JPEG $photoId")
+            val plane = image.image.planes.firstOrNull()
+                ?: throw IOException("Camera2 JPEG image contains no data plane")
+            val buffer = plane.buffer.duplicate()
+            if (!buffer.hasRemaining()) {
+                throw IOException("Camera2 JPEG image buffer is empty")
+            }
+
+            val photoDir = getPhotoDir(context, photoId, true)
+            val photoFile = File(photoDir, PHOTO_FILE)
+            val tempFile = File(photoDir, "temp_native_capture.jpg")
+            FileOutputStream(tempFile).use { output ->
+                val chunk = ByteArray(64 * 1024)
+                while (buffer.hasRemaining()) {
+                    val count = minOf(buffer.remaining(), chunk.size)
+                    buffer.get(chunk, 0, count)
+                    output.write(chunk, 0, count)
+                }
+                output.fd.sync()
+            }
+            if (tempFile.length() <= 0L || !tempFile.renameTo(photoFile)) {
+                tempFile.delete()
+                throw IOException("Unable to publish native JPEG capture for $photoId")
+            }
+
+            markProcessingPhotoDisplayReady(photoId, photoFile, metadata)
+            PLog.i(
+                TAG,
+                "Native Camera2 JPEG saved without bitmap decode: photoId=$photoId " +
+                    "size=${metadata.width}x${metadata.height} bytes=${photoFile.length()}",
+            )
+
+            if (shouldAutoSave) {
+                val dateTaken = metadata.dateTaken ?: System.currentTimeMillis()
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+                    .format(Date(dateTaken))
+                val destination = resolvePhotoExportDestination(context)
+                val uri = exportFileToConfiguredPhotoStorage(
+                    context = context,
+                    destination = destination,
+                    collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    displayName = "PhotonCamera_${timestamp}_50M.jpg",
+                    mimeType = "image/jpeg",
+                    sourceFile = photoFile,
+                    dateTaken = dateTaken,
+                )
+                if (uri == null) {
+                    PLog.e(TAG, "Native JPEG was saved internally but export failed: $photoId")
+                } else {
+                    updateMetadata(context, photoId) { current ->
+                        current.copy(exportedUris = current.exportedUris + uri.toString())
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            PLog.e(TAG, "Failed to save native Camera2 JPEG: $photoId", error)
+        } finally {
+            image.close()
         }
     }
 
