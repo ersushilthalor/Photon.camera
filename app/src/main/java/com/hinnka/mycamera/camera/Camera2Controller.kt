@@ -3767,10 +3767,16 @@ class Camera2Controller(private val context: Context) {
     private fun applyPendingUltraWideAeHandoff(builder: CaptureRequest.Builder) {
         val reading = pendingUltraWideAeHandoff ?: return
         val ageMs = SystemClock.elapsedRealtime() - reading.sampledAtElapsedRealtimeMs
-        if (reading.physicalCameraId != activeOutputPhysicalCameraId ||
+        val currentState = _state.value
+        val currentCamera = currentState.getCurrentCameraInfo()
+        val currentTargetZoom = getTargetZoomRatioByMain(currentState, currentCamera)
+        val targetsUltraWide = reading.physicalCameraId == activeOutputPhysicalCameraId ||
+            (logicalMultiCameraAutoSwitchActive &&
+                reading.physicalCameraId == ultraWideAeMeteringReaderPhysicalCameraId &&
+                currentTargetZoom <= 0.85f)
+        if (!targetsUltraWide ||
             ageMs !in 0L..ULTRA_WIDE_AE_HANDOFF_MAX_AGE_MS ||
-            !_state.value.isAutoExposure ||
-            !isManualSensorSupported
+            !currentState.isAutoExposure
         ) {
             pendingUltraWideAeHandoff = null
             return
@@ -3793,14 +3799,28 @@ class Camera2Controller(private val context: Context) {
                 pendingUltraWideAeHandoff = null
                 return
             }
+        val physicalCapabilities = physicalCharacteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+            ?: intArrayOf()
+        if (!isManualSensorSupported &&
+            !physicalCapabilities.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
+        ) {
+            pendingUltraWideAeHandoff = null
+            return
+        }
+        val maxFrameDurationNs = physicalCharacteristics.get(CameraCharacteristics.SENSOR_INFO_MAX_FRAME_DURATION)
+            ?: Long.MAX_VALUE
         val exposureTimeNs = reading.exposureTimeNs.coerceIn(exposureRange.lower, exposureRange.upper)
         val sensitivityIso = reading.sensitivityIso.coerceIn(sensitivityRange.lower, sensitivityRange.upper)
+        val frameDurationNs = reading.frameDurationNs
+            .coerceAtLeast(exposureTimeNs)
+            .coerceAtMost(maxFrameDurationNs)
 
         try {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             builder.set(CaptureRequest.CONTROL_AE_LOCK, false)
             builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTimeNs)
             builder.set(CaptureRequest.SENSOR_SENSITIVITY, sensitivityIso)
+            builder.set(CaptureRequest.SENSOR_FRAME_DURATION, frameDurationNs)
             builder.setTag(UltraWideAeHandoffRequestTag(reading.physicalCameraId))
             ultraWideAeHandoffActiveForSession = true
             pendingUltraWideAeHandoff = null
@@ -3821,9 +3841,7 @@ class Camera2Controller(private val context: Context) {
         request: CaptureRequest,
     ) {
         val tag = request.tag as? UltraWideAeHandoffRequestTag ?: return
-        if (session !== captureSession || !ultraWideAeHandoffActiveForSession ||
-            tag.physicalCameraId != activeOutputPhysicalCameraId
-        ) {
+        if (session !== captureSession || !ultraWideAeHandoffActiveForSession) {
             return
         }
 
@@ -7711,6 +7729,11 @@ class Camera2Controller(private val context: Context) {
             }
             return
         }
+        val stateBeforeZoomRequest = _state.value
+        val previousLogicalZoomRatio = getTargetZoomRatioByMain(
+            stateBeforeZoomRequest,
+            stateBeforeZoomRequest.getCurrentCameraInfo(),
+        )
         val requestedRatio = if (
             spatialVideoEnabled || (dualCaptureEnabled && _dualCaptureSource.value == DualCaptureSource.ULTRA_WIDE)
         ) 1f else sanitizeZoomRatio(ratio)
@@ -7784,6 +7807,15 @@ class Camera2Controller(private val context: Context) {
                     useFreeformPan = !logicalAutoSwitch && _state.value.zoomPanEnabled &&
                         _state.value.getCurrentCameraInfo()?.supportsFreeformZoomPan == true,
                 )
+            }
+            if (logicalAutoSwitch && previousLogicalZoomRatio > 0.85f &&
+                clampedDeviceZoomRatio <= 0.85f
+            ) {
+                pendingUltraWideAeHandoff = latestUltraWideAeReading?.takeIf { reading ->
+                    reading.physicalCameraId == ultraWideAeMeteringReaderPhysicalCameraId &&
+                        SystemClock.elapsedRealtime() - reading.sampledAtElapsedRealtimeMs in 0L..ULTRA_WIDE_AE_HANDOFF_MAX_AGE_MS
+                }
+                applyPendingUltraWideAeHandoff(builder)
             }
             if (_state.value.meteringPoint != null) {
                 applyMeteringRegions()
