@@ -3813,7 +3813,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val captureInfo = first.captureInfo
         val characteristics = first.characteristics
         val captureResult = first.captureResult
-        if (settings.multipleExposure) {
+        if (photo.state.isMaximumResolutionPhoto) {
+            // Native maximum-resolution JPEG is already processed by the sensor ISP.
+            // Preserve its bytes and route around YUV/HDR/RAW multi-frame compositors.
+            PLog.i(
+                TAG,
+                "Dispatching native maximum-resolution photo: " +
+                    "${first.image.width}x${first.image.height} format=${first.image.format}",
+            )
+            saveImage(
+                first.image,
+                captureInfo,
+                characteristics,
+                captureResult,
+                settings.portraitMask,
+                settings,
+            )
+        } else if (settings.multipleExposure) {
             handleMultipleExposureFrameCaptured(first.image, captureInfo, settings)
         } else if (photo.state.refocusCapturing) {
             processRefocusCapture(photo, settings)
