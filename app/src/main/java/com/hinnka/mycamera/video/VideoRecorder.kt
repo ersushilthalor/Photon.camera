@@ -561,14 +561,23 @@ class VideoRecorder(
                     val videoEndPtsUs = normalizedSpecialVideoEndPtsUs()
                     val audioEndPtsUs = normalizedSpecialAudioEndPtsUs()
                     val tailOverflowed = synchronized(muxerLock) { sharedTailOverflowed }
+                    val stabilizationState = renderer?.stabilizationDiagnostics()
+                        ?: "renderer-unavailable"
+                    val timestampSource = if (
+                        requestedCameraTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+                    ) {
+                        "REALTIME"
+                    } else {
+                        "UNKNOWN(${requestedCameraTimestampSource})"
+                    }
                     PLog.i(
                         SPECIAL_TIMELINE_TAG,
                         "Recorder EOS: stream=${sharedTimelineStreamName ?: "paired"}, " +
                             "firstVideoSourcePtsUs=${firstSharedVideoSourcePtsUs.takeIf { it != UNSET_TIMESTAMP }}, " +
                             "lastVideoEndPtsUs=$videoEndPtsUs, lastAudioPtsUs=$audioEndPtsUs, " +
                             "stopCutoffUs=${sharedTimelineStopTimeUs.takeIf { it != UNSET_TIMESTAMP }}, " +
-                            "timestampSource=${requestedCameraTimestampSource}, " +
-                            "EIS=${requestedEnhancedStabilization}, tailOverflowed=$tailOverflowed"
+                            "timestampSource=$timestampSource, EIS=$stabilizationState, " +
+                            "tailOverflowed=$tailOverflowed"
                     )
                     sharedTimelineVideoEndReporter?.invoke(videoEndPtsUs, tailOverflowed)
                     sharedEndReported = true
