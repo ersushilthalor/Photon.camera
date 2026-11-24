@@ -20,6 +20,7 @@ import java.nio.ByteBuffer
  */
 object SpatialVideoStore {
     private const val TAG = "SpatialVideoStore"
+    private const val SPECIAL_TIMELINE_TAG = "SpecialVideoTimeline"
     private const val DIRECTORY_NAME = "spatial_video"
     private const val SUFFIX = "_0_5x.mp4"
     private const val FALLBACK_BUFFER_SIZE = 4 * 1024 * 1024
@@ -180,11 +181,42 @@ object SpatialVideoStore {
             }
         }.getOrNull()
 
+        val primaryVideoEndUs = lastTrackSampleTimeUs(
+            context = context,
+            uri = primaryVideoUri,
+            file = null,
+            trackMimePrefix = "video/",
+        )
+        val ultraWideVideoEndUs = lastTrackSampleTimeUs(
+            context = context,
+            uri = null,
+            file = ultraWideFile,
+            trackMimePrefix = "video/",
+        )
+        val videoEndDeltaUs = if (primaryVideoEndUs != null && ultraWideVideoEndUs != null) {
+            kotlin.math.abs(primaryVideoEndUs - ultraWideVideoEndUs)
+        } else {
+            null
+        }
+        PLog.i(
+            SPECIAL_TIMELINE_TAG,
+            "Final muxed Special Video video-track ends: 1x=$primaryVideoEndUs us, " +
+                "0.5x=$ultraWideVideoEndUs us, deltaUs=$videoEndDeltaUs"
+        )
+        if (videoEndDeltaUs != null && videoEndDeltaUs > 40_000L) {
+            PLog.e(
+                SPECIAL_TIMELINE_TAG,
+                "Final Special Video video tracks differ by more than 40ms: " +
+                    "1xEndUs=$primaryVideoEndUs, 0.5xEndUs=$ultraWideVideoEndUs, " +
+                    "deltaUs=$videoEndDeltaUs"
+            )
+        }
+
         if (primaryDurationMs != null && ultraWideDurationMs != null) {
             val deltaMs = kotlin.math.abs(primaryDurationMs - ultraWideDurationMs)
             PLog.i(
                 TAG,
-                "Final Special Video file durations: main=${primaryDurationMs}ms, " +
+                "Final Special Video container durations: main=${primaryDurationMs}ms, " +
                     "ultraWide=${ultraWideDurationMs}ms, delta=${deltaMs}ms"
             )
             if (deltaMs > 100L) {
@@ -200,6 +232,53 @@ object SpatialVideoStore {
                 "Unable to read final Special Video durations: main=$primaryDurationMs, " +
                     "ultraWide=$ultraWideDurationMs"
             )
+        }
+    }
+
+    /**
+     * Reads the last encoded sample PTS for one track. This deliberately inspects the actual
+     * video track rather than relying on container duration, which may be extended by AAC audio.
+     */
+    private fun lastTrackSampleTimeUs(
+        context: Context,
+        uri: Uri?,
+        file: File?,
+        trackMimePrefix: String,
+    ): Long? {
+        val extractor = MediaExtractor()
+        var descriptor: ParcelFileDescriptor? = null
+        return try {
+            if (file != null) {
+                extractor.setDataSource(file.absolutePath)
+            } else {
+                val sourceUri = uri ?: return null
+                descriptor = context.contentResolver.openFileDescriptor(sourceUri, "r")
+                    ?: return null
+                extractor.setDataSource(descriptor!!.fileDescriptor)
+            }
+            val trackIndex = (0 until extractor.trackCount).firstOrNull { index ->
+                extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)
+                    ?.startsWith(trackMimePrefix) == true
+            } ?: return null
+            extractor.selectTrack(trackIndex)
+            var lastSampleTimeUs: Long? = null
+            while (true) {
+                val sampleTimeUs = extractor.sampleTime
+                if (sampleTimeUs < 0L) break
+                lastSampleTimeUs = sampleTimeUs
+                if (!extractor.advance()) break
+            }
+            lastSampleTimeUs
+        } catch (error: Exception) {
+            PLog.w(
+                SPECIAL_TIMELINE_TAG,
+                "Unable to inspect final $trackMimePrefix track PTS: ${error.message}",
+                error,
+            )
+            null
+        } finally {
+            runCatching { extractor.release() }
+            runCatching { descriptor?.close() }
         }
     }
 
