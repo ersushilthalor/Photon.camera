@@ -11552,6 +11552,10 @@ class Camera2Controller(private val context: Context) {
             }
             if (!posted && continuation.isActive) continuation.resume(Unit)
         }
+        // stopRepeating prevents new requests but the final in-flight Camera2 results and
+        // SurfaceTexture callbacks can still arrive just afterwards. Keep the recorder's
+        // stop-drain gate open briefly so those final pre-cutoff frames reach the encoder.
+        kotlinx.coroutines.delay(100L)
     }
 
     fun stopVideoRecording() {
