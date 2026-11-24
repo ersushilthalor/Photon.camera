@@ -1229,6 +1229,20 @@ class RealtimeVideoRenderer(
         GLES30.glDisableVertexAttribArray(textureLocation)
     }
 
+    /**
+     * Runtime diagnostics for paired video recording stop. The requested setting alone does not
+     * prove that the shared MGC session stayed operational (the camera HAL can force it off).
+     */
+    @Synchronized
+    fun stabilizationDiagnostics(): String {
+        val session = stabilizationSession
+        return "requested=$enhancedStabilizationEnabled, " +
+            "started=$stabilizationSessionStarted, " +
+            "operational=${session?.isOperational == true}, " +
+            "poseReady=${session?.isPoseSourceReady == true}, " +
+            "pendingResults=${session?.pendingResultCount() ?: 0}"
+    }
+
     @Synchronized
     fun pauseStabilization() {
         stabilizationSession?.stop()
