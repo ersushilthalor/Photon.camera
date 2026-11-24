@@ -23,6 +23,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -88,6 +90,8 @@ import com.hinnka.mycamera.lut.VideoExportResolution
 import com.hinnka.mycamera.lut.VideoExportSupport
 import com.hinnka.mycamera.lut.VideoLutEffect
 import com.hinnka.mycamera.ui.camera.autoRotate
+import com.hinnka.mycamera.ui.camera.ZoomContinuousRuler
+import com.hinnka.mycamera.ui.camera.ZoomDisplayMode
 import com.hinnka.mycamera.ui.components.CustomSlider
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.PhysicalButton
@@ -105,6 +109,8 @@ import kotlinx.coroutines.withContext
 import me.saket.telephoto.zoomable.DoubleClickToZoomListener
 import java.io.File
 import kotlin.math.min
+import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.roundToInt
 import com.hinnka.mycamera.ui.icons.AppIcons
 import kotlin.math.max
@@ -117,15 +123,13 @@ private val GallerySheetSurface = Color(0xFF171717)
 private class VideoPreviewHandle {
     private var activeLease: Lease? = null
 
-    fun attach(player: ExoPlayer): Lease {
+    fun attach(vararg players: ExoPlayer): Lease {
         release()
-        return Lease(player).also { activeLease = it }
+        return Lease(players.toList()).also { activeLease = it }
     }
 
     fun release(lease: Lease) {
-        if (activeLease === lease) {
-            activeLease = null
-        }
+        if (activeLease === lease) activeLease = null
         lease.release()
     }
 
@@ -134,13 +138,13 @@ private class VideoPreviewHandle {
         activeLease = null
     }
 
-    class Lease(private val player: ExoPlayer) {
+    class Lease(private val players: List<ExoPlayer>) {
         private var isReleased = false
 
         fun release() {
             if (isReleased) return
             isReleased = true
-            player.release()
+            players.forEach { player -> runCatching { player.release() } }
         }
     }
 }
@@ -205,6 +209,8 @@ fun GalleryDetailScreen(
     var showMoreSheet by remember { mutableStateOf(false) }
     var showHdrStrengthPanel by remember { mutableStateOf(false) }
     var showRefocusViewer by remember { mutableStateOf(false) }
+    var showSpatialShareSheet by remember { mutableStateOf(false) }
+    val spatialShareSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val videoPreviewHandle = remember { VideoPreviewHandle() }
 
     val currentColorSpace = remember { mutableStateOf<ColorSpace?>(null) }
@@ -332,6 +338,69 @@ fun GalleryDetailScreen(
     }
 
     val currentPhoto = photos.getOrNull(pagerState.currentPage)
+    var activeSpatialZoom by rememberSaveable(currentPhoto?.id) { mutableFloatStateOf(1f) }
+    var hasCurrentSpatialUltraWide by remember(currentPhoto?.id) { mutableStateOf(false) }
+    val currentSpatialUltraWideFile = remember(context, currentPhoto?.id, currentPhoto?.uri, currentPhoto?.sourceUri) {
+        currentPhoto?.takeIf { it.isVideo }?.let { photo ->
+            SpatialVideoStore.ultraWideFile(context, photo.sourceUri ?: photo.uri)
+        }
+    }
+    val isCurrentSpatialVideo = currentPhoto?.isVideo == true && (
+        hasCurrentSpatialUltraWide ||
+            currentSpatialUltraWideFile?.let { it.isFile && it.length() > 0L } == true
+        )
+
+    fun shareSingleSpatialVideo() {
+        val photo = currentPhoto ?: return
+        val companionFile = currentSpatialUltraWideFile
+        showSpatialShareSheet = false
+        if (activeSpatialZoom >= 1f || companionFile == null) {
+            viewModel.sharePhoto(photo)
+            return
+        }
+        runCatching {
+            val wideUri = FileProvider.getUriForFile(
+                context,
+                context.packageName + ".fileprovider",
+                companionFile
+            )
+            val share = Intent(Intent.ACTION_SEND).apply {
+                type = "video/mp4"
+                putExtra(Intent.EXTRA_STREAM, wideUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = android.content.ClipData.newUri(context.contentResolver, "Ultra-wide video", wideUri)
+            }
+            context.startActivity(Intent.createChooser(share, "Share ultra-wide video"))
+        }.onFailure {
+            Toast.makeText(context, "Unable to share ultra-wide video", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun shareBothSpatialVideos() {
+        val photo = currentPhoto ?: return
+        val companionFile = currentSpatialUltraWideFile ?: return
+        showSpatialShareSheet = false
+        runCatching {
+            val primaryUri = photo.sourceUri ?: photo.uri
+            val wideUri = FileProvider.getUriForFile(
+                context,
+                context.packageName + ".fileprovider",
+                companionFile
+            )
+            val share = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = "video/mp4"
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(primaryUri, wideUri))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = android.content.ClipData.newUri(
+                    context.contentResolver, "Special Video", primaryUri
+                ).apply { addItem(android.content.ClipData.Item(wideUri)) }
+            }
+            context.startActivity(Intent.createChooser(share, "Share both lenses"))
+        }.onFailure {
+            Toast.makeText(context, "Unable to share both lens videos", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     val refocusSessionId = currentPhoto?.metadata?.customProperties?.get("oppo.refocusSessionId")
     var refocusPlaneFiles by remember(currentPhoto?.id) { mutableStateOf<List<File>>(emptyList()) }
     var refocusDepthBitmap by remember(currentPhoto?.id) { mutableStateOf<Bitmap?>(null) }
@@ -595,7 +664,11 @@ fun GalleryDetailScreen(
                         isLoading = isSharing,
                         enabled = currentPhoto != null && !isSharing && !isCurrentPhotoProcessing,
                         onClick = {
-                            currentPhoto?.let(viewModel::sharePhoto)
+                            if (isCurrentSpatialVideo) {
+                                showSpatialShareSheet = true
+                            } else {
+                                currentPhoto?.let(viewModel::sharePhoto)
+                            }
                         }
                     )
                 },
@@ -749,6 +822,13 @@ fun GalleryDetailScreen(
                                                 !isVideoExporting,
                                             viewModel = viewModel,
                                             previewHandle = videoPreviewHandle,
+                                            spatialZoomRatio = if (page == pagerState.currentPage) activeSpatialZoom else 1f,
+                                            onSpatialZoomChange = { ratio ->
+                                                if (page == pagerState.currentPage) activeSpatialZoom = ratio.coerceIn(0.5f, 2f)
+                                            },
+                                            onSpatialCompanionAvailability = { available ->
+                                                if (page == pagerState.currentPage) hasCurrentSpatialUltraWide = available
+                                            },
                                             modifier = Modifier.fillMaxSize()
                                         )
                                     } else {
@@ -1399,6 +1479,86 @@ fun GalleryDetailScreen(
                                 Spacer(modifier = Modifier.weight(1f))
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showSpatialShareSheet && currentPhoto != null && isCurrentSpatialVideo && currentSpatialUltraWideFile != null) {
+        AppModalBottomSheet(
+            containerColor = GallerySheetSurface,
+            shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+            scrimColor = Color.Black.copy(alpha = 0.64f),
+            onDismissRequest = { showSpatialShareSheet = false },
+            sheetState = spatialShareSheetState,
+            contentColor = GalleryToolbarContent,
+            dragHandle = {
+                BottomSheetDefaults.DragHandle(
+                    width = 36.dp,
+                    height = 4.dp,
+                    color = GalleryToolbarContent.copy(alpha = 0.24f)
+                )
+            }
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().navigationBarsPadding()
+                    .padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Share Special Video", color = GalleryToolbarContent, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Choose one lens recording or share both original videos.",
+                    color = GalleryToolbarContent.copy(alpha = 0.68f),
+                    fontSize = 13.sp
+                )
+                Surface(
+                    onClick = { shareSingleSpatialVideo() },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = GalleryToolbarButton,
+                    contentColor = GalleryToolbarContent
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 15.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null)
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Single video", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                if (activeSpatialZoom < 1f) "Share the selected 0.5x ultra-wide recording"
+                                else "Share the selected 1x main-camera recording",
+                                color = GalleryToolbarContent.copy(alpha = 0.65f),
+                                fontSize = 12.sp
+                            )
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null)
+                    }
+                }
+                Surface(
+                    onClick = { shareBothSpatialVideos() },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = GalleryToolbarButton,
+                    contentColor = GalleryToolbarContent
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 15.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(AppIcons.GridView, contentDescription = null)
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Both lenses", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Share the 1x and 0.5x videos together",
+                                color = GalleryToolbarContent.copy(alpha = 0.65f),
+                                fontSize = 12.sp
+                            )
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null)
                     }
                 }
             }
@@ -2248,14 +2408,17 @@ private fun Context.findActivity(): Activity? {
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun rememberVideoPlayerView(player: ExoPlayer?): PlayerView {
+private fun rememberVideoPlayerView(
+    player: ExoPlayer?,
+    showController: Boolean = true
+): PlayerView {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val playerView = remember(context) {
+    val playerView = remember(context, showController) {
         LayoutInflater.from(context).inflate(R.layout.view_motion_photo_player, null) as PlayerView
     }
 
-    DisposableEffect(player, playerView, lifecycle) {
+    DisposableEffect(player, playerView, lifecycle, showController) {
         fun updatePlayback() {
             val isForeground = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
             if (!isForeground && player?.playWhenReady == true) {
@@ -2265,6 +2428,10 @@ private fun rememberVideoPlayerView(player: ExoPlayer?): PlayerView {
             playerView.keepScreenOn = isForeground && player?.isPlaying == true
         }
 
+        playerView.useController = showController
+        playerView.controllerAutoShow = false
+        playerView.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+        playerView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
         val listener = object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 updatePlayback()
@@ -2294,6 +2461,9 @@ private fun VideoDetailPlayer(
     isActive: Boolean,
     viewModel: GalleryViewModel,
     previewHandle: VideoPreviewHandle,
+    spatialZoomRatio: Float = 1f,
+    onSpatialZoomChange: (Float) -> Unit = {},
+    onSpatialCompanionAvailability: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -2307,41 +2477,38 @@ private fun VideoDetailPlayer(
     var hasSpatialUltraWide by remember(photo.id, mediaUri) {
         mutableStateOf(ultraWideFile.isFile && ultraWideFile.length() > 0L)
     }
+    var isWidePlayerReady by remember(photo.id, mediaUri) { mutableStateOf(false) }
+    val companionCallback by rememberUpdatedState(onSpatialCompanionAvailability)
+
     LaunchedEffect(photo.id, mediaUri) {
+        hasSpatialUltraWide = ultraWideFile.isFile && ultraWideFile.length() > 0L
+        companionCallback(hasSpatialUltraWide)
         repeat(20) {
             if (ultraWideFile.isFile && ultraWideFile.length() > 0L) {
                 hasSpatialUltraWide = true
+                companionCallback(true)
                 return@LaunchedEffect
             }
             delay(500)
         }
+        companionCallback(false)
     }
-    var isUltraWideSelected by rememberSaveable(photo.id) { mutableStateOf(false) }
 
-    PLog.d("VideoDetailPlayer", "VideoDetailPlayer recomposing/initializing. photoId: ${photo.id}, isActive: $isActive, mediaUri: $mediaUri")
+    PLog.d("VideoDetailPlayer", "Initializing gallery video. photoId=${photo.id}, active=$isActive, spatial=$hasSpatialUltraWide")
 
     val contentRepository = remember {
         com.hinnka.mycamera.data.ContentRepository.getInstance(context)
     }
-
     var lutConfig by remember { mutableStateOf<com.hinnka.mycamera.lut.LutConfig?>(null) }
     var recipeParams by remember { mutableStateOf<com.hinnka.mycamera.model.ColorRecipeParams?>(null) }
     val refreshKey = viewModel.photoRefreshKeys[photo.id] ?: 0L
 
     LaunchedEffect(photo.id, refreshKey) {
         withContext(Dispatchers.IO) {
-            PLog.d("VideoDetailPlayer", "Loading video metadata from DB.")
             val metadata = com.hinnka.mycamera.gallery.GalleryManager.loadMetadata(context, photo.id) ?: photo.metadata
             val lutId = metadata?.lutId
             val params = metadata?.colorRecipeParams
-            PLog.d("VideoDetailPlayer", "Metadata loaded. lutId: $lutId, recipeEnabled: ${params != null}")
-
-            val config = if (lutId != null) {
-                contentRepository.lutManager.loadLut(lutId)
-            } else {
-                null
-            }
-
+            val config = if (lutId != null) contentRepository.lutManager.loadLut(lutId) else null
             withContext(Dispatchers.Main) {
                 lutConfig = config
                 recipeParams = params
@@ -2349,171 +2516,210 @@ private fun VideoDetailPlayer(
         }
     }
 
-    // Maintain the video LUT effect
-    val videoLutEffect = remember(photo.id, mediaUri) {
-        PLog.d("VideoDetailPlayer", "Instantiating new VideoLutEffect.")
-        VideoLutEffect(lutConfig, recipeParams)
-    }
+    val videoLutEffect = remember(photo.id, mediaUri) { VideoLutEffect(lutConfig, recipeParams) }
+    val wideVideoLutEffect = remember(photo.id, mediaUri) { VideoLutEffect(lutConfig, recipeParams) }
     val videoOutputSize by videoLutEffect.outputSize.collectAsState()
-    LaunchedEffect(videoOutputSize) {
-        videoOutputSize?.let { size ->
-            PLog.d("VideoDetailPlayer", "Effect output size: photo=${photo.id}, size=${size.width}x${size.height}")
-        }
-    }
+    val wideVideoOutputSize by wideVideoLutEffect.outputSize.collectAsState()
 
-    // Update effect parameters dynamically on the GL pipeline without reconstruction
     LaunchedEffect(lutConfig, recipeParams) {
-        PLog.d("VideoDetailPlayer", "Updating VideoLutEffect params. lut: ${lutConfig?.title}, recipe: ${recipeParams != null}")
         videoLutEffect.update(lutConfig, recipeParams)
+        wideVideoLutEffect.update(lutConfig, recipeParams)
     }
 
     val exoPlayer = remember(photo.id, mediaUri, isActive) {
         if (!isActive) return@remember null
-        PLog.d("VideoDetailPlayer", "Creating ExoPlayer for detail video.")
         ExoPlayer.Builder(context).build().apply {
             repeatMode = Player.REPEAT_MODE_OFF
             setVideoEffects(listOf(videoLutEffect))
-
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) {
-                    PLog.d("VideoDetailPlayer", "ExoPlayer state changed: $state")
+                    PLog.d("VideoDetailPlayer", "Primary player state changed: $state")
                 }
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    PLog.w("VideoDetailPlayer", "ExoPlayer encountered error!", error)
+                    PLog.w("VideoDetailPlayer", "Primary ExoPlayer error.", error)
                 }
             })
         }
     }
 
-    val playerView = rememberVideoPlayerView(exoPlayer)
+    // The secondary player is created once for this active page, but is prepared only when
+    // the paired ultra-wide file exists. Its timeline is synchronized to the primary stream.
+    val wideExoPlayer = remember(photo.id, mediaUri, isActive) {
+        if (!isActive) return@remember null
+        ExoPlayer.Builder(context).build().apply {
+            repeatMode = Player.REPEAT_MODE_OFF
+            volume = 0f
+            setVideoEffects(listOf(wideVideoLutEffect))
+            addListener(object : Player.Listener {
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    PLog.w("VideoDetailPlayer", "Ultra-wide ExoPlayer error.", error)
+                }
+            })
+        }
+    }
 
-    DisposableEffect(exoPlayer, previewHandle) {
-        val previewLease = exoPlayer?.let(previewHandle::attach)
+    val playerView = rememberVideoPlayerView(exoPlayer, showController = true)
+    val ultraWidePlayerView = rememberVideoPlayerView(wideExoPlayer, showController = false)
+
+    DisposableEffect(exoPlayer, wideExoPlayer, previewHandle) {
+        val players = listOfNotNull(exoPlayer, wideExoPlayer)
+        val lease = if (players.isNotEmpty()) previewHandle.attach(*players.toTypedArray()) else null
         onDispose {
-            if (previewLease != null) {
-                PLog.d("VideoDetailPlayer", "Disposing ExoPlayer.")
-                previewHandle.release(previewLease)
+            if (lease != null) previewHandle.release(lease)
+        }
+    }
+
+    // Prepare the main track once. Lens changes below never replace its MediaItem.
+    LaunchedEffect(exoPlayer, isActive, lifecycle) {
+        val primary = exoPlayer ?: return@LaunchedEffect
+        if (!isActive) return@LaunchedEffect
+        delay(150)
+        primary.setMediaItem(MediaItem.fromUri(mediaUri))
+        primary.prepare()
+        primary.playWhenReady = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+    }
+
+    // If the companion becomes available later, start it at the current primary timestamp;
+    // this does not interrupt or seek the main video.
+    LaunchedEffect(wideExoPlayer, exoPlayer, hasSpatialUltraWide, isActive) {
+        val primary = exoPlayer ?: return@LaunchedEffect
+        val secondary = wideExoPlayer ?: return@LaunchedEffect
+        if (!isActive || !hasSpatialUltraWide) return@LaunchedEffect
+
+        runCatching {
+            secondary.setMediaItem(MediaItem.fromUri(Uri.fromFile(ultraWideFile)))
+            secondary.prepare()
+            var attempts = 0
+            while (secondary.playbackState != Player.STATE_READY &&
+                secondary.playbackState != Player.STATE_ENDED &&
+                attempts < 100
+            ) {
+                delay(100)
+                attempts++
+            }
+            if (secondary.playbackState == Player.STATE_READY) {
+                secondary.seekTo(primary.currentPosition.coerceAtLeast(0L))
+                secondary.playWhenReady = primary.playWhenReady
+                isWidePlayerReady = true
+                companionCallback(true)
+                PLog.i("VideoDetailPlayer", "Ultra-wide companion synchronized at ${primary.currentPosition}ms.")
+            } else {
+                PLog.w("VideoDetailPlayer", "Ultra-wide companion did not become ready in time.")
+            }
+        }.onFailure { error ->
+            PLog.w("VideoDetailPlayer", "Unable to prepare ultra-wide companion.", error)
+        }
+    }
+
+    LaunchedEffect(exoPlayer, wideExoPlayer, isActive, isWidePlayerReady) {
+        val primary = exoPlayer ?: return@LaunchedEffect
+        val secondary = wideExoPlayer ?: return@LaunchedEffect
+        if (!isWidePlayerReady) return@LaunchedEffect
+        while (true) {
+            if (primary.playbackState == Player.STATE_READY &&
+                secondary.playbackState == Player.STATE_READY
+            ) {
+                if (secondary.playWhenReady != primary.playWhenReady) {
+                    secondary.playWhenReady = primary.playWhenReady
+                }
+                val driftMs = primary.currentPosition - secondary.currentPosition
+                if (abs(driftMs) > 220L) secondary.seekTo(primary.currentPosition.coerceAtLeast(0L))
+            }
+            delay(300)
+        }
+    }
+
+    DisposableEffect(exoPlayer, wideExoPlayer, lifecycle, isActive) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    exoPlayer?.pause()
+                    wideExoPlayer?.pause()
+                }
+                Lifecycle.Event.ON_RESUME -> if (isActive) {
+                    exoPlayer?.play()
+                    if (isWidePlayerReady) wideExoPlayer?.play()
+                }
+                else -> Unit
             }
         }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(exoPlayer, isActive, lifecycle) {
-        PLog.d("VideoDetailPlayer", "VideoDetailPlayer isActive changed: $isActive, player: $exoPlayer")
-        if (exoPlayer != null && isActive) {
-            isUltraWideSelected = false
-            delay(150) // Wait for transitions to complete and EGL surface to be fully ready
-            PLog.d("VideoDetailPlayer", "Preparing and starting ExoPlayer.")
-            exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri))
-            exoPlayer.prepare()
-            exoPlayer.playWhenReady = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-        }
-    }
+    val animatedZoomRatio by animateFloatAsState(
+        targetValue = spatialZoomRatio.coerceIn(0.5f, 2f),
+        animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
+        label = "gallerySpatialZoom"
+    )
 
     if (exoPlayer != null) {
+        val showWideFeed = hasSpatialUltraWide && isWidePlayerReady && wideExoPlayer != null
+        val wideAlpha = if (showWideFeed) {
+            1f - ((animatedZoomRatio - 0.94f) / 0.06f).coerceIn(0f, 1f)
+        } else 0f
+        val mainAlpha = 1f - wideAlpha
+        val wideScale = (animatedZoomRatio / 0.5f).coerceIn(1f, 2f)
+        val mainScale = animatedZoomRatio.coerceIn(1f, 2f)
+
         Box(modifier = modifier.autoRotate(matchParentSize = true)) {
-        AndroidView(
-            factory = {
-                PLog.d("VideoDetailPlayer", "Creating PlayerView factory.")
-                playerView
-            },
-            update = {
-                PLog.d("VideoDetailPlayer", "Updating PlayerView with player.")
-                it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                // With effects, Player.videoSize may remain UNKNOWN. Fit the Surface itself
-                // to the effect output so a paused/ended buffer has no baked-in letterboxing
-                // that would be stretched when autoRotate swaps the container dimensions.
-                videoOutputSize?.let { size ->
-                    it.findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)
-                        .setAspectRatio(size.width.toFloat() / size.height)
-                }
-                it.useController = true
-                it.controllerAutoShow = false
-                it.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                it.isVisible = true
-            },
-            modifier = Modifier.fillMaxSize()
-        )
-        if (hasSpatialUltraWide) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 76.dp)
-                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(24.dp))
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(
-                    onClick = {
-                        val wasPlaying = exoPlayer.playWhenReady
-                        val position = exoPlayer.currentPosition.coerceAtLeast(0L)
-                        exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(ultraWideFile)), position)
-                        exoPlayer.prepare()
-                        exoPlayer.playWhenReady = wasPlaying
-                        isUltraWideSelected = true
-                    },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = if (isUltraWideSelected) AccentColor else Color.White
-                    )
-                ) { Text("0.5x", fontWeight = FontWeight.SemiBold) }
-                TextButton(
-                    onClick = {
-                        val wasPlaying = exoPlayer.playWhenReady
-                        val position = exoPlayer.currentPosition.coerceAtLeast(0L)
-                        exoPlayer.setMediaItem(MediaItem.fromUri(mediaUri), position)
-                        exoPlayer.prepare()
-                        exoPlayer.playWhenReady = wasPlaying
-                        isUltraWideSelected = false
-                    },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = if (!isUltraWideSelected) AccentColor else Color.White
-                    )
-                ) { Text("1x", fontWeight = FontWeight.SemiBold) }
-                TextButton(
-                    onClick = {
-                        runCatching {
-                            val wideUri = FileProvider.getUriForFile(
-                                context,
-                                context.packageName + ".fileprovider",
-                                ultraWideFile
-                            )
-                            val share = Intent(Intent.ACTION_SEND).apply {
-                                type = "video/mp4"
-                                putExtra(Intent.EXTRA_STREAM, wideUri)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            context.startActivity(Intent.createChooser(share, "Share ultra-wide video"))
-                        }.onFailure {
-                            Toast.makeText(context, "Unable to share ultra-wide video", Toast.LENGTH_SHORT).show()
+            if (showWideFeed) {
+                AndroidView(
+                    factory = { ultraWidePlayerView },
+                    update = { view ->
+                        view.player = wideExoPlayer
+                        view.useController = false
+                        view.controllerAutoShow = false
+                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        view.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        view.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        view.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                        view.isClickable = false
+                        view.isVisible = true
+                        view.findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)?.let { frame ->
+                            frame.alpha = wideAlpha
+                            frame.scaleX = wideScale
+                            frame.scaleY = wideScale
+                            frame.pivotX = view.width / 2f
+                            frame.pivotY = view.height / 2f
+                            wideVideoOutputSize?.let { size -> frame.setAspectRatio(size.width.toFloat() / size.height) }
                         }
                     },
-                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
-                ) { Text("Share 0.5x", fontWeight = FontWeight.Medium) }
-                TextButton(
-                    onClick = {
-                        runCatching {
-                            val wideUri = FileProvider.getUriForFile(
-                                context,
-                                context.packageName + ".fileprovider",
-                                ultraWideFile
-                            )
-                            val share = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-                                type = "video/mp4"
-                                putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(mediaUri, wideUri))
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                clipData = android.content.ClipData.newUri(
-                                    context.contentResolver, "Special Video", mediaUri
-                                ).apply { addItem(android.content.ClipData.Item(wideUri)) }
-                            }
-                            context.startActivity(Intent.createChooser(share, "Share both lenses"))
-                        }.onFailure {
-                            Toast.makeText(context, "Unable to share both lens videos", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
-                ) { Text("Share both", fontWeight = FontWeight.Medium) }
+                    modifier = Modifier.fillMaxSize()
+                )
             }
-        }
+
+            // Main player stays on top so native playback controls remain usable.
+            AndroidView(
+                factory = { playerView },
+                update = { view ->
+                    view.player = exoPlayer
+                    view.useController = true
+                    view.controllerAutoShow = false
+                    view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    view.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    view.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    view.setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                    view.isVisible = true
+                    view.findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)?.let { frame ->
+                        frame.alpha = mainAlpha
+                        frame.scaleX = mainScale
+                        frame.scaleY = mainScale
+                        frame.pivotX = view.width / 2f
+                        frame.pivotY = view.height / 2f
+                        videoOutputSize?.let { size -> frame.setAspectRatio(size.width.toFloat() / size.height) }
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            if (showWideFeed) {
+                SpatialVideoZoomControl(
+                    zoomRatio = spatialZoomRatio,
+                    onZoomChange = onSpatialZoomChange,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 76.dp)
+                )
+            }
         }
     } else {
         // Show video thumbnail with a play icon when player is not active
@@ -2839,4 +3045,115 @@ fun MotionPhotoPlayer(
         },
         modifier = modifier.autoRotate(matchParentSize = true)
     )
+}
+
+@Composable
+private fun SpatialVideoZoomControl(
+    zoomRatio: Float,
+    onZoomChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val currentZoom by rememberUpdatedState(zoomRatio.coerceIn(0.5f, 2f))
+    val zoomChange by rememberUpdatedState(onZoomChange)
+    var isDragging by remember { mutableStateOf(false) }
+    var showRuler by remember { mutableStateOf(false) }
+    var dragZoom by remember { mutableFloatStateOf(zoomRatio.coerceIn(0.5f, 2f)) }
+    var lastInteractionTime by remember { mutableLongStateOf(0L) }
+
+    val displayedZoom by animateFloatAsState(
+        targetValue = if (isDragging) dragZoom else zoomRatio.coerceIn(0.5f, 2f),
+        animationSpec = tween(durationMillis = 130, easing = FastOutSlowInEasing),
+        label = "gallerySpatialZoomControl"
+    )
+
+    LaunchedEffect(showRuler, lastInteractionTime, isDragging) {
+        if (showRuler && !isDragging) {
+            delay(2000)
+            if (!isDragging && System.currentTimeMillis() - lastInteractionTime >= 1900L) showRuler = false
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(33.dp)
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = {
+                        dragZoom = currentZoom
+                        isDragging = true
+                        showRuler = true
+                        lastInteractionTime = System.currentTimeMillis()
+                    },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragZoom = (dragZoom * exp(-dragAmount.toDouble() * 0.0027).toFloat()).coerceIn(0.5f, 2f)
+                        lastInteractionTime = System.currentTimeMillis()
+                        zoomChange(dragZoom)
+                    },
+                    onDragEnd = {
+                        isDragging = false
+                        lastInteractionTime = System.currentTimeMillis()
+                    },
+                    onDragCancel = {
+                        isDragging = false
+                        lastInteractionTime = System.currentTimeMillis()
+                    }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        if (isDragging || showRuler) {
+            ZoomContinuousRuler(
+                zoomRatio = displayedZoom,
+                minZoom = 0.5f,
+                maxZoom = 2f,
+                mainCamera = null,
+                displayMode = ZoomDisplayMode.ZOOM_RATIO,
+                onClose = {
+                    showRuler = false
+                    isDragging = false
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Row(
+                modifier = Modifier.wrapContentWidth().fillMaxHeight(),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf(0.5f, 1f, 2f).forEach { preset ->
+                    val selected = abs(zoomRatio - preset) <= 0.045f
+                    val label = if (preset == 0.5f) "0.5" else preset.toInt().toString()
+                    Box(
+                        modifier = Modifier
+                            .width(43.dp)
+                            .height(33.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { showRuler = false; zoomChange(preset) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (selected) {
+                            Box(
+                                modifier = Modifier.size(29.dp).clip(CircleShape).background(Color(0xFF484651))
+                            )
+                        }
+                        Text(
+                            text = if (selected) "${label}x" else label,
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = if (selected) 14.sp else 13.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = Color.White,
+                                textAlign = TextAlign.Center
+                            ),
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
