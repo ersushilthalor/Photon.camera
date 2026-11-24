@@ -9785,6 +9785,17 @@ class Camera2Controller(private val context: Context) {
             specialVideoRecordingTimeline.reset()
             return
         }
+        if (spatialVideoEnabled &&
+            spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL
+        ) {
+            // The independent 0.5x CameraDevice was stopped only after both recorders drained.
+            // Rebuild it now without the released encoder Surface, preserving the live preview.
+            cameraHandler?.post {
+                if (spatialVideoEnabled && spatialVideoStandbyCameraDevice != null) {
+                    createSpatialVideoStandbySession("both Special Video recorders finished")
+                }
+            }
+        }
         Thread({
             try {
                 val attached = SpatialVideoStore.attachPrimaryAudioTrack(context, primary, ultraWide)
@@ -10942,6 +10953,20 @@ class Camera2Controller(private val context: Context) {
         // Select the shared origin after both recorders accept their first frame. Until then,
         // VideoRecorder keeps encoded samples pending instead of committing a false start time.
         val hasSharedRecordingTimeline = spatialVideoEnabled || selectedDualAspectRatio != null
+        val specialVideoDrainDurationMs = if (spatialVideoEnabled) {
+            val lookaheadFrames = if (useEnhancedStabilization) {
+                normalizeStabilizationLookahead(
+                    _state.value.videoConfig.enhancedStabilizationLookahead
+                )
+            } else {
+                0
+            }
+            val drainFrames = if (useEnhancedStabilization) lookaheadFrames + 2 else 2
+            ((drainFrames.toLong() * 1_000L + _state.value.videoConfig.fps.fps - 1L) /
+                _state.value.videoConfig.fps.fps) + 100L
+        } else {
+            0L
+        }
         val sharedTimelineSecondaryStreamId = when {
             selectedDualAspectRatio != null -> SpecialVideoRecordingTimeline.StreamId.SECONDARY
             spatialVideoEnabled -> SpecialVideoRecordingTimeline.StreamId.ULTRA_WIDE
@@ -11015,6 +11040,29 @@ class Camera2Controller(private val context: Context) {
                     )
                 }
             } else null,
+            sharedTimelineVideoEndReporter = if (spatialVideoEnabled) {
+                { endPtsUs, tailOverflowed ->
+                    specialVideoRecordingTimeline.reportVideoEnd(
+                        SpecialVideoRecordingTimeline.StreamId.MAIN,
+                        endPtsUs,
+                        tailOverflowed,
+                    )
+                }
+            } else null,
+            sharedTimelineCommonEndAwaiter = if (spatialVideoEnabled) {
+                specialVideoRecordingTimeline::awaitCommonVideoEndUs
+            } else null,
+            sharedTimelineDrainCompleter = if (spatialVideoEnabled) {
+                specialVideoRecordingTimeline::completeCameraDrain
+            } else null,
+            sharedCameraTimestampOffsetResolver = if (spatialVideoEnabled) {
+                specialVideoRecordingTimeline::resolveCameraTimestampOffsetNs
+            } else null,
+            onSharedTimelineDrainComplete = if (spatialVideoEnabled) {
+                ::stopSpecialVideoCameraInputsAfterDrain
+            } else null,
+            sharedTimelineStreamName = if (spatialVideoEnabled) "1x-main" else null,
+            sharedTimelineDrainDurationMs = specialVideoDrainDurationMs,
             dualCaptureInputSize = if (dualCaptureEnabled) dualCaptureInputSize else null,
             dualCaptureSensorOrientationDegrees = if (dualCaptureEnabled) {
                 _dualCaptureSensorOrientationDegrees.value
@@ -11226,6 +11274,28 @@ class Camera2Controller(private val context: Context) {
                         )
                     }
                 } else null,
+                sharedTimelineVideoEndReporter = if (spatialVideoEnabled) {
+                    { endPtsUs, tailOverflowed ->
+                        specialVideoRecordingTimeline.reportVideoEnd(
+                            SpecialVideoRecordingTimeline.StreamId.ULTRA_WIDE,
+                            endPtsUs,
+                            tailOverflowed,
+                        )
+                    }
+                } else null,
+                sharedTimelineCommonEndAwaiter = if (spatialVideoEnabled) {
+                    specialVideoRecordingTimeline::awaitCommonVideoEndUs
+                } else null,
+                sharedTimelineDrainAwaiter = if (spatialVideoEnabled) {
+                    specialVideoRecordingTimeline::awaitCameraDrain
+                } else null,
+                sharedTimelineDrainCompleter = if (spatialVideoEnabled) {
+                    specialVideoRecordingTimeline::completeCameraDrain
+                } else null,
+                sharedCameraTimestampOffsetResolver = if (spatialVideoEnabled) {
+                    specialVideoRecordingTimeline::resolveCameraTimestampOffsetNs
+                } else null,
+                sharedTimelineStreamName = if (spatialVideoEnabled) "0.5x-ultraWide" else null,
                 onError = { message ->
                     PLog.e(TAG, "Special Video ultra-wide recorder error: $message")
                     cameraHandler?.post {
@@ -11454,6 +11524,32 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
+    private suspend fun stopSpecialVideoCameraInputsAfterDrain() {
+        val handler = cameraHandler ?: return
+        suspendCancellableCoroutine<Unit> { continuation ->
+            val posted = handler.post {
+                if (spatialVideoEnabled) {
+                    runCatching { captureSession?.stopRepeating() }
+                        .onFailure {
+                            PLog.w(TAG, "Special Video primary repeating request stop failed: ${it.message}")
+                        }
+                    if (spatialVideoStreamingMode != SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL) {
+                        runCatching { spatialVideoStandbySession?.stopRepeating() }
+                            .onFailure {
+                                PLog.w(TAG, "Special Video ultra-wide repeating request stop failed: ${it.message}")
+                            }
+                    }
+                    PLog.i(
+                        TAG,
+                        "Special Video camera inputs stopped after paired drain: mode=$spatialVideoStreamingMode"
+                    )
+                }
+                if (continuation.isActive) continuation.resume(Unit)
+            }
+            if (!posted && continuation.isActive) continuation.resume(Unit)
+        }
+    }
+
     fun stopVideoRecording() {
         if (!_state.value.videoRecordingState.isRecording) return
         videoCaptureStatsWindowStartMs = 0L
@@ -11467,9 +11563,13 @@ class Camera2Controller(private val context: Context) {
                 isProcessing = videoRecorder.usesDedicatedCameraInput || dualAspectRecordingActive
             )
         )
-        if (videoRecorder.usesDedicatedCameraInput && !_state.value.videoRecordingState.isPaused) {
+        val deferCameraInputStopForSpecialVideo = spatialVideoEnabled
+        if (videoRecorder.usesDedicatedCameraInput &&
+            !_state.value.videoRecordingState.isPaused &&
+            !deferCameraInputStopForSpecialVideo
+        ) {
             updateDedicatedVideoRepeatingTarget(includeVideoSurface = false)
-        } else {
+        } else if (!deferCameraInputStopForSpecialVideo) {
             previewRequestBuilder?.apply {
                 applyWhiteBalanceSettings(this, _state.value, isCapture = false)
                 updatePreview()
@@ -11499,16 +11599,14 @@ class Camera2Controller(private val context: Context) {
         if (spatialVideoEnabled) {
             spatialVideoStandbyRepeatingRequest = null
             spatialVideoPrimarySessionAwaitingStandby = false
-            // Keep the shared timeline alive until both asynchronous recorder callbacks finish.
-            // The next recording start or companion finalizer resets it after consumers snapshot it.
-            if (_spatialVideoShowUltraWidePreview.value &&
-                spatialVideoStandbyPreviewSurface != null &&
-                spatialVideoStandbyPreviewSurfaceTexture != null
-            ) {
-                createSpatialVideoStandbySession("recording stopped; keep preview")
-            } else {
-                stopSpatialVideoStandbyCamera("recording stopped")
-            }
+            // Do not detach or rebuild either Special Video input here. Both encoders still
+            // need the paired drain window; the primary recorder stops both repeating requests
+            // only after EIS+ has emitted its delayed pre-cutoff frames.
+            PLog.i(
+                TAG,
+                "Special Video stop requested; keeping both Camera2 inputs alive for " +
+                    "the paired drain window (${specialVideoDrainDurationMs}ms)"
+            )
         }
         if (pendingVendorSessionParameterRestart && cameraDevice != null && previewSurface != null) {
             PLog.d(TAG, "Restarting preview session after recording for pending vendor session parameter change")
