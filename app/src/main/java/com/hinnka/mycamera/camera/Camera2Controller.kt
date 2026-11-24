@@ -4716,38 +4716,45 @@ class Camera2Controller(private val context: Context) {
         // the primary CameraDevice here would stall the viewfinder and interrupt a paired
         // recording even though the standby ultra-wide stream is already running.
         if (spatialVideoEnabled) {
-            val targetRatio = targetCamera.intrinsicZoomRatio
-            val isSpecialVideoPairLens =
-                targetCamera.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
-                    targetRatio.isFinite() &&
-                    (abs(targetRatio - 1f) <= 0.15f || targetRatio in 0.2f..0.85f)
-            if (!isSpecialVideoPairLens) return false
+            val targetOpenId = runCatching { targetCamera.getOpenCameraId() }.getOrNull()
+            val mainPhysicalId = spatialVideoMainPhysicalCameraId
+            val widePhysicalId = spatialVideoUltraWidePhysicalCameraId
+            val isMainPairLens = targetCamera.cameraId == spatialVideoPrimaryCameraId ||
+                targetCamera.cameraId == mainPhysicalId ||
+                targetCamera.outputPhysicalCameraId == mainPhysicalId ||
+                targetCamera.physicalCameras.any { it.cameraId == mainPhysicalId }
+            val isUltraWidePairLens = targetCamera.cameraId == widePhysicalId ||
+                targetCamera.outputPhysicalCameraId == widePhysicalId ||
+                targetOpenId == widePhysicalId ||
+                targetCamera.physicalCameras.any { it.cameraId == widePhysicalId }
 
-            val expectedPrimaryId = spatialVideoPrimaryCameraId
+            // Match the two resolved Special Video cameras by ID, not by zoom range:
+            // a virtual ISZ/crop lens must never be mistaken for the physical 0.5x stream.
+            if (targetCamera.lensFacing != CameraCharacteristics.LENS_FACING_BACK ||
+                (!isMainPairLens && !isUltraWidePairLens)
+            ) {
+                return false
+            }
+
             val primaryReady = cameraDevice != null &&
                 captureSession != null &&
-                (expectedPrimaryId == null || activeOpenCameraId == expectedPrimaryId)
-            val previewSurfaceReady = spatialVideoStandbyPreviewSurface?.isValid == true
-            val wideReady = when (spatialVideoStreamingMode) {
-                SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL ->
-                    primaryReady && previewSurfaceReady
-                SpatialVideoStreamingMode.PERSISTENT_DUAL_SESSION,
-                SpatialVideoStreamingMode.CONCURRENT_DEVICES ->
-                    spatialVideoStandbyCameraDevice?.id == spatialVideoUltraWidePhysicalCameraId &&
-                        spatialVideoStandbySession != null &&
-                        previewSurfaceReady
-                else -> false
-            }
-            if (primaryReady && wideReady) {
-                PLog.i(
-                    TAG,
-                    "Special Video lens preview handoff in-place: selected=${targetCamera.cameraId}, " +
-                        "ratio=$targetRatio, main=$spatialVideoMainPhysicalCameraId, " +
-                        "ultraWide=$spatialVideoUltraWidePhysicalCameraId"
-                )
-                return true
-            }
-            return false
+                (spatialVideoPrimaryCameraId == null || activeOpenCameraId == spatialVideoPrimaryCameraId)
+            val wideDeviceReady = spatialVideoStandbyCameraDevice?.id == widePhysicalId
+            val wideSessionReady = spatialVideoStandbySession != null
+            val widePreviewReady = spatialVideoStandbyPreviewSurface?.isValid == true
+            PLog.i(
+                TAG,
+                "Special Video lens preview handoff in-place: selected=${targetCamera.cameraId}, " +
+                    "mainPair=$isMainPairLens widePair=$isUltraWidePairLens, " +
+                    "primaryReady=$primaryReady, wideDeviceReady=$wideDeviceReady, " +
+                    "wideSessionReady=$wideSessionReady, widePreviewReady=$widePreviewReady, " +
+                    "mode=$spatialVideoStreamingMode"
+            )
+
+            // Do not fall back to reopenCamera() while the secondary device/session is warming
+            // up. The UI promotes the persistent TextureView immediately; its first frames
+            // appear as soon as the paired preview output is configured.
+            return true
         }
 
         val logicalCameraId = currentCamera.logicalCameraId ?: return false
