@@ -145,6 +145,56 @@ object SpatialVideoStore {
             runCatching { primaryExtractor.release() }
             runCatching { retriever.release() }
             if (tempFile.exists()) tempFile.delete()
+            logFinalDurations(context, primaryVideoUri, ultraWideFile)
+        }
+    }
+
+    private fun logFinalDurations(
+        context: Context,
+        primaryVideoUri: Uri,
+        ultraWideFile: File,
+    ) {
+        val primaryDurationMs = runCatching {
+            MediaMetadataRetriever().run {
+                try {
+                    setDataSource(context, primaryVideoUri, null)
+                    extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                } finally {
+                    release()
+                }
+            }
+        }.getOrNull()
+        val ultraWideDurationMs = runCatching {
+            MediaMetadataRetriever().run {
+                try {
+                    setDataSource(ultraWideFile.absolutePath)
+                    extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                } finally {
+                    release()
+                }
+            }
+        }.getOrNull()
+
+        if (primaryDurationMs != null && ultraWideDurationMs != null) {
+            val deltaMs = kotlin.math.abs(primaryDurationMs - ultraWideDurationMs)
+            PLog.i(
+                TAG,
+                "Final Special Video file durations: main=${primaryDurationMs}ms, " +
+                    "ultraWide=${ultraWideDurationMs}ms, delta=${deltaMs}ms"
+            )
+            if (deltaMs > 100L) {
+                PLog.w(
+                    TAG,
+                    "Special Video duration mismatch exceeds 100ms: main=${primaryDurationMs}ms, " +
+                        "ultraWide=${ultraWideDurationMs}ms"
+                )
+            }
+        } else {
+            PLog.w(
+                TAG,
+                "Unable to read final Special Video durations: main=$primaryDurationMs, " +
+                    "ultraWide=$ultraWideDurationMs"
+            )
         }
     }
 

@@ -10894,11 +10894,17 @@ class Camera2Controller(private val context: Context) {
                 "monitorLut=${creativeLutConfig?.title}, recordingLut=${recordingLut?.title}, " +
                 "cameraInputHlg10=${cameraInputIsHlg10}"
         )
-        // Both VideoRecorder instances consume the same monotonic origin. Their sensor
-        // timestamps are mapped to this epoch so the two MP4 timelines remain aligned.
-        val spatialTimelineOriginUs = if (spatialVideoEnabled || selectedDualAspectRatio != null) {
-            specialVideoRecordingTimeline.begin()
-        } else null
+        // Select the shared origin after both recorders accept their first frame. Until then,
+        // VideoRecorder keeps encoded samples pending instead of committing a false start time.
+        val hasSharedRecordingTimeline = spatialVideoEnabled || selectedDualAspectRatio != null
+        val sharedTimelineSecondaryStreamId = when {
+            selectedDualAspectRatio != null -> SpecialVideoRecordingTimeline.StreamId.SECONDARY
+            spatialVideoEnabled -> SpecialVideoRecordingTimeline.StreamId.ULTRA_WIDE
+            else -> SpecialVideoRecordingTimeline.StreamId.SECONDARY
+        }
+        if (hasSharedRecordingTimeline) {
+            specialVideoRecordingTimeline.reset()
+        }
         val baseOrientationHintDegrees = resolveDedicatedVideoOrientationHintDegrees(orientationOffsetDegrees)
         val cameraTimestampSource = getActiveOpenCameraCharacteristics()
             ?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
@@ -10950,7 +10956,20 @@ class Camera2Controller(private val context: Context) {
                 _state.value.videoConfig.enhancedStabilizationLookahead,
             recordingPath = _state.value.videoConfig.recordingPath,
             recordingTreeUri = _state.value.videoConfig.recordingTreeUri,
-            sharedTimelineOriginUs = spatialTimelineOriginUs,
+            sharedTimelineOriginProvider = if (hasSharedRecordingTimeline) {
+                specialVideoRecordingTimeline::currentOriginUs
+            } else null,
+            sharedTimelineStopTimeProvider = if (hasSharedRecordingTimeline) {
+                specialVideoRecordingTimeline::currentStopTimeUs
+            } else null,
+            onFirstVideoFrame = if (hasSharedRecordingTimeline) {
+                { ptsUs ->
+                    specialVideoRecordingTimeline.reportFirstFrame(
+                        SpecialVideoRecordingTimeline.StreamId.MAIN,
+                        ptsUs,
+                    )
+                }
+            } else null,
             dualCaptureInputSize = if (dualCaptureEnabled) dualCaptureInputSize else null,
             dualCaptureSensorOrientationDegrees = if (dualCaptureEnabled) {
                 _dualCaptureSensorOrientationDegrees.value
@@ -11057,7 +11076,20 @@ class Camera2Controller(private val context: Context) {
                 recordingTreeUri = dualAspectOutputTreeUri,
                 privateOutputFile = companionFile,
                 recordAudio = false,
-                sharedTimelineOriginUs = spatialTimelineOriginUs,
+                sharedTimelineOriginProvider = if (hasSharedRecordingTimeline) {
+                    specialVideoRecordingTimeline::currentOriginUs
+                } else null,
+                sharedTimelineStopTimeProvider = if (hasSharedRecordingTimeline) {
+                    specialVideoRecordingTimeline::currentStopTimeUs
+                } else null,
+                onFirstVideoFrame = if (hasSharedRecordingTimeline) {
+                    { ptsUs ->
+                        specialVideoRecordingTimeline.reportFirstFrame(
+                            sharedTimelineSecondaryStreamId,
+                            ptsUs,
+                        )
+                    }
+                } else null,
                 onError = { message ->
                     PLog.e(TAG, "Dual Aspect secondary encoder error: $message")
                     cameraHandler?.post {
@@ -11135,7 +11167,20 @@ class Camera2Controller(private val context: Context) {
                 recordingTreeUri = _state.value.videoConfig.recordingTreeUri,
                 privateOutputFile = wideFile,
                 recordAudio = false,
-                sharedTimelineOriginUs = spatialTimelineOriginUs,
+                sharedTimelineOriginProvider = if (hasSharedRecordingTimeline) {
+                    specialVideoRecordingTimeline::currentOriginUs
+                } else null,
+                sharedTimelineStopTimeProvider = if (hasSharedRecordingTimeline) {
+                    specialVideoRecordingTimeline::currentStopTimeUs
+                } else null,
+                onFirstVideoFrame = if (hasSharedRecordingTimeline) {
+                    { ptsUs ->
+                        specialVideoRecordingTimeline.reportFirstFrame(
+                            sharedTimelineSecondaryStreamId,
+                            ptsUs,
+                        )
+                    }
+                } else null,
                 onError = { message ->
                     PLog.e(TAG, "Special Video ultra-wide recorder error: $message")
                     cameraHandler?.post {
@@ -11398,14 +11443,19 @@ class Camera2Controller(private val context: Context) {
                 stopDualCaptureCamera()
             }
         }
+        val hasPairedVideoRecording = spatialVideoEnabled || dualAspectRecordingActive
+        if (hasPairedVideoRecording) {
+            specialVideoRecordingTimeline.requestStop()
+        }
         videoRecorder.stopRecording()
-        if (spatialVideoEnabled || dualAspectRecordingActive) {
+        if (hasPairedVideoRecording) {
             spatialVideoRecorder.stopRecording()
         }
         if (spatialVideoEnabled) {
             spatialVideoStandbyRepeatingRequest = null
             spatialVideoPrimarySessionAwaitingStandby = false
-            specialVideoRecordingTimeline.reset()
+            // Keep the shared timeline alive until both asynchronous recorder callbacks finish.
+            // The next recording start or companion finalizer resets it after consumers snapshot it.
             if (_spatialVideoShowUltraWidePreview.value &&
                 spatialVideoStandbyPreviewSurface != null &&
                 spatialVideoStandbyPreviewSurfaceTexture != null

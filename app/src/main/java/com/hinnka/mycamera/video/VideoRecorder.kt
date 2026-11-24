@@ -151,6 +151,11 @@ class VideoRecorder(
     private var requestedSensorOrientationDegrees = 0
     private var cameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
     private var timelineOriginUs = UNSET_TIMESTAMP
+    private var sharedTimelineOriginProvider: (() -> Long?)? = null
+    private var sharedTimelineStopTimeProvider: (() -> Long?)? = null
+    private var onSharedTimelineFirstFrame: ((Long) -> Unit)? = null
+    private var usesSharedTimelineOrigin = false
+    private var sharedTimelineStopTimeUs = UNSET_TIMESTAMP
     private var pauseIntervals = mutableListOf<PauseInterval>()
     private var activePauseStartTimeUs = UNSET_TIMESTAMP
 
@@ -232,7 +237,9 @@ class VideoRecorder(
         recordingTreeUri: String? = null,
         privateOutputFile: File? = null,
         recordAudio: Boolean = true,
-        sharedTimelineOriginUs: Long? = null,
+        sharedTimelineOriginProvider: (() -> Long?)? = null,
+        sharedTimelineStopTimeProvider: (() -> Long?)? = null,
+        onFirstVideoFrame: ((Long) -> Unit)? = null,
         dualCaptureInputSize: Size? = null,
         dualCaptureSensorOrientationDegrees: Int = 0,
         dualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE,
@@ -296,9 +303,10 @@ class VideoRecorder(
         resetMuxerState()
         this.privateOutputFile = privateOutputFile
         this.audioEnabled = recordAudio
-        if (sharedTimelineOriginUs != null) {
-            synchronized(timelineLock) { timelineOriginUs = sharedTimelineOriginUs }
-        }
+        this.sharedTimelineOriginProvider = sharedTimelineOriginProvider
+        this.sharedTimelineStopTimeProvider = sharedTimelineStopTimeProvider
+        this.onSharedTimelineFirstFrame = onFirstVideoFrame
+        this.usesSharedTimelineOrigin = onFirstVideoFrame != null
         isPaused = false
         statsWindowStartMs = 0L
         statsIncomingFrames = 0
@@ -450,6 +458,13 @@ class VideoRecorder(
     fun stopRecording() {
         if (!isRecording || stopRequested) return
         stopRequested = true
+        val sharedStopTimeUs = sharedTimelineStopTimeProvider?.invoke()
+        if (sharedStopTimeUs != null) {
+            synchronized(timelineLock) {
+                sharedTimelineStopTimeUs = sharedStopTimeUs
+            }
+            PLog.i(TAG, "Recorder captured shared stop cutoff: stopTimeUs=$sharedStopTimeUs")
+        }
         val completion = finishCallback
         scope.launch {
             var publishedUri: Uri? = null
@@ -1043,8 +1058,21 @@ class VideoRecorder(
         byteCount: Int,
         firstPresentationTimeUs: Long,
     ): Boolean {
+        val bytesPerFrame = audioBytesPerFrame()
+        val stopTimeUs = synchronized(timelineLock) { sharedTimelineStopTimeUs }
+        val stopLimitedFrames = if (stopTimeUs == UNSET_TIMESTAMP) {
+            byteCount / bytesPerFrame
+        } else {
+            (((stopTimeUs - firstPresentationTimeUs).coerceAtLeast(0L) * AUDIO_SAMPLE_RATE) /
+                MICROS_PER_SECOND)
+                .coerceAtMost((byteCount / bytesPerFrame).toLong())
+                .toInt()
+        }
+        val stopLimitedBytes = stopLimitedFrames * bytesPerFrame
+        if (stopLimitedBytes <= 0) return true
+
         var offset = sourceOffset
-        val endOffset = sourceOffset + byteCount
+        val endOffset = sourceOffset + stopLimitedBytes
         while (offset < endOffset && isRecording && !stopRequested) {
             val inputIndex = try {
                 encoder.dequeueInputBuffer(10_000L)
@@ -1055,7 +1083,6 @@ class VideoRecorder(
 
             val inputBuffer = encoder.getInputBuffer(inputIndex) ?: continue
             inputBuffer.clear()
-            val bytesPerFrame = audioBytesPerFrame()
             val maxChunkSize = minOf(endOffset - offset, inputBuffer.remaining())
             val chunkSize = maxChunkSize - (maxChunkSize % bytesPerFrame)
             if (chunkSize <= 0) {
@@ -1175,6 +1202,23 @@ class VideoRecorder(
             }
             if (activeRanges.isEmpty()) break
         }
+        val stopTimeUs = synchronized(timelineLock) { sharedTimelineStopTimeUs }
+        if (stopTimeUs != UNSET_TIMESTAMP) {
+            val stopFrame = audioFrameOffsetAtOrAfter(
+                timestampUs = stopTimeUs,
+                bufferStartTimeUs = bufferStartTimeUs,
+                bufferEndTimeUs = bufferEndTimeUs,
+                frameCount = frameCount,
+            )
+            activeRanges = activeRanges.mapNotNull { range ->
+                val endFrameExclusive = minOf(range.endFrameExclusive, stopFrame)
+                if (endFrameExclusive > range.startFrame) {
+                    FrameRange(range.startFrame, endFrameExclusive)
+                } else {
+                    null
+                }
+            }
+        }
         return activeRanges
     }
 
@@ -1221,6 +1265,15 @@ class VideoRecorder(
     }
 
     private fun establishTimelineOrigin(firstVideoPresentationTimeUs: Long) {
+        if (usesSharedTimelineOrigin) {
+            onSharedTimelineFirstFrame?.invoke(firstVideoPresentationTimeUs)
+            onSharedTimelineFirstFrame = null
+            synchronized(timelineLock) {
+                resolveTimelineOriginLocked()
+            }
+            return
+        }
+
         val established = synchronized(timelineLock) {
             if (timelineOriginUs != UNSET_TIMESTAMP) {
                 false
@@ -1239,6 +1292,21 @@ class VideoRecorder(
                     "initialAvOffsetMs=${audioOffsetMs ?: "pending-audio"}"
             )
         }
+    }
+
+    /**
+     * Must be called while timelineLock is held. Shared recorders retain encoded samples until
+     * both streams report a first frame and the common origin becomes available.
+     */
+    private fun resolveTimelineOriginLocked(): Long {
+        if (timelineOriginUs == UNSET_TIMESTAMP) {
+            val sharedOriginUs = sharedTimelineOriginProvider?.invoke()
+            if (sharedOriginUs != null) {
+                timelineOriginUs = sharedOriginUs
+                PLog.i(TAG, "Shared recorder timeline origin received: originUs=$sharedOriginUs")
+            }
+        }
+        return timelineOriginUs
     }
 
     private fun drainRealtimeFrames(allowWhenStopping: Boolean) {
@@ -1473,7 +1541,7 @@ class VideoRecorder(
         }
         synchronized(muxerLock) {
             val timelineReady = synchronized(timelineLock) {
-                timelineOriginUs != UNSET_TIMESTAMP
+                resolveTimelineOriginLocked() != UNSET_TIMESTAMP
             }
             if (!muxerStarted || !timelineReady) {
                 val pending = if (isVideo) pendingVideoSamples else pendingAudioSamples
@@ -1516,8 +1584,12 @@ class VideoRecorder(
         info: MediaCodec.BufferInfo
     ): MediaCodec.BufferInfo? {
         val normalizedSourceTimeUs = synchronized(timelineLock) {
-            val originUs = timelineOriginUs
-            if (originUs == UNSET_TIMESTAMP || info.presentationTimeUs < originUs) {
+            val originUs = resolveTimelineOriginLocked()
+            if (originUs == UNSET_TIMESTAMP ||
+                info.presentationTimeUs < originUs ||
+                (sharedTimelineStopTimeUs != UNSET_TIMESTAMP &&
+                    info.presentationTimeUs > sharedTimelineStopTimeUs)
+            ) {
                 return null
             }
             info.presentationTimeUs - originUs -
@@ -1582,7 +1654,7 @@ class VideoRecorder(
     private fun flushPendingSamplesLocked() {
         if (!muxerStarted) return
         val timelineReady = synchronized(timelineLock) {
-            timelineOriginUs != UNSET_TIMESTAMP
+            resolveTimelineOriginLocked() != UNSET_TIMESTAMP
         }
         if (!timelineReady) return
 
@@ -1651,6 +1723,21 @@ class VideoRecorder(
             }
 
             flushPendingSamplesLocked()
+
+            val finalDurationUs = maxOf(
+                lastMuxedVideoPresentationTimeUs,
+                lastMuxedAudioPresentationTimeUs,
+            ).takeIf { it != Long.MIN_VALUE }
+            val outputLabel = privateOutputFile?.name
+                ?: pendingVideoOutput?.uri?.lastPathSegment
+                ?: "MediaStore"
+            PLog.i(
+                TAG,
+                "Final recording duration: output=$outputLabel, " +
+                    "videoEndPtsUs=${lastMuxedVideoPresentationTimeUs.takeIf { it != Long.MIN_VALUE }}, " +
+                    "audioEndPtsUs=${lastMuxedAudioPresentationTimeUs.takeIf { it != Long.MIN_VALUE }}, " +
+                    "durationMs=${finalDurationUs?.div(1_000L) ?: "unknown"}"
+            )
 
             try {
                 if (muxerStarted) {
@@ -1790,6 +1877,11 @@ class VideoRecorder(
         synchronized(timelineLock) {
             cameraTimestampToBoottimeOffsetNs = UNSET_TIMESTAMP
             timelineOriginUs = UNSET_TIMESTAMP
+            sharedTimelineOriginProvider = null
+            sharedTimelineStopTimeProvider = null
+            onSharedTimelineFirstFrame = null
+            usesSharedTimelineOrigin = false
+            sharedTimelineStopTimeUs = UNSET_TIMESTAMP
             pauseIntervals = mutableListOf()
             activePauseStartTimeUs = UNSET_TIMESTAMP
         }
