@@ -10299,7 +10299,12 @@ class Camera2Controller(private val context: Context) {
      * aspect ratio. The secondary recorder must not inherit the primary video's crop.
      */
     private fun resolveDualAspectFullSensorInputSize(fallback: Size): Size {
-        val characteristics = getActiveOpenCameraCharacteristics() ?: return fallback
+        val characteristics = activeOutputPhysicalCameraId
+            ?.let { physicalId ->
+                getCameraCharacteristicsOrNull(physicalId, "Dual Aspect physical sensor")
+            }
+            ?: getActiveOpenCameraCharacteristics()
+            ?: return fallback
         val streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?: return fallback
         val sizes = streamMap.getOutputSizes(SurfaceTexture::class.java)
