@@ -32,6 +32,7 @@ import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -50,6 +51,7 @@ class VideoRecorder(
 
     companion object {
         private const val TAG = "VideoRecorder"
+        private const val SPECIAL_TIMELINE_TAG = "SpecialVideoTimeline"
 
         private const val AUDIO_MIME = MediaFormat.MIMETYPE_AUDIO_AAC
         private const val AUDIO_SAMPLE_RATE = 48_000
@@ -62,6 +64,9 @@ class VideoRecorder(
         private const val UNSET_TIMESTAMP = Long.MIN_VALUE
         private const val NANOS_PER_SECOND = 1_000_000_000L
         private const val MICROS_PER_SECOND = 1_000_000L
+        private const val SPECIAL_VIDEO_TAIL_WINDOW_US = 2_000_000L
+        private const val SPECIAL_VIDEO_MIN_TAIL_BYTES = 4L * 1024L * 1024L
+        private const val SPECIAL_VIDEO_MAX_TAIL_BYTES = 48L * 1024L * 1024L
     }
 
     private data class VideoEncoderCandidate(
@@ -154,7 +159,26 @@ class VideoRecorder(
     private var sharedTimelineOriginProvider: (() -> Long?)? = null
     private var sharedTimelineStopTimeProvider: (() -> Long?)? = null
     private var onSharedTimelineFirstFrame: ((Long) -> Unit)? = null
-    private var usesSharedTimelineOrigin = false
+    private var sharedTimelineVideoEndReporter: ((Long?, Boolean) -> Unit)? = null
+    private var sharedTimelineCommonEndAwaiter: (suspend () -> Long?)? = null
+    private var sharedTimelineDrainAwaiter: (suspend () -> Unit)? = null
+    private var sharedTimelineDrainCompleter: (() -> Unit)? = null
+    private var sharedCameraTimestampOffsetResolver: ((Long) -> Long)? = null
+    private var onSharedTimelineDrainComplete: (suspend () -> Unit)? = null
+    private var sharedTimelineStreamName: String? = null
+    private var sharedTimelineDrainDurationMs: Long = 0L
+    private var acceptStopDrainFrames = false
+    private var sharedVideoTailSamples = java.util.ArrayDeque<EncodedSample>()
+    private var sharedAudioTailSamples = java.util.ArrayDeque<EncodedSample>()
+    private var sharedTailBytes = 0L
+    private var sharedTailByteLimit = 0L
+    private var sharedTailOverflowed = false
+    private var firstSharedVideoSourcePtsUs = UNSET_TIMESTAMP
+    private var lastSharedVideoSourcePtsUs = UNSET_TIMESTAMP
+    private var lastSharedAudioSourcePtsUs = UNSET_TIMESTAMP
+    private var sharedVideoOutputOffsetUs = UNSET_TIMESTAMP
+    private var sharedTimelineEndResolved = false
+    private var sharedTimelineResolvedCommonEndUs: Long? = null
     private var sharedTimelineStopTimeUs = UNSET_TIMESTAMP
     private var pauseIntervals = mutableListOf<PauseInterval>()
     private var activePauseStartTimeUs = UNSET_TIMESTAMP
@@ -240,6 +264,14 @@ class VideoRecorder(
         sharedTimelineOriginProvider: (() -> Long?)? = null,
         sharedTimelineStopTimeProvider: (() -> Long?)? = null,
         onFirstVideoFrame: ((Long) -> Unit)? = null,
+        sharedTimelineVideoEndReporter: ((Long?, Boolean) -> Unit)? = null,
+        sharedTimelineCommonEndAwaiter: (suspend () -> Long?)? = null,
+        sharedTimelineDrainAwaiter: (suspend () -> Unit)? = null,
+        sharedTimelineDrainCompleter: (() -> Unit)? = null,
+        sharedCameraTimestampOffsetResolver: ((Long) -> Long)? = null,
+        onSharedTimelineDrainComplete: (suspend () -> Unit)? = null,
+        sharedTimelineStreamName: String? = null,
+        sharedTimelineDrainDurationMs: Long = 0L,
         dualCaptureInputSize: Size? = null,
         dualCaptureSensorOrientationDegrees: Int = 0,
         dualCaptureLayout: DualCaptureLayout = DualCaptureLayout.PICTURE_IN_PICTURE,
@@ -307,6 +339,18 @@ class VideoRecorder(
         this.sharedTimelineStopTimeProvider = sharedTimelineStopTimeProvider
         this.onSharedTimelineFirstFrame = onFirstVideoFrame
         this.usesSharedTimelineOrigin = onFirstVideoFrame != null
+        this.sharedTimelineVideoEndReporter = sharedTimelineVideoEndReporter
+        this.sharedTimelineCommonEndAwaiter = sharedTimelineCommonEndAwaiter
+        this.sharedTimelineDrainAwaiter = sharedTimelineDrainAwaiter
+        this.sharedTimelineDrainCompleter = sharedTimelineDrainCompleter
+        this.sharedCameraTimestampOffsetResolver = sharedCameraTimestampOffsetResolver
+        this.onSharedTimelineDrainComplete = onSharedTimelineDrainComplete
+        this.sharedTimelineStreamName = sharedTimelineStreamName
+        this.sharedTimelineDrainDurationMs = sharedTimelineDrainDurationMs.coerceAtLeast(0L)
+        this.acceptStopDrainFrames = false
+        this.sharedTailByteLimit = (
+            requestedBitrateMbps.toLong() * 1_000_000L / 8L * 3L
+        ).coerceIn(SPECIAL_VIDEO_MIN_TAIL_BYTES, SPECIAL_VIDEO_MAX_TAIL_BYTES)
         isPaused = false
         statsWindowStartMs = 0L
         statsIncomingFrames = 0
@@ -364,6 +408,18 @@ class VideoRecorder(
             }
         }
         isRecording = true
+        if (sharedTimelineVideoEndReporter != null) {
+            val timestampSourceLabel = if (
+                requestedCameraTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+            ) "REALTIME" else "UNKNOWN(${requestedCameraTimestampSource})"
+            PLog.i(
+                SPECIAL_TIMELINE_TAG,
+                "Recorder configured: stream=${sharedTimelineStreamName ?: "paired"}, " +
+                    "timestampSource=$timestampSourceLabel, EIS=${requestedEnhancedStabilization}, " +
+                    "lookahead=${requestedEnhancedStabilizationLookahead}, " +
+                    "tailWindowUs=$SPECIAL_VIDEO_TAIL_WINDOW_US, tailByteLimit=$sharedTailByteLimit"
+            )
+        }
         PLog.d(
             TAG,
             "Video recording prepared: encoder=${requestedSize.width}x${requestedSize.height}, " +
@@ -458,6 +514,7 @@ class VideoRecorder(
     fun stopRecording() {
         if (!isRecording || stopRequested) return
         stopRequested = true
+        acceptStopDrainFrames = sharedTimelineVideoEndReporter != null
         val sharedStopTimeUs = sharedTimelineStopTimeProvider?.invoke()
         if (sharedStopTimeUs != null) {
             synchronized(timelineLock) {
@@ -468,8 +525,29 @@ class VideoRecorder(
         val completion = finishCallback
         scope.launch {
             var publishedUri: Uri? = null
+            var sharedEndReported = false
             try {
                 audioRecordJob?.join()
+                withContext(renderDispatcher) {
+                    drainRealtimeFrames(allowWhenStopping = true)
+                }
+
+                if (sharedTimelineVideoEndReporter != null) {
+                    if (sharedTimelineDrainAwaiter != null) {
+                        // The secondary camera remains live until the primary EIS+ lookahead
+                        // drain completes, so a shared logical Camera2 session cannot back up.
+                        sharedTimelineDrainAwaiter?.invoke()
+                    } else {
+                        delay(sharedTimelineDrainDurationMs.coerceAtLeast(1L))
+                        withContext(renderDispatcher) {
+                            drainRealtimeFrames(allowWhenStopping = true)
+                        }
+                        onSharedTimelineDrainComplete?.invoke()
+                        sharedTimelineDrainCompleter?.invoke()
+                    }
+                }
+
+                acceptStopDrainFrames = false
                 withContext(renderDispatcher) {
                     drainRealtimeFrames(allowWhenStopping = true)
                     renderer?.pauseStabilization()
@@ -479,12 +557,40 @@ class VideoRecorder(
                 videoDrainJob?.join()
                 audioDrainJob?.join()
 
+                if (sharedTimelineVideoEndReporter != null) {
+                    val videoEndPtsUs = normalizedSpecialVideoEndPtsUs()
+                    val audioEndPtsUs = normalizedSpecialAudioEndPtsUs()
+                    val tailOverflowed = synchronized(muxerLock) { sharedTailOverflowed }
+                    PLog.i(
+                        SPECIAL_TIMELINE_TAG,
+                        "Recorder EOS: stream=${sharedTimelineStreamName ?: "paired"}, " +
+                            "firstVideoSourcePtsUs=${firstSharedVideoSourcePtsUs.takeIf { it != UNSET_TIMESTAMP }}, " +
+                            "lastVideoEndPtsUs=$videoEndPtsUs, lastAudioPtsUs=$audioEndPtsUs, " +
+                            "stopCutoffUs=${sharedTimelineStopTimeUs.takeIf { it != UNSET_TIMESTAMP }}, " +
+                            "timestampSource=${requestedCameraTimestampSource}, " +
+                            "EIS=${requestedEnhancedStabilization}, tailOverflowed=$tailOverflowed"
+                    )
+                    sharedTimelineVideoEndReporter?.invoke(videoEndPtsUs, tailOverflowed)
+                    sharedEndReported = true
+                    val commonEndUs = sharedTimelineCommonEndAwaiter?.invoke()
+                    synchronized(muxerLock) {
+                        sharedTimelineEndResolved = true
+                        sharedTimelineResolvedCommonEndUs = commonEndUs
+                    }
+                }
+
                 releaseCaptureResources()
                 isRecording = false
                 publishedUri = finalizeOutput()
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to stop recording cleanly", e)
+                if (!sharedEndReported) {
+                    sharedTimelineVideoEndReporter?.invoke(null, true)
+                }
+                runCatching { onSharedTimelineDrainComplete?.invoke() }
+                sharedTimelineDrainCompleter?.invoke()
             } finally {
+                acceptStopDrainFrames = false
                 cleanup()
                 completion?.invoke(publishedUri)
             }
@@ -497,6 +603,9 @@ class VideoRecorder(
         val completion = finishCallback
         scope.launch {
             errorCallback?.invoke("Recording stopped unexpectedly")
+            runCatching { onSharedTimelineDrainComplete?.invoke() }
+            sharedTimelineDrainCompleter?.invoke()
+            sharedTimelineVideoEndReporter?.invoke(null, true)
             cleanup()
             completion?.invoke(null)
         }
@@ -606,10 +715,10 @@ class VideoRecorder(
     }
 
     private fun onRealtimeFrameAvailable() {
-        // Do not feed the encoder until Camera2 has confirmed that its recording
-        // request is active. Special Video uses this gate to start both independent
-        // camera sessions on the same shared timeline after both sessions are ready.
-        if (!isRecording || stopRequested || isPaused || !cameraInputStarted) return
+        // Special Video keeps consuming camera buffers briefly after Stop so EIS+ can
+        // emit its delayed frames and the companion SurfaceTexture cannot stall a shared
+        // logical Camera2 session. Samples beyond the shared stop cutoff are discarded.
+        if (!isRecording || (stopRequested && !acceptStopDrainFrames) || isPaused || !cameraInputStarted) return
         statsIncomingFrames += 1
         synchronized(realtimeFrameLock) {
             if (pendingRealtimeFrameCount > 0) {
@@ -625,7 +734,7 @@ class VideoRecorder(
             if (!renderLoopRunning) {
                 renderLoopRunning = true
                 scope.launch(renderDispatcher) {
-                    drainRealtimeFrames(allowWhenStopping = false)
+                    drainRealtimeFrames(allowWhenStopping = stopRequested)
                 }
             }
         }
@@ -1254,11 +1363,15 @@ class VideoRecorder(
         }
 
         if (cameraTimestampToBoottimeOffsetNs == UNSET_TIMESTAMP) {
-            cameraTimestampToBoottimeOffsetNs = SystemClock.elapsedRealtimeNanos() - cameraTimestampNs
+            val candidateOffsetNs = SystemClock.elapsedRealtimeNanos() - cameraTimestampNs
+            cameraTimestampToBoottimeOffsetNs =
+                sharedCameraTimestampOffsetResolver?.invoke(candidateOffsetNs) ?: candidateOffsetNs
             PLog.w(
-                TAG,
+                if (sharedTimelineVideoEndReporter != null) SPECIAL_TIMELINE_TAG else TAG,
                 "Camera timestamp source is not REALTIME; calibrated to BOOTTIME with " +
-                    "offsetNs=$cameraTimestampToBoottimeOffsetNs"
+                    "offsetNs=$cameraTimestampToBoottimeOffsetNs, " +
+                    "shared=${sharedCameraTimestampOffsetResolver != null}, " +
+                    "stream=${sharedTimelineStreamName ?: "single"}"
             )
         }
         return cameraTimestampNs + cameraTimestampToBoottimeOffsetNs
@@ -1550,14 +1663,18 @@ class VideoRecorder(
             }
 
             flushPendingSamplesLocked()
-            val sampleBuffer = buffer.duplicate()
-            sampleBuffer.position(info.offset)
-            sampleBuffer.limit(info.offset + info.size)
-            writeEncodedSampleLocked(
-                isVideo = isVideo,
-                buffer = sampleBuffer.slice(),
-                info = info,
-            )
+            if (sharedTimelineVideoEndReporter != null) {
+                enqueueSpecialVideoTailSampleLocked(isVideo, buffer, info)
+            } else {
+                val sampleBuffer = buffer.duplicate()
+                sampleBuffer.position(info.offset)
+                sampleBuffer.limit(info.offset + info.size)
+                writeEncodedSampleLocked(
+                    isVideo = isVideo,
+                    buffer = sampleBuffer.slice(),
+                    info = info,
+                )
+            }
         }
     }
 
@@ -1581,7 +1698,8 @@ class VideoRecorder(
 
     private fun normalizeSampleInfo(
         isVideo: Boolean,
-        info: MediaCodec.BufferInfo
+        info: MediaCodec.BufferInfo,
+        maximumPresentationTimeUs: Long? = null,
     ): MediaCodec.BufferInfo? {
         val normalizedSourceTimeUs = synchronized(timelineLock) {
             val originUs = resolveTimelineOriginLocked()
@@ -1592,8 +1710,21 @@ class VideoRecorder(
             ) {
                 return null
             }
-            info.presentationTimeUs - originUs -
+            var normalizedTimeUs = info.presentationTimeUs - originUs -
                 pausedDurationBetweenLocked(originUs, info.presentationTimeUs)
+            if (sharedTimelineVideoEndReporter != null) {
+                if (sharedVideoOutputOffsetUs == UNSET_TIMESTAMP) {
+                    val firstVideoPtsUs = firstSharedVideoSourcePtsUs
+                    if (firstVideoPtsUs == UNSET_TIMESTAMP) return null
+                    sharedVideoOutputOffsetUs = firstVideoPtsUs - originUs -
+                        pausedDurationBetweenLocked(originUs, firstVideoPtsUs)
+                }
+                normalizedTimeUs -= sharedVideoOutputOffsetUs
+            }
+            if (maximumPresentationTimeUs != null && normalizedTimeUs > maximumPresentationTimeUs) {
+                return null
+            }
+            normalizedTimeUs
         }
         val lastPresentationTimeUs = if (isVideo) {
             lastMuxedVideoPresentationTimeUs
@@ -1636,14 +1767,140 @@ class VideoRecorder(
         return pausedDurationUs
     }
 
-    private fun writeEncodedSampleLocked(
+    /**
+     * Keep only a short encoded tail for paired Special Video. The samples outside that
+     * window are already guaranteed to precede the other stream's end when the pair differs
+     * by less than the safety limit, so they can be muxed without retaining the whole clip.
+     */
+    private fun enqueueSpecialVideoTailSampleLocked(
         isVideo: Boolean,
         buffer: ByteBuffer,
         info: MediaCodec.BufferInfo,
     ) {
+        val sourcePtsUs = info.presentationTimeUs
+        val shouldKeep = synchronized(timelineLock) {
+            val originUs = resolveTimelineOriginLocked()
+            originUs != UNSET_TIMESTAMP &&
+                sourcePtsUs >= originUs &&
+                (sharedTimelineStopTimeUs == UNSET_TIMESTAMP || sourcePtsUs <= sharedTimelineStopTimeUs)
+        }
+        if (!shouldKeep) return
+
+        if (isVideo) {
+            if (firstSharedVideoSourcePtsUs == UNSET_TIMESTAMP ||
+                sourcePtsUs < firstSharedVideoSourcePtsUs
+            ) {
+                firstSharedVideoSourcePtsUs = sourcePtsUs
+            }
+            if (lastSharedVideoSourcePtsUs == UNSET_TIMESTAMP ||
+                sourcePtsUs > lastSharedVideoSourcePtsUs
+            ) {
+                lastSharedVideoSourcePtsUs = sourcePtsUs
+            }
+        } else if (lastSharedAudioSourcePtsUs == UNSET_TIMESTAMP ||
+            sourcePtsUs > lastSharedAudioSourcePtsUs
+        ) {
+            lastSharedAudioSourcePtsUs = sourcePtsUs
+        }
+
+        val sample = copyEncodedSample(buffer, info)
+        val queue = if (isVideo) sharedVideoTailSamples else sharedAudioTailSamples
+        queue.addLast(sample)
+        sharedTailBytes += sample.data.size.toLong()
+
+        val newestPtsUs = if (isVideo) {
+            lastSharedVideoSourcePtsUs
+        } else {
+            lastSharedAudioSourcePtsUs
+        }
+        val flushBeforeUs = newestPtsUs - SPECIAL_VIDEO_TAIL_WINDOW_US
+
+        while (queue.isNotEmpty()) {
+            val oldest = queue.peekFirst()
+            val olderThanTail = oldest.info.presentationTimeUs <= flushBeforeUs
+            val overByteLimit = sharedTailBytes > sharedTailByteLimit
+            if (!olderThanTail && !overByteLimit) break
+
+            if (overByteLimit && !olderThanTail) {
+                sharedTailOverflowed = true
+                PLog.e(
+                    SPECIAL_TIMELINE_TAG,
+                    "Bounded tail buffer reached its byte limit; automatic pair trim is disabled. " +
+                        "stream=${sharedTimelineStreamName ?: "paired"}, bytes=$sharedTailBytes, " +
+                        "limit=$sharedTailByteLimit"
+                )
+            }
+            queue.removeFirst()
+            sharedTailBytes = (sharedTailBytes - oldest.data.size.toLong()).coerceAtLeast(0L)
+            writeEncodedSampleLocked(
+                isVideo = isVideo,
+                buffer = ByteBuffer.wrap(oldest.data),
+                info = oldest.info,
+            )
+        }
+    }
+
+    private fun normalizedSpecialVideoEndPtsUs(): Long? =
+        normalizedSpecialSourcePtsUs(lastSharedVideoSourcePtsUs)
+
+    private fun normalizedSpecialAudioEndPtsUs(): Long? =
+        normalizedSpecialSourcePtsUs(lastSharedAudioSourcePtsUs)
+
+    private fun normalizedSpecialSourcePtsUs(sourcePtsUs: Long): Long? {
+        if (sourcePtsUs == UNSET_TIMESTAMP) return null
+        return synchronized(timelineLock) {
+            val originUs = resolveTimelineOriginLocked()
+            val firstVideoPtsUs = firstSharedVideoSourcePtsUs
+            if (originUs == UNSET_TIMESTAMP || firstVideoPtsUs == UNSET_TIMESTAMP ||
+                sourcePtsUs < originUs ||
+                (sharedTimelineStopTimeUs != UNSET_TIMESTAMP && sourcePtsUs > sharedTimelineStopTimeUs)
+            ) {
+                return@synchronized null
+            }
+            val outputOffsetUs = firstVideoPtsUs - originUs -
+                pausedDurationBetweenLocked(originUs, firstVideoPtsUs)
+            sourcePtsUs - originUs -
+                pausedDurationBetweenLocked(originUs, sourcePtsUs) - outputOffsetUs
+        }?.coerceAtLeast(0L)
+    }
+
+    /** Must be called under muxerLock after pending samples have been enqueued. */
+    private fun flushSpecialVideoTailLocked(commonEndUs: Long?) {
+        fun drain(queue: java.util.ArrayDeque<EncodedSample>, isVideo: Boolean) {
+            while (queue.isNotEmpty()) {
+                val sample = queue.removeFirst()
+                sharedTailBytes = (sharedTailBytes - sample.data.size.toLong()).coerceAtLeast(0L)
+                writeEncodedSampleLocked(
+                    isVideo = isVideo,
+                    buffer = ByteBuffer.wrap(sample.data),
+                    info = sample.info,
+                    maximumPresentationTimeUs = commonEndUs,
+                )
+            }
+        }
+        drain(sharedVideoTailSamples, isVideo = true)
+        drain(sharedAudioTailSamples, isVideo = false)
+        PLog.i(
+            SPECIAL_TIMELINE_TAG,
+            "Recorder tail finalized: stream=${sharedTimelineStreamName ?: "paired"}, " +
+                "commonEndUs=$commonEndUs, videoEndPtsUs=$lastMuxedVideoPresentationTimeUs, " +
+                "audioEndPtsUs=$lastMuxedAudioPresentationTimeUs, tailOverflowed=$sharedTailOverflowed"
+        )
+    }
+
+    private fun writeEncodedSampleLocked(
+        isVideo: Boolean,
+        buffer: ByteBuffer,
+        info: MediaCodec.BufferInfo,
+        maximumPresentationTimeUs: Long? = null,
+    ) {
         val trackIndex = if (isVideo) videoTrackIndex else audioTrackIndex
         if (trackIndex < 0) return
-        val normalizedInfo = normalizeSampleInfo(isVideo = isVideo, info = info) ?: return
+        val normalizedInfo = normalizeSampleInfo(
+            isVideo = isVideo,
+            info = info,
+            maximumPresentationTimeUs = maximumPresentationTimeUs,
+        ) ?: return
         try {
             muxer?.writeSampleData(trackIndex, buffer, normalizedInfo)
         } catch (e: Exception) {
@@ -1659,20 +1916,28 @@ class VideoRecorder(
         if (!timelineReady) return
 
         pendingVideoSamples.forEach { sample ->
-            writeEncodedSampleLocked(
-                isVideo = true,
-                buffer = ByteBuffer.wrap(sample.data),
-                info = sample.info,
-            )
+            if (sharedTimelineVideoEndReporter != null) {
+                enqueueSpecialVideoTailSampleLocked(true, ByteBuffer.wrap(sample.data), sample.info)
+            } else {
+                writeEncodedSampleLocked(
+                    isVideo = true,
+                    buffer = ByteBuffer.wrap(sample.data),
+                    info = sample.info,
+                )
+            }
         }
         pendingVideoSamples.clear()
 
         pendingAudioSamples.forEach { sample ->
-            writeEncodedSampleLocked(
-                isVideo = false,
-                buffer = ByteBuffer.wrap(sample.data),
-                info = sample.info,
-            )
+            if (sharedTimelineVideoEndReporter != null) {
+                enqueueSpecialVideoTailSampleLocked(false, ByteBuffer.wrap(sample.data), sample.info)
+            } else {
+                writeEncodedSampleLocked(
+                    isVideo = false,
+                    buffer = ByteBuffer.wrap(sample.data),
+                    info = sample.info,
+                )
+            }
         }
         pendingAudioSamples.clear()
     }
@@ -1723,6 +1988,9 @@ class VideoRecorder(
             }
 
             flushPendingSamplesLocked()
+            if (sharedTimelineVideoEndReporter != null && sharedTimelineEndResolved) {
+                flushSpecialVideoTailLocked(sharedTimelineResolvedCommonEndUs)
+            }
 
             val finalDurationUs = maxOf(
                 lastMuxedVideoPresentationTimeUs,
@@ -1859,6 +2127,16 @@ class VideoRecorder(
         synchronized(muxerLock) {
             pendingVideoSamples = mutableListOf()
             pendingAudioSamples = mutableListOf()
+            sharedVideoTailSamples = java.util.ArrayDeque()
+            sharedAudioTailSamples = java.util.ArrayDeque()
+            sharedTailBytes = 0L
+            sharedTailOverflowed = false
+            firstSharedVideoSourcePtsUs = UNSET_TIMESTAMP
+            lastSharedVideoSourcePtsUs = UNSET_TIMESTAMP
+            lastSharedAudioSourcePtsUs = UNSET_TIMESTAMP
+            sharedVideoOutputOffsetUs = UNSET_TIMESTAMP
+            sharedTimelineEndResolved = false
+            sharedTimelineResolvedCommonEndUs = null
             videoTrackIndex = -1
             audioTrackIndex = -1
             colorMetadataTrackIndex = -1
@@ -1881,6 +2159,14 @@ class VideoRecorder(
             sharedTimelineStopTimeProvider = null
             onSharedTimelineFirstFrame = null
             usesSharedTimelineOrigin = false
+            sharedTimelineVideoEndReporter = null
+            sharedTimelineCommonEndAwaiter = null
+            sharedTimelineDrainAwaiter = null
+            sharedTimelineDrainCompleter = null
+            sharedCameraTimestampOffsetResolver = null
+            onSharedTimelineDrainComplete = null
+            sharedTimelineStreamName = null
+            sharedTimelineDrainDurationMs = 0L
             sharedTimelineStopTimeUs = UNSET_TIMESTAMP
             pauseIntervals = mutableListOf()
             activePauseStartTimeUs = UNSET_TIMESTAMP
@@ -1888,6 +2174,7 @@ class VideoRecorder(
         synchronized(realtimeFrameLock) {
             pendingRealtimeFrameCount = 0
             renderLoopRunning = false
+            acceptStopDrainFrames = false
         }
     }
 
