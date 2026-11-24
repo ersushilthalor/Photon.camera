@@ -3314,7 +3314,7 @@ class Camera2Controller(private val context: Context) {
                     state.value.photoMegapixelMode == PhotoMegapixelMode.M50 &&
                     !effectivelyUseRaw
                 fun maximumResolutionJpegSize(characteristics: CameraCharacteristics): Size? {
-                    if (!requestsMaximumResolution) return null
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || effectivelyUseRaw) return null
                     return runCatching {
                         characteristics
                             .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
@@ -3324,7 +3324,12 @@ class Camera2Controller(private val context: Context) {
                         PLog.w(TAG, "Unable to query maximum-resolution JPEG streams", it)
                     }.getOrNull()
                 }
-                var maximumResolutionSize = maximumResolutionJpegSize(outputCharacteristicsForStreams)
+                var maximumResolutionCapabilitySize = maximumResolutionJpegSize(outputCharacteristicsForStreams)
+                var maximumResolutionSize = if (requestsMaximumResolution) {
+                    maximumResolutionCapabilitySize
+                } else {
+                    null
+                }
                 val wantsP010 = !effectivelyUseRaw &&
                         maximumResolutionSize == null &&
                         isP010Supported &&
@@ -3350,7 +3355,12 @@ class Camera2Controller(private val context: Context) {
                     outputCameraIdForStreams = openCameraId
                     outputCharacteristicsForStreams = openCharacteristics
                     rawOutput = null
-                    maximumResolutionSize = maximumResolutionJpegSize(outputCharacteristicsForStreams)
+                    maximumResolutionCapabilitySize = maximumResolutionJpegSize(outputCharacteristicsForStreams)
+                    maximumResolutionSize = if (requestsMaximumResolution) {
+                        maximumResolutionCapabilitySize
+                    } else {
+                        null
+                    }
                     captureFormat = when {
                         maximumResolutionSize != null -> ImageFormat.JPEG
                         wantsP010 -> ImageFormat.YCBCR_P010.takeIf {
@@ -3377,7 +3387,7 @@ class Camera2Controller(private val context: Context) {
                     current.copy(
                         isP3Supported = isP3Supported,
                         currentCaptureSize = captureSize,
-                        supportsMaximumResolutionCapture = maximumResolutionSize != null,
+                        supportsMaximumResolutionCapture = maximumResolutionCapabilitySize != null,
                     )
                 }
                 if (state.value.photoMegapixelMode == PhotoMegapixelMode.M50 && maximumResolutionSize == null) {
