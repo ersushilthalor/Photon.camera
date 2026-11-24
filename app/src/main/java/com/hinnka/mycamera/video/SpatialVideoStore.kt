@@ -7,6 +7,7 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import com.hinnka.mycamera.utils.PLog
 import java.io.File
 import java.nio.ByteBuffer
@@ -58,11 +59,14 @@ object SpatialVideoStore {
         val primaryExtractor = MediaExtractor()
         val retriever = MediaMetadataRetriever()
         var muxer: MediaMuxer? = null
+        var primaryVideoPfd: ParcelFileDescriptor? = null
         var muxerStarted = false
 
         try {
             wideExtractor.setDataSource(ultraWideFile.absolutePath)
-            primaryExtractor.setDataSource(context, primaryVideoUri)
+            primaryVideoPfd = context.contentResolver.openFileDescriptor(primaryVideoUri, "r")
+                ?: throw IllegalStateException("Unable to open primary video URI: $primaryVideoUri")
+            primaryExtractor.setDataSource(primaryVideoPfd!!.fileDescriptor)
 
             val wideVideoTrack = (0 until wideExtractor.trackCount).firstOrNull { index ->
                 wideExtractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
@@ -143,6 +147,7 @@ object SpatialVideoStore {
             }
             runCatching { wideExtractor.release() }
             runCatching { primaryExtractor.release() }
+            runCatching { primaryVideoPfd?.close() }
             runCatching { retriever.release() }
             if (tempFile.exists()) tempFile.delete()
             logFinalDurations(context, primaryVideoUri, ultraWideFile)
@@ -157,7 +162,7 @@ object SpatialVideoStore {
         val primaryDurationMs = runCatching {
             MediaMetadataRetriever().run {
                 try {
-                    setDataSource(context, primaryVideoUri, null)
+                    setDataSource(context, primaryVideoUri)
                     extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
                 } finally {
                     release()
