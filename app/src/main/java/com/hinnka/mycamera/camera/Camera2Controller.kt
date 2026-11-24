@@ -3982,7 +3982,9 @@ class Camera2Controller(private val context: Context) {
         val ultraWidePreviewSurface = if (usesUltraWideDualCapture) dualCapturePreviewSurface else null
         val ultraWideRecordSurface = if (usesUltraWideDualCapture) dualCaptureRecordSurface else null
         val ultraWidePhysicalCameraId = dualCapturePhysicalCameraId
-        val ultraWideAeMeteringPhysicalCameraId = if (dualAspectRecordingActive) {
+        val ultraWideAeMeteringPhysicalCameraId = if (
+            dualAspectRecordingActive || dualAspectPreviewOutput != null
+        ) {
             null
         } else {
             resolveUltraWideAeMeteringPhysicalCameraId(
