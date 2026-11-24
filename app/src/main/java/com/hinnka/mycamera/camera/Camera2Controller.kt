@@ -333,6 +333,13 @@ class Camera2Controller(private val context: Context) {
     private var dualAspectOutputRecordingPath = VideoRecordingPath.DCIM_PHOTON
     private var dualAspectOutputTreeUri: String? = null
     private var dualAspectFinalizing = false
+    private var dualAspectPreviewSurfaceTexture: SurfaceTexture? = null
+    private var dualAspectPreviewSurface: Surface? = null
+    private val _dualAspectPreviewStreamSize = MutableStateFlow<Size?>(null)
+    val dualAspectPreviewStreamSize: StateFlow<Size?> = _dualAspectPreviewStreamSize.asStateFlow()
+    private val _dualAspectPreviewSensorOrientationDegrees = MutableStateFlow(0)
+    val dualAspectPreviewSensorOrientationDegrees: StateFlow<Int> =
+        _dualAspectPreviewSensorOrientationDegrees.asStateFlow()
 
     private var spatialVideoMainPhysicalCameraId: String? = null
     private var spatialVideoUltraWidePhysicalCameraId: String? = null
@@ -3934,7 +3941,17 @@ class Camera2Controller(private val context: Context) {
         val highSpeedVideo = captureMode == CaptureMode.VIDEO &&
             _state.value.videoConfig.fps == VideoFpsPreset.FPS_120 &&
             _state.value.videoRecordingState.shouldAttachCameraInput()
-        val stabilizationReader = if (highSpeedVideo || dualAspectRecordingActive) null else ensureStabilizationImageReader()
+        val dualAspectPreviewOutput = if (
+            captureMode == CaptureMode.VIDEO &&
+            _state.value.videoConfig.dualAspectRatio != null
+        ) {
+            dualAspectPreviewSurface?.takeIf { it.isValid }
+        } else {
+            null
+        }
+        val stabilizationReader = if (
+            highSpeedVideo || dualAspectRecordingActive || dualAspectPreviewOutput != null
+        ) null else ensureStabilizationImageReader()
         val useEnhancedStabilization = shouldUseVideoEnhancedStabilization()
         val videoSurface = if (
             captureMode == CaptureMode.VIDEO &&
@@ -3965,7 +3982,9 @@ class Camera2Controller(private val context: Context) {
         val ultraWidePreviewSurface = if (usesUltraWideDualCapture) dualCapturePreviewSurface else null
         val ultraWideRecordSurface = if (usesUltraWideDualCapture) dualCaptureRecordSurface else null
         val ultraWidePhysicalCameraId = dualCapturePhysicalCameraId
-        val ultraWideAeMeteringPhysicalCameraId = if (dualAspectRecordingActive) {
+        val ultraWideAeMeteringPhysicalCameraId = if (
+            dualAspectRecordingActive || dualAspectPreviewOutput != null
+        ) {
             null
         } else {
             resolveUltraWideAeMeteringPhysicalCameraId(
@@ -4010,6 +4029,7 @@ class Camera2Controller(private val context: Context) {
                 addTarget(surface)
                 stabilizationReader?.surface?.let(::addTarget)
                 videoSurface?.let(::addTarget)
+                dualAspectPreviewOutput?.let(::addTarget)
                 spatialSurface?.let(::addTarget)
                 spatialPreviewSurface?.let(::addTarget)
                 ultraWidePreviewSurface?.let(::addTarget)
@@ -4029,6 +4049,7 @@ class Camera2Controller(private val context: Context) {
             val surfaces = mutableListOf(surface)
             stabilizationReader?.surface?.let(surfaces::add)
             videoSurface?.let(surfaces::add)
+            dualAspectPreviewOutput?.let(surfaces::add)
             spatialSurface?.let(surfaces::add)
             spatialPreviewSurface?.let(surfaces::add)
             ultraWidePreviewSurface?.let(surfaces::add)
@@ -4094,10 +4115,19 @@ class Camera2Controller(private val context: Context) {
                                 useHlg10 = videoCameraHlg10InputActive
                             ))
                         }
+                        dualAspectPreviewOutput?.let { previewOutput ->
+                            add(createOutputConfiguration(previewOutput))
+                        }
                         spatialSurface?.let { encoderSurface ->
-                            val wideId = spatialVideoUltraWidePhysicalCameraId
-                                ?: throw IllegalStateException("Special Video ultra-wide physical camera is unavailable")
-                            add(createOutputConfiguration(encoderSurface, physicalCameraId = wideId))
+                            if (dualAspectRecordingActive) {
+                                // Dual Aspect is a second crop from the same active sensor,
+                                // not the Special Video ultra-wide physical camera.
+                                add(createOutputConfiguration(encoderSurface))
+                            } else {
+                                val wideId = spatialVideoUltraWidePhysicalCameraId
+                                    ?: throw IllegalStateException("Special Video ultra-wide physical camera is unavailable")
+                                add(createOutputConfiguration(encoderSurface, physicalCameraId = wideId))
+                            }
                         }
                         spatialPreviewSurface?.let { previewOutput ->
                             val wideId = spatialVideoUltraWidePhysicalCameraId
@@ -8726,6 +8756,9 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(
             videoConfig = currentConfig.copy(aspectRatio = primary, dualAspectRatio = resolved)
         )
+        if (cameraDevice != null && previewSurface != null) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+        }
     }
 
     fun setVideoLogLutMode(mode: VideoLogLutMode) {
@@ -10223,6 +10256,106 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
+    fun setDualAspectPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) {
+        val handler = cameraHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post { setDualAspectPreviewSurfaceTexture(surfaceTexture) }
+            return
+        }
+        if (dualAspectPreviewSurfaceTexture === surfaceTexture) return
+
+        val oldSurface = dualAspectPreviewSurface
+        dualAspectPreviewSurface = null
+        dualAspectPreviewSurfaceTexture = surfaceTexture
+        if (
+            surfaceTexture != null &&
+            _state.value.captureMode == CaptureMode.VIDEO &&
+            _state.value.videoConfig.dualAspectRatio != null
+        ) {
+            val size = resolveDualAspectPreviewStreamSize(_state.value.currentPreviewSize)
+            runCatching {
+                surfaceTexture.setDefaultBufferSize(size.width, size.height)
+                dualAspectPreviewSurface = Surface(surfaceTexture)
+                _dualAspectPreviewStreamSize.value = size
+                _dualAspectPreviewSensorOrientationDegrees.value =
+                    _state.value.getCurrentCameraInfo()?.sensorOrientation ?: cachedSensorOrientation
+            }.onFailure { error ->
+                _dualAspectPreviewStreamSize.value = null
+                PLog.e(TAG, "Dual Aspect preview surface creation failed", error)
+            }
+        } else {
+            _dualAspectPreviewStreamSize.value = null
+            _dualAspectPreviewSensorOrientationDegrees.value = 0
+        }
+
+        if (cameraDevice != null && previewSurface != null) {
+            createPreviewSession(openGeneration = cameraOpenGeneration)
+        }
+        oldSurface?.release()
+    }
+
+    /**
+     * Selects a real SurfaceTexture stream with the camera sensor's native active-array
+     * aspect ratio. The secondary recorder must not inherit the primary video's crop.
+     */
+    private fun resolveDualAspectFullSensorInputSize(fallback: Size): Size {
+        val characteristics = activeOutputPhysicalCameraId
+            ?.let { physicalId ->
+                getCameraCharacteristicsOrNull(physicalId, "Dual Aspect physical sensor")
+            }
+            ?: getActiveOpenCameraCharacteristics()
+            ?: return fallback
+        val streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: return fallback
+        val sizes = streamMap.getOutputSizes(SurfaceTexture::class.java)
+            ?.filter { it.width > 0 && it.height > 0 }
+            .orEmpty()
+        if (sizes.isEmpty()) return fallback
+
+        val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+        val targetRatio = activeArray?.let { rect ->
+            minOf(rect.width(), rect.height()).toFloat() /
+                maxOf(rect.width(), rect.height()).coerceAtLeast(1)
+        } ?: (3f / 4f)
+        val nativeAspectSizes = sizes.filter { size ->
+            val ratio = minOf(size.width, size.height).toFloat() /
+                maxOf(size.width, size.height).coerceAtLeast(1)
+            abs(ratio - targetRatio) <= 0.025f
+        }
+        return (nativeAspectSizes.ifEmpty { sizes })
+            .maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: fallback
+    }
+
+    /**
+     * Use a small native-aspect stream for the floating preview to avoid wasting bandwidth;
+     * its field of view stays the full sensor frame and the TextureView crops only for display.
+     */
+    private fun resolveDualAspectPreviewStreamSize(fallback: Size): Size {
+        val characteristics = getActiveOpenCameraCharacteristics() ?: return fallback
+        val streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: return fallback
+        val sizes = streamMap.getOutputSizes(SurfaceTexture::class.java)
+            ?.filter { it.width > 0 && it.height > 0 }
+            .orEmpty()
+        if (sizes.isEmpty()) return fallback
+
+        val fullSensorSize = resolveDualAspectFullSensorInputSize(fallback)
+        val targetRatio = minOf(fullSensorSize.width, fullSensorSize.height).toFloat() /
+            maxOf(fullSensorSize.width, fullSensorSize.height).coerceAtLeast(1)
+        val nativeAspectSizes = sizes.filter { size ->
+            val ratio = minOf(size.width, size.height).toFloat() /
+                maxOf(size.width, size.height).coerceAtLeast(1)
+            abs(ratio - targetRatio) <= 0.025f
+        }
+        val lowBandwidthSizes = nativeAspectSizes.filter {
+            maxOf(it.width, it.height) <= 1280
+        }
+        return lowBandwidthSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: nativeAspectSizes.minByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: fullSensorSize
+    }
+
     fun setDualCapturePreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) {
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
@@ -10840,6 +10973,19 @@ class Camera2Controller(private val context: Context) {
                 _state.value.videoConfig.resolution
             ]
         } ?: _state.value.currentPreviewSize
+        val dualAspectFullSensorInputSize = if (selectedDualAspectRatio != null) {
+            resolveDualAspectFullSensorInputSize(cameraInputSize)
+        } else {
+            cameraInputSize
+        }
+        if (selectedDualAspectRatio != null) {
+            PLog.i(
+                TAG,
+                "Dual Aspect source: fullSensor=${dualAspectFullSensorInputSize.width}x${dualAspectFullSensorInputSize.height}, " +
+                    "primaryInput=${cameraInputSize.width}x${cameraInputSize.height}, " +
+                    "secondary=${selectedDualAspectRatio.displayName}"
+            )
+        }
         val isOpenGateRecording =
             _state.value.videoConfig.aspectRatio == VideoAspectRatio.OPEN_GATE
         // Try the full native camera-input canvas first. If the codec rejects it,
@@ -11053,7 +11199,7 @@ class Camera2Controller(private val context: Context) {
             }
             val secondaryStarted = spatialVideoRecorder.startRecording(
                 size = selectedDualAspectRatio.resolveOutputSize(_state.value.videoConfig.resolution),
-                cameraInputSize = cameraInputSize,
+                cameraInputSize = dualAspectFullSensorInputSize,
                 fps = _state.value.videoConfig.fps.fps,
                 bitrateMbps = _state.value.videoConfig.bitrate.bitrateMbps,
                 codecMime = _state.value.videoConfig.codec.mimeType,
