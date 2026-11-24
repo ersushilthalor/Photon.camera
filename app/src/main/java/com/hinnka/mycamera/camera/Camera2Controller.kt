@@ -8842,27 +8842,84 @@ class Camera2Controller(private val context: Context) {
             ultraWidePhysicalId: String,
             mainInfo: CameraInfo,
         ): SpatialVideoCameraPair? {
+            fun resolveLogicalOutputPair(unavailableReason: String): SpatialVideoCameraPair? {
+                val logicalCharacteristics = runCatching {
+                    cameraManager.getCameraCharacteristics(logicalId)
+                }.getOrNull()
+                if (logicalCharacteristics == null) {
+                    spatialVideoUnsupportedReason =
+                        "$unavailableReason; logical parent $logicalId characteristics are unavailable"
+                    return null
+                }
+
+                val capabilities = logicalCharacteristics.get(
+                    CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES
+                )
+                val advertisedPhysicalIds = logicalCharacteristics.physicalCameraIds
+                val supportsPhysicalOutputs =
+                    capabilities?.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) == true &&
+                        mainPhysicalId in advertisedPhysicalIds &&
+                        ultraWidePhysicalId in advertisedPhysicalIds
+                if (!supportsPhysicalOutputs) {
+                    spatialVideoUnsupportedReason =
+                        "$unavailableReason; logical parent $logicalId does not advertise both physical outputs"
+                    return null
+                }
+
+                val selectedOpenId = runCatching { current.getOpenCameraId() }
+                    .getOrDefault(current.cameraId)
+                val activeId = activeOpenCameraId.takeIf { it.isNotBlank() }
+                if (selectedOpenId != logicalId || (activeId != null && activeId != logicalId)) {
+                    spatialVideoUnsupportedReason =
+                        "$unavailableReason; logical output fallback requires active parent=$logicalId " +
+                            "(selected=$selectedOpenId active=${activeId ?: "not-open"})"
+                    return null
+                }
+
+                PLog.i(
+                    TAG,
+                    "Special Video fallback: mode=LOGICAL_MULTI_CAMERA_PHYSICAL logicalParent=$logicalId " +
+                        "main=$mainPhysicalId ultraWide=$ultraWidePhysicalId reason=$unavailableReason"
+                )
+                return SpatialVideoCameraPair(
+                    mode = SpatialVideoStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL,
+                    primaryCameraId = logicalId,
+                    mainCameraInfo = mainInfo,
+                    mainPhysicalCameraId = mainPhysicalId,
+                    ultraWideCameraId = ultraWidePhysicalId,
+                    logicalParentCameraId = logicalId,
+                )
+            }
+
             val publicIds = try {
                 cameraManager.cameraIdList.toSet()
             } catch (error: Exception) {
-                val reason = "CameraManager.cameraIdList unavailable: ${error.message ?: error.javaClass.simpleName}"
-                spatialVideoUnsupportedReason = reason
+                val reason =
+                    "CameraManager.cameraIdList unavailable: ${error.message ?: error.javaClass.simpleName}"
+                val logicalFallback = resolveLogicalOutputPair(reason)
+                if (logicalFallback != null) return logicalFallback
+                val fallbackReason = spatialVideoUnsupportedReason ?: "logical physical-output fallback unavailable"
+                spatialVideoUnsupportedReason = "$reason; fallback failed: $fallbackReason"
                 PLog.e(
                     TAG,
                     "Special Video unsupported: mode=PERSISTENT_DUAL_SESSION main=$mainPhysicalId " +
-                        "ultraWide=$ultraWidePhysicalId reason=$reason",
+                        "ultraWide=$ultraWidePhysicalId reason=$spatialVideoUnsupportedReason",
                     error
                 )
                 return null
             }
             val missingIds = listOf(mainPhysicalId, ultraWidePhysicalId).filterNot { it in publicIds }
             if (missingIds.isNotEmpty()) {
-                val reason = "Physical Camera2 ID(s) are not publicly openable: ${missingIds.joinToString()}"
-                spatialVideoUnsupportedReason = reason
+                val reason =
+                    "Physical Camera2 ID(s) are not publicly openable: ${missingIds.joinToString()}"
+                val logicalFallback = resolveLogicalOutputPair(reason)
+                if (logicalFallback != null) return logicalFallback
+                val fallbackReason = spatialVideoUnsupportedReason ?: "logical physical-output fallback unavailable"
+                spatialVideoUnsupportedReason = "$reason; fallback failed: $fallbackReason"
                 PLog.w(
                     TAG,
                     "Special Video unsupported: mode=PERSISTENT_DUAL_SESSION logicalParent=$logicalId " +
-                        "main=$mainPhysicalId ultraWide=$ultraWidePhysicalId reason=$reason " +
+                        "main=$mainPhysicalId ultraWide=$ultraWidePhysicalId reason=$spatialVideoUnsupportedReason " +
                         "publicCameraIds=$publicIds"
                 )
                 return null
