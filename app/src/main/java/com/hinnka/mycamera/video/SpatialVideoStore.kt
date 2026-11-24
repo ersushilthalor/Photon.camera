@@ -265,7 +265,7 @@ object SpatialVideoStore {
             while (true) {
                 val sampleTimeUs = extractor.sampleTime
                 if (sampleTimeUs < 0L) break
-                lastSampleTimeUs = sampleTimeUs
+                lastSampleTimeUs = lastSampleTimeUs?.let { maxOf(it, sampleTimeUs) } ?: sampleTimeUs
                 if (!extractor.advance()) break
             }
             lastSampleTimeUs
