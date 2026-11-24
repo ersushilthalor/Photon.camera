@@ -1642,7 +1642,9 @@ fun CameraScreen(
                             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                                 val previewWidth = (maxWidth * 0.62f).coerceAtMost(380.dp)
                                 val previewHeight = previewWidth / secondaryRatio.displayAspectRatio
-                                val previewTop = (maxHeight * 0.52f)
+                                // Match the reference placement: lower-middle of the live view,
+                                // leaving the bottom recording controls completely clear.
+                                val previewTop = (maxHeight * 0.58f)
                                     .coerceAtMost((maxHeight - previewHeight - 116.dp).coerceAtLeast(0.dp))
                                 val density = LocalDensity.current
                                 var previewDragOffset by remember(secondaryRatio) {
