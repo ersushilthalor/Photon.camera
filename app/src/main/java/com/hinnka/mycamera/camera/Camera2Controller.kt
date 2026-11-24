@@ -3871,6 +3871,8 @@ class Camera2Controller(private val context: Context) {
         ultraWideAeMeteringSuppressed = true
         activeUltraWideAeMeteringPhysicalCameraId = null
         ultraWideAeMeteringSessionAttached = false
+        closeUltraWideAeMeteringReader()
+        latestUltraWideAeReading = null
         PLog.w(TAG, "Retrying camera session without optional ultra-wide AE stream: $reason")
         createPreviewSession(openGeneration = openGeneration)
         return true
@@ -3899,6 +3901,15 @@ class Camera2Controller(private val context: Context) {
         // createCaptureSession closes the previous session before onConfigured runs.
         // Stop exposing it while the replacement is being configured.
         invalidateCaptureSession(captureSession, "preview session replacement")
+        if (!keepUltraWideAeReady) {
+            closeUltraWideAeMeteringReader()
+            activeUltraWideAeMeteringPhysicalCameraId = null
+            ultraWideAeMeteringSessionAttached = false
+            latestUltraWideAeReading = null
+            pendingUltraWideAeHandoff = null
+            ultraWideAeHandoffActiveForSession = false
+            ultraWideAeMeteringSuppressed = false
+        }
         val captureMode = _state.value.captureMode
         val reader = imageReader
         val highSpeedVideo = captureMode == CaptureMode.VIDEO &&
