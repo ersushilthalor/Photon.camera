@@ -286,6 +286,8 @@ data class CameraState(
     val availableCameras: List<CameraInfo> = emptyList(),
     val currentPreviewSize: Size = Size(1440, 1080),
     val currentCaptureSize: Size = Size(1440, 1080),
+    val photoMegapixelMode: PhotoMegapixelMode = PhotoMegapixelMode.M12,
+    val supportsMaximumResolutionCapture: Boolean = false,
 
     // 曝光控制
     val exposureCompensation: Int = 0,
@@ -430,8 +432,14 @@ data class CameraState(
     val isAutoExposure: Boolean
         get() = isIsoAuto && isShutterSpeedAuto
 
+    val isMaximumResolutionPhoto: Boolean
+        get() = photoMegapixelMode == PhotoMegapixelMode.M50 &&
+            supportsMaximumResolutionCapture &&
+            captureMode == CaptureMode.PHOTO &&
+            !useRaw
+
     val isMultiFrameEnabled: Boolean
-        get() = (multiFrameOutputScale != null ||
+        get() = !isMaximumResolutionPhoto && (multiFrameOutputScale != null ||
             (autoHdrEnabled && captureMode == CaptureMode.PHOTO && !useRaw)) &&
             (!useRaw || (isRawSupported && isRawMultiFrameSupported && normalizedHdrPlusFrameCount > 1))
 
