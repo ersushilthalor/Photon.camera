@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.PhotoMegapixelMode
 import com.hinnka.mycamera.data.OppoPhotoSettings
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
@@ -157,6 +158,7 @@ fun CameraTopSheet(
     oppoPhotoSettings: OppoPhotoSettings,
     onOppoPhotoSettingsChange: (OppoPhotoSettings) -> Unit,
     refocusAvailable: Boolean,
+    maximumResolutionAvailable: Boolean = false,
     contentTopPadding: Dp = CameraTopSheetContentTopPadding,
     modifier: Modifier = Modifier,
 ) {
@@ -271,6 +273,7 @@ fun CameraTopSheet(
                                 },
                                 selected = useJpgMax,
                                 checked = useJpgMax,
+                                enabled = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
                                 showStatusDot = true,
                                 onClick = { onJpgMaxToggle(!useJpgMax) },
                                 modifier = itemModifier
@@ -288,6 +291,29 @@ fun CameraTopSheet(
                             )
                         }
 
+                        PhotoMenuQuickTile(
+                            title = "PHOTO SIZE",
+                            subtitle = if (oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50) "50 MP" else "12 MP",
+                            accentTitle = false,
+                            leadingIcon = { tint ->
+                                Icon(AppIcons.Layers, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            },
+                            selected = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50,
+                            checked = oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50,
+                            enabled = maximumResolutionAvailable && !useRaw,
+                            showStatusDot = true,
+                            onClick = {
+                                val nextMode = if (oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M50) {
+                                    PhotoMegapixelMode.M12
+                                } else {
+                                    PhotoMegapixelMode.M50
+                                }
+                                onOppoPhotoSettingsChange(
+                                    oppoPhotoSettings.copy(photoMegapixelMode = nextMode)
+                                )
+                            },
+                            modifier = itemModifier
+                        )
                         PhotoMenuQuickTile(
                             title = stringResource(R.string.settings_ultra_hdr_gain_map),
                             accentTitle = false,
@@ -367,7 +393,9 @@ fun CameraTopSheet(
                             leadingIcon = { tint -> PhotoMenuRefocusGlyph(tint) },
                             selected = oppoPhotoSettings.refocusEnabled,
                             checked = oppoPhotoSettings.refocusEnabled,
-                            enabled = refocusAvailable && !isProfessionalMode,
+                            enabled = refocusAvailable &&
+                                !isProfessionalMode &&
+                                oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
                             showStatusDot = true,
                             onClick = {
                                 val enabled = !oppoPhotoSettings.refocusEnabled
@@ -387,7 +415,8 @@ fun CameraTopSheet(
                             },
                             selected = oppoPhotoSettings.fastShutterEnabled,
                             checked = oppoPhotoSettings.fastShutterEnabled,
-                            enabled = !isProfessionalMode,
+                            enabled = !isProfessionalMode &&
+                                oppoPhotoSettings.photoMegapixelMode == PhotoMegapixelMode.M12,
                             showStatusDot = true,
                             onClick = {
                                 onOppoPhotoSettingsChange(
