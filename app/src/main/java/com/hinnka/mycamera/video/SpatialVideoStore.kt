@@ -62,7 +62,7 @@ object SpatialVideoStore {
 
         try {
             wideExtractor.setDataSource(ultraWideFile.absolutePath)
-            primaryExtractor.setDataSource(context, primaryVideoUri, null)
+            primaryExtractor.setDataSource(context, primaryVideoUri)
 
             val wideVideoTrack = (0 until wideExtractor.trackCount).firstOrNull { index ->
                 wideExtractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
