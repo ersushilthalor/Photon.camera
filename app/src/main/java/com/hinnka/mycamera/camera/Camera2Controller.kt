@@ -9773,16 +9773,19 @@ class Camera2Controller(private val context: Context) {
         }.getOrNull()
     }
 
+    @Synchronized
     private fun finalizeSpatialVideoCompanionIfReady() {
         val primary = spatialPrimaryFinishedUri ?: return
         val ultraWide = spatialUltraWideFinishedFile ?: return
         spatialPrimaryFinishedUri = null
         spatialUltraWideFinishedFile = null
+        // Both recorder callbacks have fired, so no consumer still needs this timeline.
+        // Reset it before background audio muxing to avoid a late finalizer clobbering a new take.
+        specialVideoRecordingTimeline.reset()
         if (!ultraWide.isFile || ultraWide.length() <= 0L) {
             PLog.e(TAG, "Special Video companion missing or empty; retaining the main recording only: ${ultraWide.absolutePath}")
             ultraWide.delete()
             spatialVideoCompanionFile = null
-            specialVideoRecordingTimeline.reset()
             return
         }
         if (spatialVideoEnabled &&
@@ -9803,8 +9806,9 @@ class Camera2Controller(private val context: Context) {
             } catch (error: Exception) {
                 PLog.e(TAG, "Special Video audio mirror finalization failed: ${ultraWide.absolutePath}", error)
             } finally {
-                spatialVideoCompanionFile = null
-                specialVideoRecordingTimeline.reset()
+                if (spatialVideoCompanionFile == ultraWide) {
+                    spatialVideoCompanionFile = null
+                }
             }
         }, "SpatialVideoFinalize").start()
     }
@@ -11608,7 +11612,11 @@ class Camera2Controller(private val context: Context) {
                     "the paired drain window (${specialVideoDrainDurationMs}ms)"
             )
         }
-        if (pendingVendorSessionParameterRestart && cameraDevice != null && previewSurface != null) {
+        if (pendingVendorSessionParameterRestart &&
+            !spatialVideoEnabled &&
+            cameraDevice != null &&
+            previewSurface != null
+        ) {
             PLog.d(TAG, "Restarting preview session after recording for pending vendor session parameter change")
             createPreviewSession(openGeneration = cameraOpenGeneration)
         }
