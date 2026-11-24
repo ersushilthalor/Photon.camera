@@ -34,6 +34,7 @@ internal class SpecialVideoRecordingTimeline {
     private var mainTailOverflowed = false
     private var ultraWideTailOverflowed = false
     private var commonVideoEnd = CompletableDeferred<Long?>()
+    private var cameraDrainCompleted = CompletableDeferred<Unit>()
 
     @Synchronized
     fun reportFirstFrame(streamId: StreamId, ptsUs: Long) {
@@ -176,6 +177,14 @@ internal class SpecialVideoRecordingTimeline {
 
     suspend fun awaitCommonVideoEndUs(): Long? = commonVideoEnd.await()
 
+    fun completeCameraDrain() {
+        cameraDrainCompleted.complete(Unit)
+    }
+
+    suspend fun awaitCameraDrain() {
+        cameraDrainCompleted.await()
+    }
+
     @Synchronized
     fun reset() {
         originUs = UNSET
@@ -190,6 +199,7 @@ internal class SpecialVideoRecordingTimeline {
         mainTailOverflowed = false
         ultraWideTailOverflowed = false
         commonVideoEnd = CompletableDeferred()
+        cameraDrainCompleted = CompletableDeferred()
     }
 
     private companion object {
